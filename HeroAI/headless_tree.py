@@ -6,7 +6,7 @@ from Py4GWCoreLib.Routines import Routines
 from Py4GWCoreLib.Builds.Any.HeroAI import HeroAI_Build
 from Py4GWCoreLib.routines_src.BehaviourTrees import BehaviorTree
 from Py4GWCoreLib import ActionQueueManager, Range, SharedCommandType, ThrottledTimer, Utils
-from Py4GWCoreLib.py4gwcorelib_src.loot_filters import LootFilters
+from Py4GWCoreLib.py4gwcorelib_src.system_settings.loot_filters import LootFilters
 
 from .cache_data import CacheData
 from .follow.follower_runtime import (

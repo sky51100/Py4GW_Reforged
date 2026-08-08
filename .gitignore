@@ -50,6 +50,10 @@ Widgets/Data/InventoryModelIds/**
 Widgets/Data/InventoryModHash/**
 Widgets/Data/InventoryModelFileIds/**
 json/**
+# Modular recipes are repository-owned distributable content, not per-account
+# JsonFactory state. Keep the rest of the runtime JSON jail ignored.
+!json/modular/
+!json/modular/**
 
 Bots/marks_coding_corner/alcohol_procs.ini
 Bots/marks_coding_corner/**.json

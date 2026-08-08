@@ -22,11 +22,11 @@ import PySystem
 for _name in [
     m for m in list(sys.modules)
     if m.startswith("Py4GWCoreLib.py4gwcorelib_src.system_settings")
-    or m.startswith("Py4GWCoreLib.py4gwcorelib_src.name_obfuscation")
-    or m.startswith("Py4GWCoreLib.py4gwcorelib_src.agent_recolor")
-    or m.startswith("Py4GWCoreLib.py4gwcorelib_src.window_renamer")
-    or m.startswith("Py4GWCoreLib.py4gwcorelib_src.map_utilities")
-    or m.startswith("Py4GWCoreLib.py4gwcorelib_src.title_on_map_load")
+    or m.startswith("Py4GWCoreLib.py4gwcorelib_src.system_settings.name_obfuscation")
+    or m.startswith("Py4GWCoreLib.py4gwcorelib_src.system_settings.agent_recolor")
+    or m.startswith("Py4GWCoreLib.py4gwcorelib_src.system_settings.window_renamer")
+    or m.startswith("Py4GWCoreLib.py4gwcorelib_src.system_settings.map_utilities")
+    or m.startswith("Py4GWCoreLib.py4gwcorelib_src.system_settings.title_on_map_load")
 ]:
     del sys.modules[_name]
 
@@ -50,35 +50,35 @@ def draw() -> None:
             # Skillbar+ is a retired widget. Its complete runtime is booted here as a native,
             # profiled callback so no Guild Wars widget script is needed anymore.
             try:
-                from Py4GWCoreLib.py4gwcorelib_src.skillbar_plus import get_controller as _sbp_get
+                from Py4GWCoreLib.py4gwcorelib_src.system_settings.skillbar_plus import get_controller as _sbp_get
 
                 _sbp_get().register()
             except Exception as skillbar_error:
                 PySystem.Console.Log(MODULE_NAME, "Skillbar+ boot failed: %s" % skillbar_error,
                                      PySystem.Console.MessageType.Error)
             try:
-                from Py4GWCoreLib.py4gwcorelib_src.camera_smoothing import get_controller as _camera_get
+                from Py4GWCoreLib.py4gwcorelib_src.system_settings.camera_smoothing import get_controller as _camera_get
 
                 _camera_get().register()
             except Exception as camera_error:
                 PySystem.Console.Log(MODULE_NAME, "Camera smoothing boot failed: %s" % camera_error,
                                      PySystem.Console.MessageType.Error)
             try:
-                from Py4GWCoreLib.py4gwcorelib_src.window_renamer import get_controller as _renamer_get
+                from Py4GWCoreLib.py4gwcorelib_src.system_settings.window_renamer import get_controller as _renamer_get
 
                 _renamer_get().register()
             except Exception as renamer_error:
                 PySystem.Console.Log(MODULE_NAME, "Window Renamer boot failed: %s" % renamer_error,
                                      PySystem.Console.MessageType.Error)
             try:
-                from Py4GWCoreLib.py4gwcorelib_src.map_utilities import get_controller as _map_utils_get
+                from Py4GWCoreLib.py4gwcorelib_src.system_settings.map_utilities import get_controller as _map_utils_get
 
                 _map_utils_get().register()
             except Exception as map_utils_error:
                 PySystem.Console.Log(MODULE_NAME, "Map Utilities boot failed: %s" % map_utils_error,
                                      PySystem.Console.MessageType.Error)
             try:
-                from Py4GWCoreLib.py4gwcorelib_src.title_on_map_load import get_controller as _title_get
+                from Py4GWCoreLib.py4gwcorelib_src.system_settings.title_on_map_load import get_controller as _title_get
 
                 _title_get().register()
             except Exception as title_error:
@@ -86,7 +86,7 @@ def draw() -> None:
                                      PySystem.Console.MessageType.Error)
             # Also register the persisted name-obfuscation alias set (global/multi-account) at boot.
             try:
-                from Py4GWCoreLib.py4gwcorelib_src.name_obfuscation import get_controller as _no_get
+                from Py4GWCoreLib.py4gwcorelib_src.system_settings.name_obfuscation import get_controller as _no_get
 
                 _no_get().apply_to_native()
             except Exception:
@@ -94,7 +94,7 @@ def draw() -> None:
             # Boot the agent-recolor engine: if this account has it enabled, register the
             # profiled data-phase callback and turn on the native hooks.
             try:
-                from Py4GWCoreLib.py4gwcorelib_src.agent_recolor import get_controller as _ar_get
+                from Py4GWCoreLib.py4gwcorelib_src.system_settings.agent_recolor import get_controller as _ar_get
 
                 _ar_get().boot()
             except Exception:
@@ -106,8 +106,8 @@ def draw() -> None:
             #   Recolor & Beacons -- a data pass (colour push) and a draw pass (beacons)
             # Booted separately so one failing still leaves the others running.
             try:
-                from Py4GWCoreLib.py4gwcorelib_src.loot_filters import LootFilters
-                from Py4GWCoreLib.py4gwcorelib_src.loot_filters import quick_access
+                from Py4GWCoreLib.py4gwcorelib_src.system_settings.loot_filters import LootFilters
+                from Py4GWCoreLib.py4gwcorelib_src.system_settings.loot_filters import quick_access
 
                 LootFilters().register()
                 quick_access.register()
@@ -115,7 +115,7 @@ def draw() -> None:
                 PySystem.Console.Log(MODULE_NAME, "Loot Filters boot failed: %s" % loot_error,
                                      PySystem.Console.MessageType.Error)
             try:
-                from Py4GWCoreLib.py4gwcorelib_src.recolor_beacons import RecolorBeacons
+                from Py4GWCoreLib.py4gwcorelib_src.system_settings.recolor_beacons import RecolorBeacons
 
                 RecolorBeacons().register()
             except Exception as mark_error:

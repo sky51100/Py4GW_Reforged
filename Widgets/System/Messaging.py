@@ -13,7 +13,7 @@ from Py4GWCoreLib import ActionQueueManager
 from Py4GWCoreLib import CombatPrepSkillsType
 from Py4GWCoreLib import Console
 from Py4GWCoreLib import ConsoleLog
-from Py4GWCoreLib.py4gwcorelib_src.loot_filters import LootFilters
+from Py4GWCoreLib.py4gwcorelib_src.system_settings.loot_filters import LootFilters
 import PyImGui
 import PySystem
 from Py4GWCoreLib import Range, TitleID

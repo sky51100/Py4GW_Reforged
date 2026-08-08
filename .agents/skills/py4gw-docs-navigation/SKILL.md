@@ -1,13 +1,20 @@
 ---
 name: py4gw-docs-navigation
-description: Route Py4GW investigations, changes, reviews, and migration work to the relevant documentation, owning sources, and runtime evidence. Use when the task spans unfamiliar Py4GW subsystems or needs authoritative project context before implementation.
+description: Use when Py4GW work spans an unfamiliar subsystem, documentation move, review, or migration and the agent must locate the current owner, evidence, and relevant records before acting.
 ---
 
 # Py4GW Documentation Navigation
 
-Use this skill to establish evidence and ownership before changing Py4GW. It
-routes work to the smallest relevant documentation set; it does not make
-documentation more authoritative than source code or live runtime behavior.
+Establish evidence and ownership before changing Py4GW. Route work to the
+smallest relevant documentation set; do not make documentation more
+authoritative than source code or live runtime behavior.
+
+## Scope
+
+- Owns orientation, source selection, documentation-path changes, and evidence
+  routing.
+- Does not replace the runtime, native-migration, UI, bridge, or verification
+  skill once the target layer is known.
 
 ## Workflow
 
@@ -26,7 +33,7 @@ documentation more authoritative than source code or live runtime behavior.
    - `items/modifiers/` or `loot/redesign/` for item and loot work.
    - `py4gw-ai/` for repository skills, instruction-system guidance, or agent workflows.
 3. Read only the cited subsystem record needed for the task. Use
-   `documentation-index.*` to locate a record, not to establish behavior.
+   `documentation-index.md` as a route map, not to establish behavior.
 4. Confirm the owner in current source, stubs, build configuration, and, when
    relevant, `Py4GW_Reforged_Native`. Treat legacy Py4GW/GWCA as parity evidence.
 5. For runtime-dependent claims, distinguish source proof from live injected
@@ -55,3 +62,9 @@ plan, a historical handover, or a generated catalog into a current contract.
   working action paths before changing caller logic.
 - For documentation changes, update the nearest `README.md` map and preserve
   source provenance and status labels.
+
+## Completion Report
+
+Report the owning layer, current source and documentation records consulted,
+evidence status, relevant legacy reference if any, and the next required
+specialist workflow or safe action.

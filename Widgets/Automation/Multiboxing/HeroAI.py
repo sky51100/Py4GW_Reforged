@@ -63,7 +63,7 @@ def LootingNode(cached_data: CacheData)-> BehaviorTree.NodeState:
     if GLOBAL_CACHE.Inventory.GetFreeSlotCount() <= 1:
         return BehaviorTree.NodeState.FAILURE
     
-    from Py4GWCoreLib.py4gwcorelib_src.loot_filters import LootFilters
+    from Py4GWCoreLib.py4gwcorelib_src.system_settings.loot_filters import LootFilters
 
     loot_array = LootFilters().GetLootArray(Range.Earshot.value)
 

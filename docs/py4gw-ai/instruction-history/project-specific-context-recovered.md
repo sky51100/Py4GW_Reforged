@@ -110,7 +110,6 @@ The only sanctioned non-class disk access: `Py4GWCoreLib/database_src/DBMgr.py` 
 - `docs/game-client/research/cpp-wasm-mapping.md` — the full CPP↔WASM↔EXE translation procedure with worked examples and pitfall notes.
 - `docs/game-client/research/rosetta-stone.txt` — GwA2 (AutoIt) to Py4GW function mapping reference.
 - `docs/game-client/research/gw-combat-ai-reverse-engineering.md` — combat AI RE analysis.
-- `docs/ui/research/generated/native-gw-ui-function-catalog.json` — catalog of native GW UI functions with addresses.
 - `docs/ui/research/native-gw-window-creation-investigation.md` — window proc creation RE.
 - `docs/ui/research/native-ui-title-and-encoded-string-reference.md` — UI title and encoding reference.
 - `docs/ui/name-tag-colors/feature-guide.md` — historical feature/usage guide for `PyAgentTagColor`; current source uses the expanded `PyAgentRecolor` surface.
