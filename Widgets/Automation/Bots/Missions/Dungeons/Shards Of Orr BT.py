@@ -7,6 +7,7 @@ from Py4GWCoreLib.Listeners import Listeners
 import PySystem
 from Py4GWCoreLib.BottingTree import BottingTree
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
+from Py4GWCoreLib.py4gwcorelib_src.system_settings.loot_filters import LootFilters
 from Py4GWCoreLib import Agent, GLOBAL_CACHE, AgentArray,Player, SharedCommandType
 from Py4GWCoreLib.enums_src.GameData_enums import Range
 from Py4GWCoreLib.enums_src.Model_enums import ModelID
@@ -166,6 +167,7 @@ _inventory_min_free_slots = 5
 _inventory_min_id_kits = 1
 _inventory_min_salvage_kits = 2
 _runtime_consumables_enabled = True
+_runtime_looting_enabled = True
 
 # Resolved once per run before the first tactical torch drop.  The value is
 # cached because carrying a bundle can temporarily hide the equipped weapon
@@ -346,6 +348,22 @@ L3_FENDI_PATH = [
 ]
 FENDI_CHEST_POSITION = (-15800.98, 16901.23)
 FENDI_CHEST_GADGET_ID = 8934
+
+# Fendi chest fire geysers.
+# Probe-confirmed runtime gadget id and positions (map 583).
+FENDI_GEYSER_GADGET_ID = 8015
+FENDI_GEYSER_SAFETY_RADIUS = 400.0
+FENDI_CHEST_SAFE_POSITION = Vec2f(-15820.0, 17050.0)
+FENDI_CHEST_LOOT_SCAN_RADIUS = 1_400.0
+FENDI_SAFE_LOOT_TIMEOUT_MS = 75_000
+FENDI_SAFE_LOOT_MAX_ATTEMPTS_PER_ITEM = 2
+FENDI_GEYSER_FALLBACK_POSITIONS = (
+    (-15866.0, 16574.0),
+    (-14640.0, 17723.0),
+    (-14641.0, 15252.0),
+    (-16911.0, 15168.0),
+    (-18053.0, 18215.0),
+)
 
 initialized = False
 botting_tree: BottingTree | None = None
@@ -559,17 +577,20 @@ def _enabled_consumable_upkeeps() -> tuple[int, ...]:
 def _configure_runtime_upkeeps(
     *,
     consumables_enabled: bool | None = None,
+    looting_enabled: bool | None = None,
 ) -> None:
-    global _runtime_consumables_enabled
+    global _runtime_consumables_enabled, _runtime_looting_enabled
 
     if consumables_enabled is not None:
         _runtime_consumables_enabled = bool(consumables_enabled)
+    if looting_enabled is not None:
+        _runtime_looting_enabled = bool(looting_enabled)
 
     if botting_tree is None:
         return
 
     botting_tree.Config.ConfigureUpkeep(
-        looting_enabled=True,
+        looting_enabled=_runtime_looting_enabled,
         resurrection_scroll=True,
         auto_inventory_handler_enabled=True,
         consumable_upkeeps=(
@@ -3885,11 +3906,16 @@ def Level3_Brigant() -> BehaviorTree:
             BT.AddModelToLootWhitelist(25410),
             BT.Wait(2000),
             BT.LootItems(distance=Range.Spirit.value),
-            BT.MoveAndInteractWithGadget(
-                Vec2f(-9252.32, 6396.40), pause_on_combat=False, log=True,
-            ),
+            
         ],
     )
+
+def Level3_BrigantDoor() -> BehaviorTree:
+    return BT.Sequence(
+        name="Open Level 3 Brigant Door",
+        children=[BT.MoveAndInteractWithGadget(Vec2f(-9252.32, 6396.40), pause_on_combat=False, log=True)],)
+
+
 # endregion
 
 # region Level 3 - boss
@@ -4162,53 +4188,463 @@ def Level3_FendiFight() -> BehaviorTree:
 #endregion
 
 # region Level 3 - Chest
-def Level3_Chest() -> BehaviorTree:
+
+def _set_party_looting_node(enabled: bool) -> BehaviorTree:
+    """Enable/disable headless auto-loot locally and on the multibox party."""
+
+    local_state = BehaviorTree(
+        BehaviorTree.ActionNode(
+            name=("Enable Local Looting" if enabled else "Disable Local Looting"),
+            action_fn=lambda _node: (
+                _configure_runtime_upkeeps(looting_enabled=enabled)
+                or BehaviorTree.NodeState.SUCCESS
+            ),
+            aftercast_ms=0,
+        )
+    )
+
+    remote_state = BTShared.SendAndWait(
+        command=SharedCommandType.SetHeadlessLooting,
+        params=(1.0 if enabled else 0.0, 0.0, 0.0, 0.0),
+        include_self=False,
+        refs_blackboard_key=(
+            "fendi_enable_remote_looting_refs"
+            if enabled
+            else "fendi_disable_remote_looting_refs"
+        ),
+        timeout_ms=10_000,
+        poll_interval_ms=100,
+        log=True,
+    )
+
     return BT.Sequence(
-        name="Open chest",
+        name=("Enable Party Looting" if enabled else "Disable Party Looting"),
+        children=[
+            local_state,
+            remote_state,
+            BT.Wait(300),
+        ],
+    )
+
+
+def _fendi_stack_party_safe() -> BehaviorTree:
+    """Approach the chest from the north side and stack remote accounts there."""
+
+    return BT.Sequence(
+        name="Stack Party At Safe Fendi Chest Position",
         children=[
             BT.Move(
-                Vec2f(-15198, 16839),
-                tolerance=350.0,
+                FENDI_CHEST_SAFE_POSITION,
+                tolerance=80.0,
                 pause_on_combat=False,
+                flag_heroes_to_waypoint=False,
+                ignore_destination_obstacles=False,
+                ignore_destination_npcs=False,
+                ignore_destination_gadgets=False,
                 log=True,
             ),
-            BT.Wait(3000),
+            BTShared.SendAndWait(
+                command=SharedCommandType.PixelStack,
+                params=(
+                    float(FENDI_CHEST_SAFE_POSITION.x),
+                    float(FENDI_CHEST_SAFE_POSITION.y),
+                    0.0,
+                    0.0,
+                ),
+                include_self=False,
+                refs_blackboard_key="fendi_safe_stack_refs",
+                timeout_ms=20_000,
+                poll_interval_ms=100,
+                log=True,
+            ),
+            BT.Wait(750),
+        ],
+    )
+
+
+def _fendi_live_geyser_positions() -> list[tuple[float, float]]:
+    geysers: list[tuple[float, float]] = []
+
+    for agent_id in AgentArray.GetGadgetArray() or []:
+        agent_id = int(agent_id)
+        try:
+            if int(Agent.GetGadgetID(agent_id) or 0) != FENDI_GEYSER_GADGET_ID:
+                continue
+            x, y = Agent.GetXY(agent_id)
+        except Exception:
+            continue
+
+        dx = float(x) - float(FENDI_CHEST_POSITION[0])
+        dy = float(y) - float(FENDI_CHEST_POSITION[1])
+        if (dx * dx) + (dy * dy) <= (3_500.0 * 3_500.0):
+            geysers.append((float(x), float(y)))
+
+    return geysers if geysers else list(FENDI_GEYSER_FALLBACK_POSITIONS)
+
+
+def _distance_sq_to_segment(
+    point: tuple[float, float],
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> float:
+    """Squared distance from a point to a line segment."""
+
+    px, py = float(point[0]), float(point[1])
+    ax, ay = float(start[0]), float(start[1])
+    bx, by = float(end[0]), float(end[1])
+
+    abx = bx - ax
+    aby = by - ay
+    ab_len_sq = (abx * abx) + (aby * aby)
+
+    if ab_len_sq <= 0.0001:
+        dx = px - ax
+        dy = py - ay
+        return (dx * dx) + (dy * dy)
+
+    t = ((px - ax) * abx + (py - ay) * aby) / ab_len_sq
+    t = max(0.0, min(1.0, t))
+
+    cx = ax + (abx * t)
+    cy = ay + (aby * t)
+    dx = px - cx
+    dy = py - cy
+    return (dx * dx) + (dy * dy)
+
+
+def _fendi_account_agent_id(account: object) -> int:
+    return int(
+        getattr(account, "PlayerID", 0)
+        or getattr(getattr(account, "AgentData", None), "AgentID", 0)
+        or 0
+    )
+
+
+def _fendi_account_position(account: object) -> tuple[float, float]:
+    agent_data = getattr(account, "AgentData", None)
+    pos = getattr(agent_data, "Pos", None)
+    return (
+        float(getattr(pos, "x", 0.0) or 0.0),
+        float(getattr(pos, "y", 0.0) or 0.0),
+    )
+
+
+def _fendi_same_level3_accounts() -> list[object]:
+    accounts: list[object] = []
+    for account in GLOBAL_CACHE.ShMem.GetAllAccountData() or []:
+        map_data = getattr(getattr(account, "AgentData", None), "Map", None)
+        if int(getattr(map_data, "MapID", 0) or 0) != SOO_LEVEL_3:
+            continue
+        accounts.append(account)
+    return accounts
+
+
+def _fendi_loot_recipient(item_agent_id: int) -> tuple[str, tuple[float, float]] | None:
+    """Resolve the owning multibox account for a visible chest drop."""
+
+    try:
+        owner_id = int(Agent.GetItemAgentOwnerID(item_agent_id) or 0)
+    except Exception:
+        owner_id = 0
+
+    local_email = str(Player.GetAccountEmail() or "").strip()
+
+    if owner_id <= 0:
+        # Unassigned drop: keep it on the leader rather than sending two accounts
+        # to the same object.
+        if not local_email:
+            return None
+        player_x, player_y = Player.GetXY()
+        return local_email, (float(player_x), float(player_y))
+
+    for account in _fendi_same_level3_accounts():
+        if _fendi_account_agent_id(account) != owner_id:
+            continue
+        email = str(getattr(account, "AccountEmail", "") or "").strip()
+        if email:
+            return email, _fendi_account_position(account)
+
+    if owner_id == int(Player.GetAgentID() or 0) and local_email:
+        player_x, player_y = Player.GetXY()
+        return local_email, (float(player_x), float(player_y))
+
+    return None
+
+
+def _fendi_loot_path_is_safe(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    geysers: Sequence[tuple[float, float]],
+) -> bool:
+    safety_sq = float(FENDI_GEYSER_SAFETY_RADIUS) ** 2
+
+    # The endpoint itself must be outside every geyser.
+    for geyser in geysers:
+        dx = float(end[0]) - float(geyser[0])
+        dy = float(end[1]) - float(geyser[1])
+        if (dx * dx) + (dy * dy) <= safety_sq:
+            return False
+
+    # Also reject a direct approach that cuts through a geyser circle.
+    for geyser in geysers:
+        if _distance_sq_to_segment(geyser, start, end) <= safety_sq:
+            return False
+
+    return True
+
+
+def SafeLootFendiChest() -> BehaviorTree:
+    """Loot chest drops one at a time while refusing paths through fire geysers.
+
+    Unsafe drops are deliberately left on the ground. Auto-loot remains disabled
+    until the party leaves Level 3, preventing HeroAI from overriding this safety
+    decision.
+    """
+
+    state = {
+        "started_at": 0.0,
+        "pending_index": -1,
+        "pending_receiver": "",
+        "pending_item": 0,
+        "attempts": {},
+        "skipped": set(),
+    }
+
+    def _message_is_active(index: int, receiver_email: str) -> bool:
+        if index < 0 or not receiver_email:
+            return False
+        try:
+            message = GLOBAL_CACHE.ShMem.GetInbox(index)
+        except Exception:
+            return False
+        return bool(
+            message
+            and getattr(message, "Active", False)
+            and str(getattr(message, "ReceiverEmail", "") or "") == receiver_email
+            and int(getattr(message, "Command", -1))
+            == int(SharedCommandType.InteractWithTarget)
+        )
+
+    def _safe_loot(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        now = time.monotonic()
+        if state["started_at"] <= 0.0:
+            state["started_at"] = now
+
+        if (now - state["started_at"]) * 1000.0 >= FENDI_SAFE_LOOT_TIMEOUT_MS:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                "Safe Fendi chest loot timed out; continuing without entering geyser zones.",
+                PySystem.Console.MessageType.Warning,
+            )
+            return BehaviorTree.NodeState.SUCCESS
+
+        pending_index = int(state["pending_index"])
+        pending_receiver = str(state["pending_receiver"])
+        pending_item = int(state["pending_item"])
+
+        if pending_index >= 0:
+            if _message_is_active(pending_index, pending_receiver):
+                return BehaviorTree.NodeState.RUNNING
+
+            # The remote/local interaction finished. If the item is still there,
+            # count another attempt before eventually skipping it.
+            state["pending_index"] = -1
+            state["pending_receiver"] = ""
+            state["pending_item"] = 0
+            if pending_item > 0 and Agent.IsValid(pending_item):
+                attempts = dict(state["attempts"])
+                attempts[pending_item] = int(attempts.get(pending_item, 0)) + 1
+                state["attempts"] = attempts
+                if attempts[pending_item] >= FENDI_SAFE_LOOT_MAX_ATTEMPTS_PER_ITEM:
+                    skipped = set(state["skipped"])
+                    skipped.add(pending_item)
+                    state["skipped"] = skipped
+                    PySystem.Console.Log(
+                        MODULE_NAME,
+                        f"Skipping chest drop agent {pending_item} after repeated pickup failure.",
+                        PySystem.Console.MessageType.Warning,
+                    )
+
+        geysers = _fendi_live_geyser_positions()
+        skipped = set(state["skipped"])
+
+        try:
+            loot_array = LootFilters().GetLootArray(FENDI_CHEST_LOOT_SCAN_RADIUS)
+        except Exception:
+            loot_array = []
+
+        candidates: list[int] = []
+        for item_agent_id in loot_array:
+            item_agent_id = int(item_agent_id or 0)
+            if item_agent_id <= 0 or item_agent_id in skipped:
+                continue
+            if not Agent.IsValid(item_agent_id):
+                continue
+
+            try:
+                item_xy = tuple(map(float, Agent.GetXY(item_agent_id)))
+            except Exception:
+                continue
+
+            dx = item_xy[0] - float(FENDI_CHEST_POSITION[0])
+            dy = item_xy[1] - float(FENDI_CHEST_POSITION[1])
+            if (dx * dx) + (dy * dy) > FENDI_CHEST_LOOT_SCAN_RADIUS ** 2:
+                continue
+
+            recipient = _fendi_loot_recipient(item_agent_id)
+            if recipient is None:
+                continue
+
+            receiver_email, start_xy = recipient
+            if not _fendi_loot_path_is_safe(start_xy, (float(item_xy[0]), float(item_xy[1])), geysers):
+                skipped.add(item_agent_id)
+                state["skipped"] = skipped
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    (
+                        f"Leaving chest drop agent {item_agent_id} on the ground: "
+                        "its pickup path intersects a Fendi fire geyser safety zone."
+                    ),
+                    PySystem.Console.MessageType.Warning,
+                )
+                continue
+
+            candidates.append(item_agent_id)
+
+        if not candidates:
+            if skipped:
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    (
+                        f"Safe Fendi chest loot complete. {len(skipped)} dangerous/unreachable "
+                        "drop(s) were intentionally left behind."
+                    ),
+                    PySystem.Console.MessageType.Info,
+                )
+            return BehaviorTree.NodeState.SUCCESS
+
+        item_agent_id = candidates[0]
+        recipient = _fendi_loot_recipient(item_agent_id)
+        if recipient is None:
+            skipped.add(item_agent_id)
+            state["skipped"] = skipped
+            return BehaviorTree.NodeState.RUNNING
+
+        receiver_email, _start_xy = recipient
+        sender_email = str(Player.GetAccountEmail() or "").strip()
+        if not sender_email or not receiver_email:
+            skipped.add(item_agent_id)
+            state["skipped"] = skipped
+            return BehaviorTree.NodeState.RUNNING
+
+        message_index = GLOBAL_CACHE.ShMem.SendMessage(
+            sender_email,
+            receiver_email,
+            SharedCommandType.InteractWithTarget,
+            (float(item_agent_id), 0.0, 0.0, 0.0),
+        )
+
+        if int(message_index) < 0:
+            skipped.add(item_agent_id)
+            state["skipped"] = skipped
+            return BehaviorTree.NodeState.RUNNING
+
+        state["pending_index"] = int(message_index)
+        state["pending_receiver"] = receiver_email
+        state["pending_item"] = item_agent_id
+        return BehaviorTree.NodeState.RUNNING
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Safe Loot Fendi Chest",
+            action_fn=_safe_loot,
+            aftercast_ms=100,
+        )
+    )
+
+
+def Level3_Chest() -> BehaviorTree:
+    return BT.Sequence(
+        name="Open Fendi Chest Safely",
+        children=[
+            # Stop every headless HeroAI from starting its normal Earshot loot
+            # routine while accounts are being positioned around the chest.
+            _set_party_looting_node(False),
+
+            # Always approach from the north side, away from the probe-confirmed
+            # 8015 geyser immediately south of the chest.
+            _fendi_stack_party_safe(),
+
             BT.MoveAndInteractWithGadget(
                 gadget_id=FENDI_CHEST_GADGET_ID,
-                pos=Vec2f(*FENDI_CHEST_POSITION),
+                pos=FENDI_CHEST_SAFE_POSITION,
                 search_distance=700.0,
                 interaction_distance=Range.Nearby.value,
                 interaction_count=2,
-                interaction_interval_ms=1000,
-                account_settle_ms=3_000,
+                interaction_interval_ms=500,
+                account_settle_ms=500,
                 timeout_ms=90_000,
                 multi_account=True,
                 include_self=True,
                 log=True,
                 ignore_destination_npcs=False,
-                ignore_destination_gadgets=True,
+                ignore_destination_gadgets=False,
             ),
+
+            # Pull everyone back to the same north-side safe point immediately
+            # after the sequential multibox chest interactions.
+            _fendi_stack_party_safe(),
+            BT.Wait(750),
+
+            # Controlled loot pass: only drops whose endpoint AND straight
+            # approach stay outside every 8015 geyser safety circle are touched.
+            SafeLootFendiChest(),
             _inventory_statistics_node(after_chest=True),
-            
-    
-        ])
+        ],
+    )
 #endregion
 
 
 # region Reward and restart flow
 
+def WaitForShandraInside(
+    timeout_ms: int = 30_000,
+) -> BehaviorTree:
+    """Wait until Shandra is resolvable by name inside the dungeon."""
+
+    def _check(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        agent_id = Agent.GetAgentIDByName("Shandra")
+
+        if agent_id != 0:
+            node.blackboard["shandra_agent_id"] = agent_id
+            return BehaviorTree.NodeState.SUCCESS
+
+        return BehaviorTree.NodeState.RUNNING
+
+    return BehaviorTree(
+        BehaviorTree.WaitUntilNode(
+            name="Wait For Shandra Inside Dungeon",
+            condition_fn=_check,
+            throttle_interval_ms=500,
+            timeout_ms=timeout_ms,
+        )
+    )
+
+
 def CollectInsideReward() -> BehaviorTree:
     """
     Collect the Lost Souls reward from Shandra inside the dungeon.
 
-    Shandra is resolved directly by name using TargetAgentByName.
-    The routine interacts with her and sends the known reward dialog
-    locally and across the multibox party.
+    Wait until Shandra is actually resolvable by name before targeting her.
+    The lookup is retried every 500 ms for up to 30 seconds, without logging
+    each internal attempt.
     """
     return BT.Sequence(
         name="Collect Inside Reward",
         children=[
-            BT.Wait(5000),
+            WaitForShandraInside(
+                timeout_ms=30_000,
+            ),
             BT.TargetAgentByName(
                 agent_name="Shandra",
                 log=True,
@@ -4581,6 +5017,9 @@ def CollectRewardAndReturnToArbor(
             BT.Wait(
                 2_000,
             ),
+            # The dangerous Level 3 drops no longer exist after the map change,
+            # so normal party auto-loot can safely resume here.
+            _set_party_looting_node(True),
             BT.LogMessage(
                 message=(
                     "The party has returned to Arbor Bay. "
@@ -4741,6 +5180,7 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
         ),
         ("Level 3 Torch And Braziers", Level3_TorchAndBraziers),
         ("Level 3 Brigant", Level3_Brigant),
+        ("Level 3 Brigant Door", Level3_BrigantDoor),
         *_vanquish_point_steps(
             "Level 3 Route To Fendi",
             SOO_LEVEL_3,
@@ -4755,65 +5195,6 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
         ("Inventory Check And Maintenance", InventoryCheckAndMaintenance),
         ("Prepare Next Dungeon Run", PrepareNextDungeonRun),
     ]
-
-
-
-def tooltip():
-    import PyImGui
-    from Py4GWCoreLib import ImGui, Color
-
-    PyImGui.begin_tooltip()
-
-    # Title
-    title_color = Color(255, 200, 100, 255)
-    ImGui.push_font("Regular", 20)
-    PyImGui.text_colored(
-        "Shards Of Orr Farm",
-        title_color.to_tuple_normalized(),
-    )
-    ImGui.pop_font()
-
-    PyImGui.spacing()
-    PyImGui.separator()
-    PyImGui.spacing()
-
-    # Description
-    PyImGui.text("Fully automated Shards of Orr dungeon farm")
-    PyImGui.text("Designed for BDS farming")
-
-    PyImGui.spacing()
-
-    # Features
-    PyImGui.text_colored(
-        "Features:",
-        title_color.to_tuple_normalized(),
-    )
-    PyImGui.bullet_text("Full 3-level dungeon run")
-    PyImGui.bullet_text("Normal / Hard Mode support")
-    PyImGui.bullet_text("Multi-account support")
-    PyImGui.bullet_text("Automatic inventory maintenance")
-    PyImGui.bullet_text("Conset, PCons & Summoning Stones")
-    PyImGui.bullet_text("Run time & drop statistics")
-    PyImGui.bullet_text("Automatic quest handling")
-
-    PyImGui.spacing()
-    PyImGui.separator()
-    PyImGui.spacing()
-
-    # Credits
-    PyImGui.text_colored(
-        "Credits:",
-        title_color.to_tuple_normalized(),
-    )
-    PyImGui.bullet_text("Developed by Sky")
-
-    PyImGui.end_tooltip()
-
-
-
-# endregion
-
-
 
 
 def main() -> None:
@@ -4837,6 +5218,10 @@ def main() -> None:
             ("Config", _draw_run_config),
         ],
     )
+
+
+# endregion
+
 
 if __name__ == "__main__":
     main()

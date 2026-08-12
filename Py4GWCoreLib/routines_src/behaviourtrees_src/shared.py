@@ -366,7 +366,7 @@ class BTShared:
         recipients: list[str] | None = None,
         include_self: bool = False,
         refs_blackboard_key: str = "shared_refs",
-        timeout_ms: int = 5000,
+        timeout_ms: int = 10000,
         poll_interval_ms: int = 100,
         log: bool = False,
         aftercast_ms: int = 100,
