@@ -9,6 +9,7 @@ import PyImGui
 
 from Py4GWCoreLib import Agent, AgentArray, GLOBAL_CACHE, Inventory, Map, Player, Routines, SharedCommandType
 from Py4GWCoreLib.BottingTree import BottingTree
+from Py4GWCoreLib.Item import has_active_party_summon
 from Py4GWCoreLib.Listeners import Listeners
 from Py4GWCoreLib.enums_src.GameData_enums import Range
 from Py4GWCoreLib.enums_src.Model_enums import ModelID
@@ -824,11 +825,15 @@ def _configure_runtime_upkeeps(
         enable_party_wipe_recovery=False,
         heroai_state_logging=False,
     )
-    # ConfigureUpkeep rebuilds the service list, so reinstall the Forsaken-specific
-    # wipe recovery service every time runtime upkeep configuration changes.
+    # ConfigureUpkeep rebuilds the service list, so reinstall custom services every
+    # time runtime upkeep configuration changes.
     botting_tree.AddServiceTree(
         "ForsakenPartyWipeRecoveryService",
         ForsakenPartyWipeRecoveryService,
+    )
+    botting_tree.AddServiceTree(
+        "SummoningStoneRecoveryService",
+        SummoningStoneRecoveryService,
     )
     _configured_consumable_upkeeps = enabled_consumables
 
@@ -1198,6 +1203,162 @@ def UseAvailableSummoningStone(level_key: str) -> BehaviorTree:
             log=True,
         )
     return BT.Subtree(name=f"Use Summoning Stone {level_key}", subtree_fn=_build)
+
+
+def SummoningStoneRecoveryService() -> BehaviorTree:
+    """Best-effort replacement summon when the active party summon dies mid-floor.
+
+    The regular level-start summoning calls remain authoritative.  This service only
+    becomes armed after it has actually seen a living summoning-stone ally on the
+    current dungeon map.  If that ally disappears without a map transition, accounts
+    are asked one at a time to try UseSummoningStone until a replacement appears.
+    Messaging performs the final per-client guards (active summon / Summoning Sickness).
+    """
+    ATTEMPT_INTERVAL_MS = 3_000.0
+    RETRY_CYCLE_DELAY_MS = 15_000.0
+
+    state: dict[str, object] = {
+        "map_id": 0,
+        "saw_active_summon": False,
+        "recovering": False,
+        "targets": [],
+        "target_index": 0,
+        "next_attempt_ms": 0.0,
+    }
+
+    def _reset_for_map(map_id: int) -> None:
+        state["map_id"] = int(map_id)
+        state["saw_active_summon"] = False
+        state["recovering"] = False
+        state["targets"] = []
+        state["target_index"] = 0
+        state["next_attempt_ms"] = 0.0
+
+    def _refresh_targets() -> list[tuple[str, str]]:
+        targets: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for email, label in _inventory_target_accounts():
+            email = str(email or "").strip()
+            if not email or email in seen:
+                continue
+            seen.add(email)
+            targets.append((email, str(label or email)))
+        state["targets"] = targets
+        return targets
+
+    def _tick(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        if not _use_summoning_stone or not _consumables_allowed():
+            return BehaviorTree.NodeState.RUNNING
+        if not Map.IsMapReady() or Map.IsMapLoading() or not Map.IsExplorable():
+            return BehaviorTree.NodeState.RUNNING
+
+        map_id = int(Map.GetMapID() or 0)
+        if map_id not in DUNGEON_MAPS:
+            return BehaviorTree.NodeState.RUNNING
+        if map_id != int(state["map_id"] or 0):
+            # A floor transition intentionally removes the old summon.  Do not treat
+            # that as a death: Level1/2/3 Start already performs the normal summon.
+            _reset_for_map(map_id)
+            return BehaviorTree.NodeState.RUNNING
+
+        player_id = int(Player.GetAgentID() or 0)
+        if player_id <= 0 or not Agent.IsValid(player_id) or Agent.IsDead(player_id):
+            return BehaviorTree.NodeState.RUNNING
+        if Routines.Checks.Party.IsPartyWiped():
+            return BehaviorTree.NodeState.RUNNING
+
+        try:
+            summon_alive = bool(has_active_party_summon(GLOBAL_CACHE.Party.GetOthers()))
+        except Exception:
+            summon_alive = False
+
+        if summon_alive:
+            if bool(state["recovering"]):
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    "[Summoning] Replacement summon detected; recovery stopped.",
+                    PySystem.Console.MessageType.Success,
+                )
+            state["saw_active_summon"] = True
+            state["recovering"] = False
+            state["targets"] = []
+            state["target_index"] = 0
+            state["next_attempt_ms"] = 0.0
+            return BehaviorTree.NodeState.RUNNING
+
+        # Do not replace the explicit level-start summon.  Recovery only starts after
+        # a real summon has been observed alive on this same floor.
+        if not bool(state["saw_active_summon"]):
+            return BehaviorTree.NodeState.RUNNING
+
+        now_ms = time.monotonic() * 1000.0
+        if not bool(state["recovering"]):
+            state["recovering"] = True
+            state["target_index"] = 0
+            state["next_attempt_ms"] = now_ms
+            _refresh_targets()
+            PySystem.Console.Log(
+                MODULE_NAME,
+                "[Summoning] Active party summon was lost; trying replacement stones account by account.",
+                PySystem.Console.MessageType.Warning,
+            )
+
+        if now_ms < float(state["next_attempt_ms"] or 0.0):
+            return BehaviorTree.NodeState.RUNNING
+
+        targets: list[tuple[str, str]] = list(state["targets"] or [])
+        if not targets:
+            targets = _refresh_targets()
+            if not targets:
+                state["next_attempt_ms"] = now_ms + RETRY_CYCLE_DELAY_MS
+                return BehaviorTree.NodeState.RUNNING
+
+        target_index = int(state["target_index"] or 0)
+        if target_index >= len(targets):
+            # Nobody produced a summon during this pass (no stone, sickness, etc.).
+            # Wait before trying the accounts again instead of spamming messages.
+            state["target_index"] = 0
+            state["targets"] = _refresh_targets()
+            state["next_attempt_ms"] = now_ms + RETRY_CYCLE_DELAY_MS
+            return BehaviorTree.NodeState.RUNNING
+
+        sender_email = str(Player.GetAccountEmail() or "").strip()
+        if not sender_email:
+            state["next_attempt_ms"] = now_ms + ATTEMPT_INTERVAL_MS
+            return BehaviorTree.NodeState.RUNNING
+
+        receiver_email, label = targets[target_index]
+        state["target_index"] = target_index + 1
+        state["next_attempt_ms"] = now_ms + ATTEMPT_INTERVAL_MS
+
+        try:
+            GLOBAL_CACHE.ShMem.SendMessage(
+                sender_email,
+                receiver_email,
+                SharedCommandType.UseSummoningStone,
+                (0.0, 0.0, 0.0, 0.0),
+            )
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"[Summoning] Asking {label} to try a replacement summoning stone.",
+                PySystem.Console.MessageType.Info,
+            )
+        except Exception as exc:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"[Summoning] Replacement request failed for {label}: {exc}",
+                PySystem.Console.MessageType.Warning,
+            )
+
+        return BehaviorTree.NodeState.RUNNING
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Summoning Stone Recovery Service",
+            action_fn=_tick,
+            aftercast_ms=500,
+        )
+    )
 
 
 
@@ -2815,6 +2976,10 @@ def _configure_botting_tree(tree: BottingTree) -> None:
     tree.AddServiceTree(
         "ForsakenPartyWipeRecoveryService",
         ForsakenPartyWipeRecoveryService,
+    )
+    tree.AddServiceTree(
+        "SummoningStoneRecoveryService",
+        SummoningStoneRecoveryService,
     )
 
 
