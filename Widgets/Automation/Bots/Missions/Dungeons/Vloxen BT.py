@@ -998,50 +998,177 @@ def _run_merchant_rules(attempt_key: str) -> BehaviorTree:
 
 
 def InventoryCheckAndMaintenance() -> BehaviorTree:
-    disabled = BehaviorTree(
-        BehaviorTree.ConditionNode(
-            name="Inventory Maintenance Disabled",
-            condition_fn=lambda _node: not _inventory_maintenance_enabled,
-        )
+    # Same MerchantRules lifecycle as Forsaken:
+    # OFF outside inventory maintenance, ON only while it is actually required.
+
+    disabled = BT.Sequence(
+        name="Inventory Maintenance Disabled",
+        children=[
+            BehaviorTree(
+                BehaviorTree.ConditionNode(
+                    name="Inventory Maintenance Disabled Check",
+                    condition_fn=lambda _node: not _inventory_maintenance_enabled,
+                )
+            ),
+            _send_widget_state(
+                MERCHANT_RULES_WIDGET_NAME,
+                False,
+                "inventory_disabled_merchant_off",
+            ),
+        ],
     )
+
     attempts: list[BehaviorTree] = []
     for attempt in range(1, INVENTORY_MAINTENANCE_RETRY_COUNT + 1):
         key = f"inventory_attempt_{attempt}"
+
+        normal_attempt = BT.Sequence(
+            name=f"Inventory Maintenance Attempt {attempt} - Run",
+            children=[
+                _send_widget_state(
+                    INVENTORY_PLUS_WIDGET_NAME,
+                    False,
+                    f"{key}_inventoryplus_off",
+                ),
+                _send_widget_state(
+                    MERCHANT_RULES_WIDGET_NAME,
+                    True,
+                    f"{key}_merchant_on",
+                ),
+                _run_merchant_rules(key),
+                _send_widget_state(
+                    INVENTORY_PLUS_WIDGET_NAME,
+                    True,
+                    f"{key}_inventoryplus_on",
+                ),
+                BT.Wait(INVENTORY_SNAPSHOT_SETTLE_MS),
+                _query_all_inventory_states_node(
+                    f"Refresh Inventory Attempt {attempt}"
+                ),
+                _inventory_is_healthy_node(
+                    f"Inventory Healthy After Attempt {attempt}"
+                ),
+                _send_widget_state(
+                    MERCHANT_RULES_WIDGET_NAME,
+                    False,
+                    f"{key}_merchant_off_success",
+                ),
+            ],
+        )
+
+        cleanup_failure = BT.Sequence(
+            name=f"Inventory Maintenance Attempt {attempt} - Cleanup Failure",
+            children=[
+                _send_widget_state(
+                    INVENTORY_PLUS_WIDGET_NAME,
+                    True,
+                    f"{key}_inventoryplus_restore",
+                ),
+                _send_widget_state(
+                    MERCHANT_RULES_WIDGET_NAME,
+                    False,
+                    f"{key}_merchant_off_failure",
+                ),
+                BT.Failer(
+                    name=f"Inventory Maintenance Attempt {attempt} Failed"
+                ),
+            ],
+        )
+
         attempts.append(
-            BT.Sequence(
+            BT.Selector(
                 name=f"Inventory Maintenance Attempt {attempt}",
-                children=[
-                    _send_widget_state(INVENTORY_PLUS_WIDGET_NAME, False, f"{key}_inventoryplus_off"),
-                    _send_widget_state(MERCHANT_RULES_WIDGET_NAME, True, f"{key}_merchant_on"),
-                    _run_merchant_rules(key),
-                    _send_widget_state(INVENTORY_PLUS_WIDGET_NAME, True, f"{key}_inventoryplus_on"),
-                    BT.Wait(INVENTORY_SNAPSHOT_SETTLE_MS),
-                    _query_all_inventory_states_node(f"Refresh Inventory Attempt {attempt}"),
-                    _inventory_is_healthy_node(f"Inventory Healthy After Attempt {attempt}"),
-                ],
+                children=[normal_attempt, cleanup_failure],
             )
         )
 
-    enabled = BT.Sequence(
-        name="Inventory Check And Maintenance",
+    healthy_without_maintenance = BT.Sequence(
+        name="Inventory Already Healthy",
         children=[
-            _query_all_inventory_states_node("Query Inventory On All Accounts"),
+            _inventory_is_healthy_node("Inventory Already Healthy Check"),
+            _send_widget_state(
+                MERCHANT_RULES_WIDGET_NAME,
+                False,
+                "inventory_check_merchant_off_healthy",
+            ),
+        ],
+    )
+
+    maintenance_required = BT.Sequence(
+        name="Run MerchantRules Maintenance",
+        children=[
+            # MerchantRules stays OFF during party teardown / travel.
+            _send_widget_state(
+                MERCHANT_RULES_WIDGET_NAME,
+                False,
+                "inventory_check_merchant_off_before_maintenance",
+            ),
+            BT.LeaveParty(),
+            BT.Selector(
+                name="MerchantRules Attempts",
+                children=attempts,
+            ),
+        ],
+    )
+
+    enabled_normal = BT.Sequence(
+        name="Inventory Check And Maintenance - Run",
+        children=[
+            # Match Forsaken: enable for the initial inventory verification,
+            # then every branch explicitly switches it OFF again.
+            _send_widget_state(
+                MERCHANT_RULES_WIDGET_NAME,
+                True,
+                "inventory_check_merchant_on",
+            ),
+            _query_all_inventory_states_node(
+                "Query Inventory On All Accounts"
+            ),
             BT.Selector(
                 name="Inventory Threshold Decision",
                 children=[
-                    _inventory_is_healthy_node("Inventory Already Healthy"),
-                    BT.Sequence(
-                        name="Run MerchantRules Maintenance",
-                        children=[
-                            BT.LeaveParty(),
-                            BT.Selector(name="MerchantRules Attempts", children=attempts),
-                        ],
-                    ),
+                    healthy_without_maintenance,
+                    maintenance_required,
                 ],
             ),
         ],
     )
-    return BT.Selector(name="Optional Inventory Maintenance", children=[disabled, enabled])
+
+    # Last-resort cleanup: MerchantRules must never leak ON into the dungeon.
+    enabled_cleanup_failure = BT.Sequence(
+        name="Inventory Check Failure Cleanup",
+        children=[
+            _send_widget_state(
+                INVENTORY_PLUS_WIDGET_NAME,
+                True,
+                "inventory_check_inventoryplus_restore",
+            ),
+            _send_widget_state(
+                MERCHANT_RULES_WIDGET_NAME,
+                False,
+                "inventory_check_merchant_off_failure",
+            ),
+            BT.Failer(
+                name="Inventory Check And Maintenance Failed"
+            ),
+        ],
+    )
+
+    enabled = BT.Selector(
+        name="Inventory Check And Maintenance",
+        children=[
+            enabled_normal,
+            enabled_cleanup_failure,
+        ],
+    )
+
+    return BT.Selector(
+        name="Optional Inventory Maintenance",
+        children=[
+            disabled,
+            enabled,
+        ],
+    )
 
 
 def UseAvailableSummoningStone(level_key: str) -> BehaviorTree:
@@ -2356,6 +2483,7 @@ def CollectDredgingReward() -> BehaviorTree:
                 log=True,
             ),
             BT.WaitForQuestCleared(QUEST_ID, timeout_ms=15_000),
+            
         ],
     )
     return BT.Selector(
@@ -2364,16 +2492,34 @@ def CollectDredgingReward() -> BehaviorTree:
     )
 
 
+def ReturnToUmbralAfterRun() -> BehaviorTree:
+    """Return the party to Umbral Grotto after the dungeon chest."""
+    return BT.Resign(
+        wait_for_map_load=True,
+        target_map_id=UMBRAL_GROTTO,
+        multi_account=True,
+        timeout_ms=10_000,
+        log=True,
+    )
+
+
 def RefreshAfterReward() -> BehaviorTree:
-    return BT.Subtree(
-        name="Refresh After Reward",
-        subtree_fn=lambda node: BT.Resign(
-            wait_for_map_load=True,
-            target_map_id=UMBRAL_GROTTO,
-            multi_account=True,
-            timeout_ms=10_000,
-            log=True,
-        ),
+    """Force a fresh Umbral Grotto instance after collecting the quest reward.
+
+    Same principle as Oola: the next cycle must not try to retake the quest in
+    the exact same outpost instance where the reward was just collected.
+    """
+    return BT.Sequence(
+        name="Random Travel After Dredging Reward",
+        map_id_or_name=UMBRAL_GROTTO,
+        random_travel=True,
+        children=[
+            BT.WaitForMapLoad(
+                map_id=UMBRAL_GROTTO,
+                timeout_ms=60_000,
+            ),
+            BT.Wait(1_000),
+        ],
     )
 
 
@@ -2564,8 +2710,9 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
     ))
     steps.extend([
         ("Level 3 Open Zoldark Chest", Level3_OpenChest),
-        ("Refresh After Reward", RefreshAfterReward),
+        ("Return To Umbral Grotto", ReturnToUmbralAfterRun),
         ("Collect Dredging Reward", CollectDredgingReward),
+        ("Random Travel After Reward", RefreshAfterReward),
     ])
     return steps
 
