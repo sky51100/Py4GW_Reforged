@@ -2077,6 +2077,70 @@ def _draw_run_config() -> None:
         _configure_runtime_upkeeps(looting_enabled=_auto_loot)
 
 
+def _reset_statistics() -> None:
+    """Reset all Vloxen run/drop statistics while keeping character names."""
+    global _total_runs, _session_runs
+    global _total_run_time, _fastest_run, _slowest_run
+    global _l1_total_time, _l1_fastest, _l1_slowest
+    global _l2_total_time, _l2_fastest, _l2_slowest
+    global _l3_total_time, _l3_fastest, _l3_slowest
+    global _t_run_start, _t_l2_start, _t_l3_start
+    global _current_run_time, _current_l1_time
+    global _current_l2_time, _current_l3_time
+
+    _total_runs = 0
+    _session_runs = 0
+
+    _total_run_time = 0.0
+    _fastest_run = float("inf")
+    _slowest_run = 0.0
+
+    _l1_total_time = 0.0
+    _l1_fastest = float("inf")
+    _l1_slowest = 0.0
+
+    _l2_total_time = 0.0
+    _l2_fastest = float("inf")
+    _l2_slowest = 0.0
+
+    _l3_total_time = 0.0
+    _l3_fastest = float("inf")
+    _l3_slowest = 0.0
+
+    _t_run_start = 0.0
+    _t_l2_start = 0.0
+    _t_l3_start = 0.0
+
+    _current_run_time = 0.0
+    _current_l1_time = 0.0
+    _current_l2_time = 0.0
+    _current_l3_time = 0.0
+
+    # Keep known account keys so _save_statistics() overwrites
+    # persisted all-time Glacial Blade counters with zero.
+    for key in list(_gb_drops):
+        _gb_drops[key] = 0
+
+    _session_gb.clear()
+
+    # Prevent stale before/after chest snapshots from surviving the reset.
+    for section in (
+        _GB_SNAPSHOT_SECTION,
+        _GB_RUN_SECTION,
+    ):
+        for key in _settings.items(section).keys():
+            _settings.set(section, key, 0)
+
+    _save_statistics()
+
+    PySystem.Console.Log(
+        MODULE_NAME,
+        "Vloxen statistics reset.",
+        PySystem.Console.MessageType.Success,
+    )
+
+
+
 def _draw_statistics() -> None:
     from Py4GWCoreLib import Color
 
@@ -2131,6 +2195,11 @@ def _draw_statistics() -> None:
         "Hide Account Names",
         _scramble_accounts,
     )
+
+    PyImGui.same_line()
+
+    if PyImGui.button("Reset Statistics"):
+        _reset_statistics()
 
     session_gb = sum(_session_gb.values())
     total_gb = sum(_gb_drops.values())
@@ -2316,10 +2385,10 @@ L3_BOSS_ROUTE = [Vec2f(-590.76, -13250.43), Vec2f(414.37, -14659.19), Vec2f(1571
 _L1_LATER_MAPS = (VLOXEN_L2, VLOXEN_L3)
 _L2_LATER_MAPS = (VLOXEN_L3,)
 _L2_GEARBOX_PHASES = (
-    (L2_ROUTE_2, Vec2f(7399.38, 16863.55), Vec2f(6869.18, 15679.60)),
-    (L2_ROUTE_3, Vec2f(4103.38, 2812.96), Vec2f(4545.83, 1600.14)),
-    (L2_ROUTE_4, Vec2f(11634.61, 2337.24), Vec2f(12449.51, 3389.43)),
-    (L2_ROUTE_5, Vec2f(14124.39, 12534.04), Vec2f(14434.49, 11843.21)),
+    (L2_ROUTE_2, Vec2f(7399.38, 16863.55)),
+    (L2_ROUTE_3, Vec2f(4103.38, 2812.96)),
+    (L2_ROUTE_4, Vec2f(11634.61, 2337.24)),
+    (L2_ROUTE_5, Vec2f(14124.39, 12534.04)),
 )
 
 
@@ -2327,6 +2396,8 @@ def PrepareRun() -> BehaviorTree:
     already_inside = BT.Selector(name="Already Inside Vloxen", children=[BT.IsCurrentMap(map_id=m, log=False) for m in DUNGEON_MAPS])
     prepare = BT.Sequence(
         name="Prepare Vloxen Run",
+        map_id_or_name=UMBRAL_GROTTO,
+        random_travel=True,
         children=[
             InventoryCheckAndMaintenance(),
             BT.CreateParty(hero_ids=[4, 24, 25, 14], multibox_invite=True, timeout_ms=30_000, log=True),
@@ -2503,26 +2574,6 @@ def ReturnToUmbralAfterRun() -> BehaviorTree:
     )
 
 
-def RefreshAfterReward() -> BehaviorTree:
-    """Force a fresh Umbral Grotto instance after collecting the quest reward.
-
-    Same principle as Oola: the next cycle must not try to retake the quest in
-    the exact same outpost instance where the reward was just collected.
-    """
-    return BT.Sequence(
-        name="Random Travel After Dredging Reward",
-        map_id_or_name=UMBRAL_GROTTO,
-        random_travel=True,
-        children=[
-            BT.WaitForMapLoad(
-                map_id=UMBRAL_GROTTO,
-                timeout_ms=60_000,
-            ),
-            BT.Wait(1_000),
-        ],
-    )
-
-
 def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
     steps: list[tuple[str, Callable[[], BehaviorTree]]] = [
         ("Initialize", InitializeBot),
@@ -2536,25 +2587,9 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
         "Level 1 Shrine 2 Route", VLOXEN_L1, L1_ROUTE_A,
         skip_if_in_maps=_L1_LATER_MAPS,
     ))
-    steps.append(_guarded_step(
-        "Level 1 Shrine 2 Blessing", VLOXEN_L1,
-        lambda: BT.MoveAndDialog(
-            Vec2f(-17602.54, 2868.65), dialog_id=0x84,
-            multi_account=True, log=True,
-        ),
-        _L1_LATER_MAPS,
-    ))
     steps.extend(_vanquish_point_steps(
         "Level 1 Shrine 3 Route", VLOXEN_L1, L1_ROUTE_B,
         skip_if_in_maps=_L1_LATER_MAPS,
-    ))
-    steps.append(_guarded_step(
-        "Level 1 Shrine 3 Blessing", VLOXEN_L1,
-        lambda: BT.MoveAndDialog(
-            Vec2f(-13233.17, -10367.66), dialog_id=0x84,
-            multi_account=True, log=True,
-        ),
-        _L1_LATER_MAPS,
     ))
     steps.extend(_vanquish_point_steps(
         "Level 1 Boss Key Route", VLOXEN_L1, L1_ROUTE_C,
@@ -2589,7 +2624,7 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
 
     # Level 2
     steps.append(("Level 2 Start", Level2_Start))
-    for index, (route, gearbox_pos, blessing_pos) in enumerate(_L2_GEARBOX_PHASES, start=1):
+    for index, (route, gearbox_pos) in enumerate(_L2_GEARBOX_PHASES, start=1):
         steps.extend(_master_gear_point_steps(
             f"Level 2 Gearbox {index} Route", VLOXEN_L2, route,
             skip_if_in_maps=_L2_LATER_MAPS,
@@ -2601,13 +2636,6 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
                 interaction_distance=Range.Nearby.value, interaction_count=1,
                 interaction_interval_ms=750, account_settle_ms=1_500,
                 timeout_ms=30_000, multi_account=False, include_self=True, log=True,
-            ),
-            _L2_LATER_MAPS,
-        ))
-        steps.append(_guarded_step(
-            f"Level 2 Blessing {index + 1}", VLOXEN_L2,
-            lambda pos=blessing_pos: BT.MoveAndDialog(
-                pos, dialog_id=0x84, multi_account=True, log=True,
             ),
             _L2_LATER_MAPS,
         ))
@@ -2653,14 +2681,6 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
         "Level 2 Final Shrine Route", VLOXEN_L2, L2_ROUTE_6[10:],
         skip_if_in_maps=_L2_LATER_MAPS,
     ))
-    steps.append(_guarded_step(
-        "Level 2 Final Blessing", VLOXEN_L2,
-        lambda: BT.MoveAndDialog(
-            Vec2f(17677.01, 1252.00), dialog_id=0x84,
-            multi_account=True, log=True,
-        ),
-        _L2_LATER_MAPS,
-    ))
     steps.extend(_vanquish_point_steps(
         "Level 2 Exit Route", VLOXEN_L2, L2_ROUTE_7,
         skip_if_in_maps=_L2_LATER_MAPS,
@@ -2680,13 +2700,6 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
     # Level 3
     steps.append(("Level 3 Start", Level3_Start))
     steps.extend(_vanquish_point_steps("Level 3 Mid Shrine Route", VLOXEN_L3, L3_ROUTE_2))
-    steps.append(_guarded_step(
-        "Level 3 Mid Blessing", VLOXEN_L3,
-        lambda: BT.MoveAndDialog(
-            Vec2f(-1124.13, -13353.03), dialog_id=0x84,
-            multi_account=True, log=True,
-        ),
-    ))
     steps.extend(_vanquish_point_steps("Level 3 Boss Key And Lock Route", VLOXEN_L3, L3_ROUTE_3))
     steps.append(_guarded_step(
         "Level 3 Open Boss Lock", VLOXEN_L3,
@@ -2712,7 +2725,6 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
         ("Level 3 Open Zoldark Chest", Level3_OpenChest),
         ("Return To Umbral Grotto", ReturnToUmbralAfterRun),
         ("Collect Dredging Reward", CollectDredgingReward),
-        ("Random Travel After Reward", RefreshAfterReward),
     ])
     return steps
 
