@@ -4444,11 +4444,11 @@ def PrepareNextDungeonRun() -> BehaviorTree:
         name="Reform Party And Enter Next Run From Vlox",
         children=[
             BT.IsCurrentMap(map_id=VLOXS_FALL, log=True),
-            BT.IsQuestState(quest_id=LOST_SOULS_QUEST_ID, state='active', log=True),
             BT.CreateParty(multibox_invite=True, timeout_ms=30000, log=True),
             _runtime_difficulty_node(),
             _runtime_restock_node(),
             TravelToShandra(),
+            HandleShandraQuest(),
             EnterShardsOfOrr(),
         ],
     )
