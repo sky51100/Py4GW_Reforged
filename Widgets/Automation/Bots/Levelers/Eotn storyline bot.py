@@ -1605,6 +1605,7 @@ def AdvanceToLongeyeEdge() -> BehaviorTree:
         name="Advance to Longeye's Edge",
         map_id_or_name=644,
         children=[
+            _prepare_standard_party_xandra(),
             _aggressive(),
             BT.VanquishNode([
                 (15886.204101, -6687.815917),

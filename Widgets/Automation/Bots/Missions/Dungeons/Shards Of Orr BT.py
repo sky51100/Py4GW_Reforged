@@ -18,7 +18,6 @@ from Py4GWCoreLib.native_src.internals.types import Vec2f
 from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
 from Py4GWCoreLib.enums_src.Player_enums import PlayerStatus
 from Py4GWCoreLib.routines_src.behaviourtrees_src.constants.lists import CONSET_UPKEEPS, CONSUMABLE_UPKEEPS as ALL_CONSUMABLE_UPKEEPS
-from Py4GWCoreLib.routines_src.behaviourtrees_src.items import BTItems
 from Py4GWCoreLib.routines_src.behaviourtrees_src.shared import BTShared
 from Sources.ApoSource.ApoBottingLib import wrappers as BT
 from Widgets.System.Messaging import get_inventory_count, reset_inventory_count, get_inventory_state, reset_inventory_state
@@ -26,9 +25,6 @@ import PyImGui
 
 
 PathPoint = Vec2f | tuple[float, float] | tuple[int, int]
-
-
-# endregion
 
 
 # region Script metadata
@@ -77,12 +73,6 @@ SHANDRA_REWARD_DIALOG = 0x832407
 ARBOR_BLESSING_DIALOG = 0x84
 
 # Consumables
-# Conset model IDs.
-ESSENCE_OF_CELERITY = 24859
-GRAIL_OF_MIGHT = 24860
-ARMOR_OF_SALVATION = 24861
-
-
 SUMMON_MODEL_IDS = (37810,30209,31155)
 PCON_UPKEEPS = tuple((int(model_id) for model_id in ALL_CONSUMABLE_UPKEEPS if int(model_id) not in CONSET_UPKEEPS))
 
@@ -171,7 +161,6 @@ _inventory_status_snapshot: dict[str, dict[str, object]] = {}
 # equipped weapon type reported by the game.  Martial builds automatically
 # drop the torch for combat; caster builds keep it.
 _drop_torch_for_combat: bool | None = None
-_torch_dropped_for_combat = False
 # Set from the Core planner restart metadata after a shrine recovery. While
 # active, a missing torch may be skipped briefly while the route is retraced
 # toward the death location where the dropped torch can still be recovered.
@@ -183,6 +172,7 @@ _shrine_recovery_torch_skip_active = False
 # restart-safe when the Core intentionally resumes from an earlier route anchor.
 _restart_safe_completed_mechanics: set[str] = set()
 _restart_safe_opened_torch_chests: set[str] = set()
+_LEVEL3_BOSS_ROUTE_UNLOCKED_KEY = "level3_boss_route_unlocked"
 
 # Persistent statistics.
 _statistics_loaded = False
@@ -256,13 +246,11 @@ L2_TORCH_CHEST = Vec2f(-14709.0, -16548.0)
 L2_FIRST_TORCH_DROP_POINT_PATH = [Vec2f(-11002.0, -17001.0)]
 L2_RETURN_TO_FIRST_TORCH_PATH = [Vec2f(-9259.0, -17322.0), Vec2f(-9550, -17258), Vec2f(-10243, -17780)]
 L2_BRAZIER_PART1 = [(-11303.0, -14596.0), (-11019.0, -11550.0), (-9028.0, -9021.0), (-6805.0, -11511.0), (-8984.0, -13842.0)]
-L2_CLEANING_PATH = [Vec2f(-9011.27, -11536.79)]
 L2_TO_ROOM2_DROP = (Vec2f(-10514.69, -9542.61), Vec2f(-11061.1, -7578.5))
 L2_RETURN_TO_ROOM2_TORCH_PATH = [Vec2f(-10958.2, -4529.5), Vec2f(-11690.64, -3802.55)]
 L2_ROOM2_PATH = [Vec2f(-8066.1, -4222.4), Vec2f(-7058.8, -4191.0)]
 
 L2_BRAZIER_PART2 = [(-3717.0, -4254.0), (-8251.0, -3240.0), (-8278.0, -1670.0)]
-L2_AFTER_PART2_POSITION = Vec2f(-5009.49, -2542.30)
 L2_PATH_TO_LOCK = [Vec2f(-6798.8, -2436.4), Vec2f(-7063, -2017), Vec2f(-16335.1, -9004.5), (-18700.0, -9171.0)]
 L2_DUNGEON_LOCK = Vec2f(-18725.0, -9171.0)
 L2_EXIT_PATH = [Vec2f(-18610.0, -8636.0), Vec2f(-19254, -8256)]
@@ -281,7 +269,7 @@ L3_FENDI_PATH = [Vec2f(-8696, 6323), Vec2f(-9988, 7652), Vec2f(-12712.36, 13502.
 FENDI_CHEST_POSITION = (-15800.98, 16901.23)
 FENDI_CHEST_GADGET_ID = 8934
 
-# Safe regroup point used immediately after the final chest multibox interaction.
+# Stable position used to stage the leader before the final chest interaction.
 FENDI_CHEST_SAFE_POSITION = Vec2f(-15885.85, 17100.0)
 
 initialized = False
@@ -289,13 +277,6 @@ botting_tree: BottingTree | None = None
 
 
 # Shrine wipe recovery is provided by Py4GWCoreLib.
-# Level 3 revisits the same physical shrine during two different route phases.
-# After Brigant is completed, recovery must resume on the boss-side route and
-# must never select the earlier torch route merely because it is geographically
-# closer to the shrine. This mirrors the old non-BT L3_BOSS_ROUTE_UNLOCKED logic.
-SHRINE_RECOVERY_CHECKPOINTS: dict[str, str] = {
-    "Level 3 Brigant": "Level 3 Brigant Door",
-}
 
 
 # endregion
@@ -375,8 +356,7 @@ def _load_statistics() -> None:
     _l3_fastest = float("inf") if fastest <= 0.0 else fastest
     _l3_slowest = _settings_ini.get_float(section, "l3_slowest", 0.0)
 
-    # "local" was an old fallback key created when Player.GetAccountEmail()
-    # temporarily returned an empty string. It is not a real account.
+    # Ignore the synthetic "local" key because it is not an account identifier.
     _bds_drops.pop("local", None)
     _gb_drops.pop("local", None)
     _session_bds.pop("local", None)
@@ -769,7 +749,6 @@ def _configure_runtime_upkeeps(*, consumables_enabled: bool | None = None, looti
         consumable_upkeeps=enabled_consumables,
         enable_party_wipe_recovery=True,
         enable_nearest_shrine_recovery=True,
-        shrine_recovery_checkpoints=SHRINE_RECOVERY_CHECKPOINTS,
         heroai_state_logging=False,
     )
     # ConfigureUpkeep rebuilds the service list. Reinstall the dungeon-level
@@ -782,7 +761,7 @@ def _configure_runtime_upkeeps(*, consumables_enabled: bool | None = None, looti
 
 
 def _sync_consumable_upkeeps() -> None:
-    # Floor loading no longer tears down PCons; only conset services are synced.
+    # Direct PCons are tick-driven; only Core conset services need resyncing.
     if _enabled_consumable_upkeeps() != _configured_consumable_upkeeps:
         _configure_runtime_upkeeps()
 
@@ -1350,7 +1329,6 @@ def _inventory_maintenance_trigger_node() -> BehaviorTree:
     )
 
 
-
 def _inventory_model_label(model_id: int) -> str:
     try:
         return str(ModelID(int(model_id)).name)
@@ -1413,7 +1391,6 @@ def _log_unhealthy_inventory_contents() -> None:
             )
 
 
-
 def _inventory_is_healthy_node(name: str, *, log_success: bool=True) -> BehaviorTree:
     def _check(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
         statuses = _inventory_account_statuses()
@@ -1439,7 +1416,6 @@ def _inventory_is_healthy_node(name: str, *, log_success: bool=True) -> Behavior
     return BehaviorTree(BehaviorTree.ConditionNode(name=name, condition_fn=_check))
 
 
-
 def _all_accounts_on_map(map_id: int) -> bool:
     accounts = _inventory_accounts()
     return bool(accounts) and all((_shared_account_map_id(account) == int(map_id) for account in accounts))
@@ -1453,15 +1429,6 @@ def _all_accounts_on_map_instance(map_id: int, region: int, district: int, langu
 
 def _all_accounts_on_map_node(map_id: int, name: str) -> BehaviorTree:
     return BehaviorTree(BehaviorTree.ConditionNode(name=name, condition_fn=lambda _node: _all_accounts_on_map(map_id)))
-
-
-def _wait_for_all_accounts_on_map(map_id: int, *, name: str, timeout_ms: int=INVENTORY_TRAVEL_TIMEOUT_MS) -> BehaviorTree:
-    def _check(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        if _all_accounts_on_map(map_id):
-            return BehaviorTree.NodeState.SUCCESS
-        return BehaviorTree.NodeState.RUNNING
-
-    return BehaviorTree(BehaviorTree.WaitUntilNode(name=name, condition_fn=_check, throttle_interval_ms=500, timeout_ms=timeout_ms))
 
 
 def _wait_for_all_accounts_on_inventory_instance(map_id: int, *, name: str, timeout_ms: int=INVENTORY_TRAVEL_TIMEOUT_MS) -> BehaviorTree:
@@ -1522,7 +1489,6 @@ def _return_all_accounts_to_vlox(attempt_key: str) -> BehaviorTree:
         children=[
             currently_in_an_explorable,
             BT.Resign(wait_for_map_load=True, target_map_id=VLOXS_FALL, multi_account=True, timeout_ms=INVENTORY_TRAVEL_TIMEOUT_MS, log=True),
-            #_wait_for_all_accounts_on_map(VLOXS_FALL, name="Wait For Party Return To Vlox's Falls"),
         ],
     )
 
@@ -1577,7 +1543,6 @@ def _run_merchant_rules(attempt_key: str) -> BehaviorTree:
         )
 
     return BT.Subtree(name="Run MerchantRules On All Active Accounts", subtree_fn=_build)
-
 
 
 def _inventory_maintenance_attempt(attempt_number: int) -> BehaviorTree:
@@ -1917,11 +1882,9 @@ def _shared_inventory_count(
     model_id_min: int,
     model_id_max: int,
 ) -> int | None:
-    """Read an item count directly from one account's mirrored inventory.
+    """Read an item count from the shared-memory inventory mirror.
 
-    Same principle as the Forsaken Eternal Blade statistics fix: use the
-    shared-memory inventory mirror first and keep InventoryQuery only as a
-    fallback when the mirror is not available yet.
+    InventoryQuery remains the fallback until the mirror becomes available.
     """
     inventory_bags = getattr(account, "InventoryBags", None)
     if inventory_bags is None:
@@ -2475,6 +2438,36 @@ def _mark_restart_safe_mechanic_node(key: str) -> BehaviorTree:
     )
 
 
+def _skip_if_level3_boss_route_unlocked(
+    step_name: str,
+    factory: Callable[[], BehaviorTree],
+) -> tuple[str, Callable[[], BehaviorTree]]:
+    """Skip obsolete pre-boss Level 3 steps after a shrine restart.
+
+    Level 3 passes the same shrine during the torch phase and again on the boss
+    route. Once Brigant and its loot are complete, an old nearby shrine anchor
+    may still be selected by the generic Core resolver. Those earlier steps are
+    no longer valid for this run, so they complete immediately until the planner
+    reaches the Brigant door / Fendi route again.
+    """
+
+    def _build(node: BehaviorTree.Node) -> BehaviorTree:
+        if (
+            _is_core_shrine_resume(node)
+            and _LEVEL3_BOSS_ROUTE_UNLOCKED_KEY in _restart_safe_completed_mechanics
+        ):
+            return BT.Succeeder(f"{step_name} Skipped - Level 3 Boss Route Already Unlocked")
+        return factory()
+
+    def _factory() -> BehaviorTree:
+        return BT.Subtree(
+            name=f"Restart Safe Level 3 Phase ({step_name})",
+            subtree_fn=_build,
+        )
+
+    return step_name, _factory
+
+
 def _mark_torch_chest_opened_node(key: str) -> BehaviorTree:
     def _mark(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
         _restart_safe_opened_torch_chests.add(str(key))
@@ -2655,9 +2648,8 @@ def ResolveTorchCombatPolicy() -> BehaviorTree:
 
 def ResetTorchCombatPolicy() -> BehaviorTree:
     def _reset(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        global _drop_torch_for_combat, _torch_dropped_for_combat, _shrine_recovery_torch_skip_active
+        global _drop_torch_for_combat, _shrine_recovery_torch_skip_active
         _drop_torch_for_combat = None
-        _torch_dropped_for_combat = False
         _shrine_recovery_torch_skip_active = False
         return BehaviorTree.NodeState.SUCCESS
 
@@ -2670,55 +2662,26 @@ def ResetTorchCombatPolicy() -> BehaviorTree:
     )
 
 
-def _set_torch_dropped_node(value: bool) -> BehaviorTree:
-    def _set(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        global _torch_dropped_for_combat
-        _torch_dropped_for_combat = bool(value)
-        return BehaviorTree.NodeState.SUCCESS
-
-    return BehaviorTree(
-        BehaviorTree.ActionNode(
-            name='Mark Torch Dropped For Combat' if value else 'Clear Torch Dropped For Combat',
-            action_fn=_set,
-            aftercast_ms=0,
-        )
-    )
-
-
 def DropTorchForCombat(log: bool = False) -> BehaviorTree:
-    """Drop the torch only for martial combat and remember that it must be recovered."""
+    """Drop the torch for martial combat; the current step recovers it afterward."""
 
     def _build(_node: BehaviorTree.Node) -> BehaviorTree:
         if not _resolve_torch_combat_policy():
             return BT.Succeeder('Keep Torch For Caster Combat')
-
         if not _is_holding_bundle():
             return BT.Succeeder('No Torch Bundle To Drop')
-
-        return BT.Sequence(
-            name='Drop Torch For Combat',
-            children=[
-                BT.DropBundle(log=log),
-                _set_torch_dropped_node(True),
-            ],
-        )
+        return BT.DropBundle(log=log)
 
     return BT.Subtree(name='Drop Torch For Combat If Required', subtree_fn=_build)
 
 
 def DiscardTorch(log: bool = True) -> BehaviorTree:
-    """Drop the torch when the current floor no longer needs it; no recovery follows."""
+    """Drop the torch once the active mechanic no longer needs it."""
 
     def _build(_node: BehaviorTree.Node) -> BehaviorTree:
         if not _is_holding_bundle():
-            return _set_torch_dropped_node(False)
-        return BT.Sequence(
-            name='Discard Finished Torch',
-            children=[
-                BT.DropBundle(log=log),
-                _set_torch_dropped_node(False),
-            ],
-        )
+            return BT.Succeeder('No Torch Bundle To Discard')
+        return BT.DropBundle(log=log)
 
     return BT.Subtree(name='Discard Torch After Mechanic', subtree_fn=_build)
 
@@ -2915,7 +2878,7 @@ def PickupTorch() -> BehaviorTree:
 
     def _pickup_torch_step(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
         nonlocal pickup_tree, started_at, retry_at, search_logged
-        global _torch_dropped_for_combat, _shrine_recovery_torch_skip_active
+        global _shrine_recovery_torch_skip_active
 
         now = time.monotonic()
 
@@ -2923,7 +2886,6 @@ def PickupTorch() -> BehaviorTree:
             _shrine_recovery_torch_skip_active = True
 
         if _is_holding_bundle():
-            _torch_dropped_for_combat = False
             _shrine_recovery_torch_skip_active = False
             _reset_state()
             return BehaviorTree.NodeState.SUCCESS
@@ -2949,7 +2911,6 @@ def PickupTorch() -> BehaviorTree:
             # resume waypoint. Do not fail/restart the resumed planner point forever.
             # Keep the recovery bypass active for later torch-managed points until
             # a torch is actually recovered or the torch policy is explicitly reset.
-            _torch_dropped_for_combat = False
             PySystem.Console.Log(
                 MODULE_NAME,
                 'Torch not recovered after 5s following shrine recovery; continuing to the next route point.',
@@ -2969,9 +2930,8 @@ def PickupTorch() -> BehaviorTree:
 
         ground_torch = _find_ground_torch()
         if ground_torch == 0:
-            # Unlike the Forsaken Keystone door case, a Shards torch is never
-            # intentionally consumed while the torch-managed section is active.
-            # Absence therefore remains blocking instead of being skipped.
+            # The torch remains required throughout a torch-managed section, so
+            # its absence stays blocking until it is recovered.
             return BehaviorTree.NodeState.RUNNING
 
         if now < retry_at:
@@ -2984,7 +2944,6 @@ def PickupTorch() -> BehaviorTree:
             return BehaviorTree.NodeState.RUNNING
 
         if pickup_result == BehaviorTree.NodeState.SUCCESS and _is_holding_bundle():
-            _torch_dropped_for_combat = False
             _shrine_recovery_torch_skip_active = False
             _reset_state()
             return BehaviorTree.NodeState.SUCCESS
@@ -3363,8 +3322,7 @@ def MoveBetweenBraziersWithFlameRecovery(
 
         _trace(f"{reason} Returning to the previous brazier (recovery {state['recovery_count']}/{recovery_limit}).", PySystem.Console.MessageType.Warning)
 
-        # Tous les sous-arbres concernés sont remis à zéro avant
-        # d'entamer la récupération locale.
+        # Reset every phase subtree before starting local recovery.
         _reset_tree(move_to_next)
         _reset_tree(move_to_previous)
         _reset_tree(relight_previous)
@@ -3412,9 +3370,6 @@ def MoveBetweenBraziersWithFlameRecovery(
 
         phase = str(state['phase'])
 
-        # --------------------------------------------------------------
-        # Déplacement vers le prochain brasero
-        # --------------------------------------------------------------
         if phase == "move_to_next":
             if not _has_active_flame():
                 return _begin_recovery(now, 'Torch flame extinguished during movement.')
@@ -3437,7 +3392,6 @@ def MoveBetweenBraziersWithFlameRecovery(
             return BehaviorTree.NodeState.RUNNING
 
         # --------------------------------------------------------------
-        # Interaction avec le prochain brasero
         # --------------------------------------------------------------
         if phase == "interact_next":
             if not _has_active_flame():
@@ -3450,7 +3404,7 @@ def MoveBetweenBraziersWithFlameRecovery(
 
             if result == BehaviorTree.NodeState.FAILURE:
                 # Ne pas laisser FAILURE remonter au planner.
-                # On retourne localement au précédent brasero.
+                # Recover locally from the previous brazier.
                 return _begin_recovery(now, 'Interaction with the next brazier failed.')
 
             _trace('Next brazier interaction completed.', PySystem.Console.MessageType.Success)
@@ -3459,9 +3413,6 @@ def MoveBetweenBraziersWithFlameRecovery(
 
             return BehaviorTree.NodeState.SUCCESS
 
-        # --------------------------------------------------------------
-        # Retour au précédent brasero
-        # --------------------------------------------------------------
         if phase == "move_to_previous":
             result = _tick_tree(move_to_previous, node)
 
@@ -3485,9 +3436,6 @@ def MoveBetweenBraziersWithFlameRecovery(
 
             return BehaviorTree.NodeState.RUNNING
 
-        # --------------------------------------------------------------
-        # Interaction avec le précédent brasero
-        # --------------------------------------------------------------
         if phase == "relight_previous":
             result = _tick_tree(relight_previous, node)
 
@@ -3511,9 +3459,6 @@ def MoveBetweenBraziersWithFlameRecovery(
 
             return BehaviorTree.NodeState.RUNNING
 
-        # --------------------------------------------------------------
-        # Attente de la réapparition de l'effet de flamme
-        # --------------------------------------------------------------
         if phase == "wait_for_relight":
             if _has_active_flame():
                 _trace('Torch relit successfully. Resuming movement to the next brazier.', PySystem.Console.MessageType.Success)
@@ -3565,7 +3510,6 @@ def _configure_botting_tree(tree: BottingTree) -> None:
         consumable_upkeeps=_enabled_consumable_upkeeps(),
         enable_party_wipe_recovery=True,
         enable_nearest_shrine_recovery=True,
-        shrine_recovery_checkpoints=SHRINE_RECOVERY_CHECKPOINTS,
         heroai_state_logging=False,
     )
     tree.AddServiceTree(
@@ -4166,7 +4110,7 @@ def Level2_EnterLevel3() -> BehaviorTree:
 
 # endregion
 
-# region Level 3 - part 1
+# region Level 3 - entry and torch
 
 
 def Level3_Start() -> BehaviorTree:
@@ -4185,18 +4129,19 @@ def Level3_TorchAndBraziers() -> BehaviorTree:
             _is_core_shrine_resume(node)
             and 'level3_brazier_route' in _restart_safe_completed_mechanics
         ):
-            return BT.Succeeder('Level 3 Torch And Braziers Already Completed Before Shrine Wipe')
+            return DiscardTorch(log=False)
 
         return BT.Sequence(
             name="Open Level 3 Torch Chest And Light Braziers",
             children=[
-                # Resolve again while no bundle is held. Carrying a torch can hide
-                # weapon information, so detection must happen before the pickup.
+                # Resolve the combat policy before pickup because a held bundle can
+                # hide the equipped weapon type reported by the game.
                 ResetTorchCombatPolicy(),
                 ResolveTorchCombatPolicy(),
                 EnsureTorchFromChest('level3_torch_chest', L3_TORCH_CHEST),
                 BrazierSequence("Level 3 Brazier Route", L3_BRAZIERS),
                 _mark_restart_safe_mechanic_node('level3_brazier_route'),
+                DiscardTorch(log=True),
             ],
         )
 
@@ -4206,22 +4151,16 @@ def Level3_TorchAndBraziers() -> BehaviorTree:
 # endregion
 
 
-# region Level 3 - part 3
+# region Level 3 - Brigant
 def Level3_Brigant() -> BehaviorTree:
     return BT.Sequence(
         name="Run Shards of Orr Level 3",
         children=[
-            TorchAwareMoveAndKill(
-                Vec2f(-11147, 2644),
-                'Level 3 Brigant Combat',
-                clear_area_radius=Range.Spirit.value,
-            ),
-            PickupTorch(),
+            BT.MoveAndKill(Vec2f(-11147, 2644), clear_area_radius=Range.Spirit.value, log=False),
             BT.AddModelToLootWhitelist(25410),
             BT.Move(Vec2f(-9888.47, 2892.00)),
             BT.LootItems(distance=Range.SafeCompass.value),
-            # The key fight is complete; the torch is no longer required.
-            DiscardTorch(log=True),
+            _mark_restart_safe_mechanic_node(_LEVEL3_BOSS_ROUTE_UNLOCKED_KEY),
         ],
     )
 
@@ -4237,7 +4176,7 @@ def Level3_BrigantDoor() -> BehaviorTree:
 
 # endregion
 
-# region Level 3 - boss
+# region Level 3 - Fendi
 
 
 FENDI_FIGHT_CENTER = (-15606.06, 15287.51)
@@ -4439,19 +4378,17 @@ def Level3_FendiFight() -> BehaviorTree:
         children=[
             BT.Move(Vec2f(-13198.79, 13789.36),log=True),
             ClearFendiArenaWithBossPriority(),
-            BT.ClearEnemiesInArea(Vec2f(-15606.06, 15287.51), radius=Range.Compass.value, log=True),
-            BT.WaitForClearEnemiesInArea(-15606.06, 15287.51, radius=Range.Compass.value, allowed_alive_enemies=0, interact_interval_ms=750, stable_clear_ms=15000, keep_player_near_center=False, center_tolerance=750.0, log=True),
+            BT.ClearEnemiesInArea(Vec2f(*FENDI_FIGHT_CENTER), radius=FENDI_FIGHT_RADIUS, log=True),
+            BT.WaitForClearEnemiesInArea(*FENDI_FIGHT_CENTER, radius=FENDI_FIGHT_RADIUS, allowed_alive_enemies=0, interact_interval_ms=750, stable_clear_ms=FENDI_STABLE_CLEAR_MS, keep_player_near_center=False, center_tolerance=750.0, log=True),
         ],
     )
-#endregion
+# endregion
 
-# region Level 3 - Chest
+# region Level 3 - chest
 
 def Level3_Chest() -> BehaviorTree:
-    """Open the final chest in multibox, let normal auto-loot do its job,
-    then move the leader back to the safe regroup position.
-
-    Followers remain on follow, so they naturally regroup on the leader.
+    """Stage the party at the chest, stop the timer, suspend consumables,
+    then open the final chest in multibox while normal auto-loot remains active.
     """
 
     return BT.Sequence(
@@ -4469,7 +4406,7 @@ def Level3_Chest() -> BehaviorTree:
         ],
     )
 
-#endregion
+# endregion
 
 
 # region Reward and restart flow
@@ -4511,8 +4448,6 @@ def CollectInsideReward() -> BehaviorTree:
             BT.Move(FENDI_CHEST_SAFE_POSITION, pause_on_combat=False, log=False),
         ],
     )
-
-
 
 
 def ResolveShandraQuestAfterRun() -> BehaviorTree:
@@ -4696,12 +4631,17 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
         *_movement_point_steps("Level 2 Exit Route", SOO_LEVEL_2, L2_EXIT_PATH[:-1], pause_on_combat=False, skip_if_in_maps=(SOO_LEVEL_3,)),
         (f"Level 2 Exit Route - Point {len(L2_EXIT_PATH):02d}", Level2_EnterLevel3),
 
-        ("Level 3 Start", Level3_Start),
-        *_vanquish_point_steps("Level 3 Main Route", SOO_LEVEL_3, L3_MAIN_PATH),
-        *_vanquish_point_steps("Level 3 Brigant Room Route", SOO_LEVEL_3, L3_BRIGANT_ROOM),
-        *_movement_point_steps("Level 3 Torch Route", SOO_LEVEL_3, L3_PATH_TO_TORCH, pause_on_combat=False),
-        ("Level 3 Torch And Braziers", Level3_TorchAndBraziers),
-        ("Level 3 Brigant", Level3_Brigant),
+        *[
+            _skip_if_level3_boss_route_unlocked(step_name, factory)
+            for step_name, factory in [
+                ("Level 3 Start", Level3_Start),
+                *_vanquish_point_steps("Level 3 Main Route", SOO_LEVEL_3, L3_MAIN_PATH),
+                *_vanquish_point_steps("Level 3 Brigant Room Route", SOO_LEVEL_3, L3_BRIGANT_ROOM),
+                *_movement_point_steps("Level 3 Torch Route", SOO_LEVEL_3, L3_PATH_TO_TORCH, pause_on_combat=False),
+                ("Level 3 Torch And Braziers", Level3_TorchAndBraziers),
+                ("Level 3 Brigant", Level3_Brigant),
+            ]
+        ],
         ("Level 3 Brigant Door", Level3_BrigantDoor),
         *_vanquish_point_steps("Level 3 Route To Fendi", SOO_LEVEL_3, L3_FENDI_PATH),
         ("Level 3 Fendi Boss Fight", Level3_FendiFight),
@@ -4723,12 +4663,10 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
 # endregion
 
 
-
 def tooltip():
     PyImGui.set_next_window_size((600, 0))
     PyImGui.begin_tooltip()
 
-    # Title
     title_color = Color(255, 200, 100, 255)
     ImGui.image(MODULE_ICON, (32, 32))
     PyImGui.same_line(0, 10)
@@ -4746,7 +4684,6 @@ def tooltip():
     PyImGui.separator()
     PyImGui.spacing()
 
-    # Description
     PyImGui.text_wrapped(
         "A complete multibox BottingTree automation for Shards of Orr. "
         "The run starts from Vlox's Falls, handles the Lost Souls quest and "
@@ -4755,7 +4692,6 @@ def tooltip():
     )
     PyImGui.spacing()
 
-    # Features
     PyImGui.text_colored("Features:", title_color.to_tuple_normalized())
     PyImGui.bullet_text(
         "Automates the complete Level 1, Level 2 and Level 3 dungeon route."
@@ -4778,7 +4714,6 @@ def tooltip():
     )
     PyImGui.spacing()
 
-    # Credits
     PyImGui.text_colored("Credits:", title_color.to_tuple_normalized())
     PyImGui.bullet_text("Shards of Orr BottingTree implementation: Sky.")
     PyImGui.bullet_text("Built on Py4GW and the BottingTree framework by Apo and contributors.")
@@ -4786,13 +4721,10 @@ def tooltip():
     PyImGui.end_tooltip()
 
 
-
 def main() -> None:
     global initialized
 
     if not initialized:
-        # Settings binds and loads automatically; no ensure/load lifecycle is
-        # required with the new persistence system.
         _load_settings()
         ensure_botting_tree()
         initialized = True
