@@ -24,6 +24,8 @@ class _BottingTreeTicksHost(Protocol):
     def SetIsolationEnabled(self, enabled: bool) -> bool: ...
     def SetHeadlessHeroAIEnabled(self, enabled: bool, *, reset_runtime: bool = True) -> None: ...
     def IsHeadlessHeroAIEnabled(self) -> bool: ...
+    def SetCombatEnabled(self, enabled: bool) -> bool: ...
+    def IsCombatEnabled(self) -> bool: ...
     def _disable_heroai_widget_for_headless(self) -> None: ...
     def SetLootingEnabled(self, enabled: bool) -> None: ...
     def IsLootingEnabled(self) -> bool: ...
@@ -65,6 +67,11 @@ class BottingTreeTicksMixin:
         if isinstance(requested_looting_enabled, bool):
             self.SetLootingEnabled(requested_looting_enabled)
         bb['looting_enabled'] = self.IsLootingEnabled()
+
+        requested_combat_enabled = bb.pop('combat_enabled_request', None)
+        if isinstance(requested_combat_enabled, bool):
+            self.SetCombatEnabled(requested_combat_enabled)
+        bb['combat_enabled'] = self.IsCombatEnabled()
 
         requested_resurrection_scroll_enabled = bb.pop('resurrection_scroll_enabled_request', None)
         if isinstance(requested_resurrection_scroll_enabled, bool):
@@ -181,7 +188,15 @@ class BottingTreeTicksMixin:
             bb['PLANNER_OWNER'] = PlannerStatus.OWNER_PLANNER.value
             return BehaviorTree.NodeState.RUNNING
 
-        if Routines.Checks.Party.IsPartyWiped() or GLOBAL_CACHE.Party.IsPartyDefeated():
+        # Keep the planner frozen for the whole recovery transaction, not only
+        # while the party is physically dead. On the first shrine-revival frame
+        # the party may already be alive, but the recovery service still needs one
+        # tick to resolve and request the correct named step restart.
+        if (
+            bool(bb.get('party_wipe_recovery_active', False))
+            or Routines.Checks.Party.IsPartyWiped()
+            or GLOBAL_CACHE.Party.IsPartyDefeated()
+        ):
             bb['PLANNER_STATUS'] = 'PAUSED: Party wipe recovery'
             bb['PLANNER_OWNER'] = PlannerStatus.OWNER_PLANNER.value
             return BehaviorTree.NodeState.RUNNING
