@@ -357,6 +357,7 @@ def _planner_vanquish_point_steps(
     for index, point in enumerate(point_list, start=1):
         step_name = f"{name} - Point {index:02d}/{total:02d}"
         bound_kwargs = dict(kwargs)
+        bound_kwargs.setdefault("clear_area_radius", Range.Earshot.value)
 
         def _factory(
             bound_point=point,
@@ -631,6 +632,7 @@ def _run_norn_tournament_round(log: bool = False) -> BehaviorTree:
                 Tournament_Path,
                 pause_on_combat=True,
                 log=True,
+                            clear_area_radius=Range.Earshot.value,
             ),
             _pacifist()
         ],
@@ -1613,7 +1615,7 @@ def UnlockBattleHonorStandSkill() -> BehaviorTree:
                 (20765.0, -12412.0),
                 (22538.0, -13411.0),
                 (23410.0, -13901.0),
-            ]),
+            ], clear_area_radius=Range.Earshot.value),
             BT.WaitForMapLoad(map_id=651),
             BT.VanquishNode([
                 (-17861.0, 16317.0),
@@ -1645,7 +1647,7 @@ def UnlockBattleHonorStandSkill() -> BehaviorTree:
                 (8415.0, -8062.0),
                 (10082.0, -9228.0),
                 (11715.0, -8045.0),
-            ]),
+            ], clear_area_radius=Range.Earshot.value),
             BT.WaitUntilOutOfCombat(timeout_ms=120_000),
             BT.Travel(target_map_id=650),
             BT.Move(Vec2f(-21902.0, 12807.0)),
@@ -1738,7 +1740,7 @@ def LabSpace() -> BehaviorTree:
                 (-4305.25, 13044.76),
                 (-11493.07, 16584.55),
                 (-17671.37, 14695.37),
-            ]),
+            ], clear_area_radius=Range.Earshot.value),
             BT.WaitUntilOutOfCombat(timeout_ms=120_000),
             BT.AddModelToLootWhitelist(25413),
 
@@ -1775,19 +1777,19 @@ def TheElusiveGolemancer() -> BehaviorTree:
             BT.VanquishNode([
                 (-15960.14, 3309.37),
                 (-13369.91, -965.44),
-            ]),
+            ], clear_area_radius=Range.Earshot.value),
             BT.MoveAndInteractWithGadget(Vec2f(-11737.0, -3710.0), log=True),
             BT.VanquishNode([
                 (-15108.84, -2793.48),
                 (-16518.94, -662.78),
-            ]),
+            ], clear_area_radius=Range.Earshot.value),
             BT.WaitUntilOutOfCombat(timeout_ms=120_000),
             BT.VanquishNode([
                 (-16898.24, -612.0),
                 (-17391.0, -528.0),
                 (-17597.36, 15027.91),
                 (18755.0, -19827.0),
-            ]),
+            ], clear_area_radius=Range.Earshot.value),
             BT.WaitForMapLoad(map_id=659),
             _aggressive(),
             BT.MoveAndInteractWithGadget(Vec2f(15979.0, -17531.0), log=True),
@@ -1795,7 +1797,7 @@ def TheElusiveGolemancer() -> BehaviorTree:
             BT.VanquishNode([
                 (18031.51, -13929.63),
                 (17886.86, -13218.39),
-            ]),
+            ], clear_area_radius=Range.Earshot.value),
             BT.MoveAndInteractWithGadget(Vec2f(15551.0, -13705.0), log=True),
             BT.Wait(3_000),
             BT.VanquishNode([
@@ -1806,12 +1808,12 @@ def TheElusiveGolemancer() -> BehaviorTree:
                 (3035.53, -9450.54),
                 (3485.59, -11380.60),
                 (-229.0, -12033.0),
-            ]),
+            ], clear_area_radius=Range.Earshot.value),
             _aggressive(),
             BT.AutoDialog(0x84),
             #BT.MoveAndDialog(Vec2f(-2639.0, -15247.0)),
             #BT.MoveAndDialog(Vec2f(3833.0, -16855.0)),
-            BT.VanquishNode([(3042.09, -16940.08), (2763.47, -17007.67)]),
+            BT.VanquishNode([(3042.09, -16940.08), (2763.47, -17007.67)], clear_area_radius=Range.Earshot.value),
             BT.Wait(10_000),
             BT.Move(Vec2f(3348.06, -16214.14)),
             BT.Wait(10_000),
@@ -1850,7 +1852,7 @@ def TheElusiveGolemancer() -> BehaviorTree:
             _pixel_stack(),
             BT.Wait(10_000),
             BT.DropBundle(log=True),
-            BT.VanquishNode([(6882.36, -20769.41), (6566.0, -21425.0)]),
+            BT.VanquishNode([(6882.36, -20769.41), (6566.0, -21425.0)], clear_area_radius=Range.Earshot.value),
             BT.WaitForMapLoad(map_id=660),
             _aggressive(),
             BT.VanquishNode([
@@ -1858,7 +1860,7 @@ def TheElusiveGolemancer() -> BehaviorTree:
                 (-12584.28, 13570.28),
                 (-15062.15, 16139.62),
                 (-18265.0, 13647.0),
-            ]),
+            ], clear_area_radius=Range.Earshot.value),
             BT.WaitForMapLoad(map_id=640),
         ],
     )
@@ -2063,7 +2065,7 @@ def ToKamadanForOlias(log: bool = True) -> BehaviorTree:
                 (2739.30, -3710.67),
                 (-648.30, -3493.72),
                 (-1661.91, -636.09),
-            ], log=log),
+            ], log=log, clear_area_radius=Range.Earshot.value),
             BT.MoveAndDialog(Vec2f(-1131.99, 818.35), 0x82D401, log=log),
             BT.MoveAndExitMap(Vec2f(-2439.0, 1732.0), target_map_id=290, log=log),
             BT.VanquishNode([
@@ -2073,7 +2075,7 @@ def ToKamadanForOlias(log: bool = True) -> BehaviorTree:
                 (-2396.20, 5260.67),
                 (-5031.77, 6001.52),
                 (-5899.57, 7240.19),
-            ], log=log),
+            ], log=log, clear_area_radius=Range.Earshot.value),
             BT.TargetAgentByModelIDAndSendDialog(4914, 0x82D404, log=log),
             BT.Wait(500),
             BT.SendDialog(0x87, log=log),
@@ -2083,19 +2085,19 @@ def ToKamadanForOlias(log: bool = True) -> BehaviorTree:
                 (-1712.16, -700.23),
                 (-907.97, -2862.29),
                 (742.42, -4167.73),
-                (1352.94, -3694.75)]),
+                (1352.94, -3694.75)], clear_area_radius=Range.Earshot.value),
             BT.Wait(5000),
             BT.VanquishNode([    
-                (1786, -1448)]),
+                (1786, -1448)], clear_area_radius=Range.Earshot.value),
             BT.Wait(5000),
             BT.VanquishNode([
                 (2651.48, -3750.63),
                 (3355.63, -2151.82),
-                (4347, -1682),]),
+                (4347, -1682),], clear_area_radius=Range.Earshot.value),
             BT.Wait(5000),
             BT.VanquishNode([    
                 (279, 811)
-            ], pause_on_combat=True, log=log),
+            ], pause_on_combat=True, log=log, clear_area_radius=Range.Earshot.value),
             BT.WaitForMapLoad(map_id=290, timeout_ms=60000),
             BT.TargetAgentByModelIDAndSendDialog(4914, 0x84, log=log),
             BT.SendDialog(0x85),
@@ -2133,7 +2135,7 @@ def ToLionsArch() -> BehaviorTree:
                     (2739.30, -3710.67),
                     (-648.30, -3493.72),
                     (-1661.91, -636.09),
-                ]),
+                ], clear_area_radius=Range.Earshot.value),
 
             BT.MoveAndDialog(Vec2f(-1006.97,-817.63),0x81DF01),
             BT.MoveAndExitMap((-2439,1732),target_map_id=290),
@@ -2145,6 +2147,7 @@ def ToLionsArch() -> BehaviorTree:
                     (-2396.20, 5260.67),
                     (-5031.77, 6001.52),
                 ],
+                            clear_area_radius=Range.Earshot.value,
             ),
             BT.MoveAndDialog(Vec2f(-5626.17, 7017.33),0x81DF04),
             BT.MoveAndDialog(Vec2f(-4661.13, 7479.86),0x84),
@@ -2174,7 +2177,7 @@ def CompleteOliasUnlock(log: bool = True) -> BehaviorTree:
                 (5657.20, 4485.55),
                 (4461.65, -710.88),
                 (10750.0, 2100.0),
-            ], pause_on_combat=True, log=log),
+            ], pause_on_combat=True, log=log, clear_area_radius=Range.Earshot.value),
             BT.WaitForMapLoad(map_id=55, timeout_ms=120000),
             BT.LeaveParty(),
             BT.Travel(target_map_id=449, log=log),
