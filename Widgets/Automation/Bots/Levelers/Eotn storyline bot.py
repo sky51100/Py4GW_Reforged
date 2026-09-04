@@ -311,21 +311,76 @@ def _pixel_stack() -> BehaviorTree:
 
 
 # ---------------------------------------------------------------------------
+# Granular planner helpers
+# ---------------------------------------------------------------------------
+
+PathPoint = Vec2f | tuple[float, float] | tuple[int, int]
+PlannerStep = tuple[str, Callable[[], BehaviorTree]]
+
+
+def _planner_map_prep_step(
+    name: str,
+    map_id_or_name: int | str,
+) -> PlannerStep:
+    """Expose BT.Sequence(map_id_or_name=...) as its own named planner step."""
+    if isinstance(map_id_or_name, int):
+        return (
+            name,
+            lambda map_id=int(map_id_or_name): BT.Travel(
+                target_map_id=map_id,
+            ),
+        )
+
+    return (
+        name,
+        lambda map_name=str(map_id_or_name): BT.Travel(
+            target_map_name=map_name,
+        ),
+    )
+
+
+def _planner_vanquish_point_steps(
+    name: str,
+    points: Sequence[PathPoint],
+    **kwargs,
+) -> list[PlannerStep]:
+    """Expose every VanquishNode waypoint as an independent named planner step.
+
+    This intentionally keeps the behavior of VanquishNode itself for each point,
+    while giving the planner explicit sequential progress. A wipe can therefore
+    restart the current point instead of replaying an entire multi-point route.
+    """
+    point_list = list(points)
+    total = len(point_list)
+    result: list[PlannerStep] = []
+
+    for index, point in enumerate(point_list, start=1):
+        step_name = f"{name} - Point {index:02d}/{total:02d}"
+        bound_kwargs = dict(kwargs)
+
+        def _factory(
+            bound_point=point,
+            bound_kwargs=bound_kwargs,
+        ) -> BehaviorTree:
+            return BT.VanquishNode(
+                [bound_point],
+                **bound_kwargs,
+            )
+
+        result.append((step_name, _factory))
+
+    return result
+
+# ---------------------------------------------------------------------------
 # Initialization and optional Hall of Monuments unlock
 # ---------------------------------------------------------------------------
 
 
-def InitializeBot() -> BehaviorTree:
-    return BT.Sequence(
-        name="Initialize EotN Storyline BT",
-        children=[
-            _aggressive(),
-            BT.LogMessage(
-                message="EotN Storyline BottingTree initialized.",
-                module_name=MODULE_NAME,
-            ),
-        ],
-    )
+def _steps_InitializeBot() -> list[PlannerStep]:
+    return [
+        ('Initialize Bot - 01 Aggressive', lambda: _aggressive()),
+        ('Initialize Bot - 02 Log Message', lambda: BT.LogMessage(message='EotN Storyline BottingTree initialized.', module_name=MODULE_NAME)),
+    ]
 
 path_to_eotn = [
     (766,-20764),
@@ -340,44 +395,36 @@ path_to_eotn = [
     (1128,882),
 ]
 
-def UnlockEyeOfTheNorthPool() -> BehaviorTree:
-    """Optional one-time Hall of Monuments resurrection-pool unlock."""
-    return BT.Sequence(
-        name="Unlock Eye of the North Resurrection Pool",
-        map_id_or_name=675,
-        children=[
-            _prepare_standard_party(),
-            BT.MoveAndExitMap(Vec2f(4141, -27703), target_map_id=499),
-            BT.Move(Vec2f(3598.97, -22331.73)),
-            BT.Wait(10000),
-            BT.MoveAndDialog(Vec2f(3537.00, -21937.00),0x839104),
-            BT.VanquishNode(path_to_eotn),
-
-            BT.MoveAndExitMap(Vec2f(-5198.0, 5595.0), target_map_id=646),
-            BT.MoveAndDialog(Vec2f(-6572.70, 6588.83),0x800001),
-            BT.Wait(2_000),
-            BT.MoveAndDialog(Vec2f(-6662.00, 6584.00),0x63F),
-            BT.Wait(6_000),
-            BT.MoveAndDialog(Vec2f(-6572.70, 6588.83),0x89),
-            BT.Wait(1_000),
-            BT.WaitForMapLoad(map_id=646),
-            BT.SendDialog(0x89),
-            BT.SendDialog(0x831904),
-            BT.MoveAndDialog(Vec2f(-6133.41, 5717.30), 0x838904),
-            BT.MoveAndDialog(Vec2f(-5626.80, 6259.57), 0x839304),
-        ],
-    )
+def _steps_UnlockEyeOfTheNorthPool() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('UnlockEyeOfTheNorthPool' + ' - 00 Map Preparation', 675),
+        ('UnlockEyeOfTheNorthPool - 01 Prepare Standard Party', lambda: _prepare_standard_party()),
+        ('UnlockEyeOfTheNorthPool - 02 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(4141, -27703), target_map_id=499)),
+        ('UnlockEyeOfTheNorthPool - 03 Move', lambda: BT.Move(Vec2f(3598.97, -22331.73))),
+        ('UnlockEyeOfTheNorthPool - 04 Wait', lambda: BT.Wait(10000)),
+        ('UnlockEyeOfTheNorthPool - 05 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(3537.0, -21937.0), 8622340)),
+        *_planner_vanquish_point_steps('UnlockEyeOfTheNorthPool - 06 Vanquish Route 01', path_to_eotn),
+        ('UnlockEyeOfTheNorthPool - 07 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-5198.0, 5595.0), target_map_id=646)),
+        ('UnlockEyeOfTheNorthPool - 08 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-6572.7, 6588.83), 8388609)),
+        ('UnlockEyeOfTheNorthPool - 09 Wait', lambda: BT.Wait(2000)),
+        ('UnlockEyeOfTheNorthPool - 10 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-6662.0, 6584.0), 1599)),
+        ('UnlockEyeOfTheNorthPool - 11 Wait', lambda: BT.Wait(6000)),
+        ('UnlockEyeOfTheNorthPool - 12 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-6572.7, 6588.83), 137)),
+        ('UnlockEyeOfTheNorthPool - 13 Wait', lambda: BT.Wait(1000)),
+        ('UnlockEyeOfTheNorthPool - 14 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=646)),
+        ('UnlockEyeOfTheNorthPool - 15 Send Dialog', lambda: BT.SendDialog(137)),
+        ('UnlockEyeOfTheNorthPool - 16 Send Dialog', lambda: BT.SendDialog(8591620)),
+        ('UnlockEyeOfTheNorthPool - 17 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-6133.41, 5717.3), 8620292)),
+        ('UnlockEyeOfTheNorthPool - 18 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-5626.8, 6259.57), 8622852)),
+    ]
 
 
-def ObtainStoryBook() -> BehaviorTree:
-    return BT.Sequence(
-        name="Obtain Story Book",
-        map_id_or_name="Eye of the North outpost",
-        children=[
-            BT.MoveAndDialog(Vec2f(-1998.0, 2797.0), 0x1006912),
-            BT.SendDialog(0x80)
-        ],
-    )
+def _steps_ObtainStoryBook() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('Obtain Story Book' + ' - 00 Map Preparation', 'Eye of the North outpost'),
+        ('Obtain Story Book - 01 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-1998.0, 2797.0), 16804114)),
+        ('Obtain Story Book - 02 Send Dialog', lambda: BT.SendDialog(128)),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -385,39 +432,27 @@ def ObtainStoryBook() -> BehaviorTree:
 # ---------------------------------------------------------------------------
 
 
-def TravelToGunnarsHold() -> BehaviorTree:
-    return BT.Sequence(
-        name="Run to Gunnar's Hold",
-        map_id_or_name="Eye of the North outpost",
-        children=[
-            _prepare_standard_party_olias(),
-            _aggressive(),
-            BT.MoveAndExitMap
-                (Vec2f(1522.0, 464.0),target_map_id=499),
-            BT.MoveAndDialog(Vec2f(2825.0, -481.0), 0x832801),
-            BT.VanquishNode([
-                (2548.84, 7266.08),
-                (1233.76, 13803.42),
-                (978.88, 21837.26),
-                (-4031.0, 27872.0),
-            ]),
-            BT.WaitForMapLoad(map_id=548),
-            BT.Move(Vec2f(14546.0, -6043.0)),
-            BT.MoveAndExitMap(Vec2f(15578.0, -6548.0), target_map_id=644, log=True),
-        ],
-    )
+def _steps_TravelToGunnarsHold() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step("Travel To Gunnar's Hold" + ' - 00 Map Preparation', 'Eye of the North outpost'),
+        ("Travel To Gunnar's Hold - 01 Prepare Standard Party Olias", lambda: _prepare_standard_party_olias()),
+        ("Travel To Gunnar's Hold - 02 Aggressive", lambda: _aggressive()),
+        ("Travel To Gunnar's Hold - 03 Move And Exit Map", lambda: BT.MoveAndExitMap(Vec2f(1522.0, 464.0), target_map_id=499)),
+        ("Travel To Gunnar's Hold - 04 Move And Dialog", lambda: BT.MoveAndDialog(Vec2f(2825.0, -481.0), 8595457)),
+        *_planner_vanquish_point_steps("Travel To Gunnar's Hold - 05 Vanquish Route 01", [(2548.84, 7266.08), (1233.76, 13803.42), (978.88, 21837.26), (-4031.0, 27872.0)]),
+        ("Travel To Gunnar's Hold - 06 Wait For Map Load", lambda: BT.WaitForMapLoad(map_id=548)),
+        ("Travel To Gunnar's Hold - 07 Move", lambda: BT.Move(Vec2f(14546.0, -6043.0))),
+        ("Travel To Gunnar's Hold - 08 Move And Exit Map", lambda: BT.MoveAndExitMap(Vec2f(15578.0, -6548.0), target_map_id=644, log=True)),
+    ]
 
 
 
 
-def Unlock_Xandra() -> BehaviorTree:
-    return BT.Sequence(
-        name="Talk to Gunnar",
-        map_id_or_name="Gunnar's Hold",
-        children=[
-            BT.MoveAndDialog(Vec2f(24078.0, -7512.0), 0x832804),
-        ],
-    )
+def _steps_Unlock_Xandra() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('Talk To Gunnar' + ' - 00 Map Preparation', "Gunnar's Hold"),
+        ('Talk To Gunnar - 01 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(24078.0, -7512.0), 8595460)),
+    ]
 
 Tournament_Path = [
     Vec2f(18597.83, -10787.19),
@@ -1223,20 +1258,12 @@ def _is_kaineng_center_unlocked(log: bool = True) -> BehaviorTree:
     )
 
 
-def PrepareXandraTournament(
-    return_outpost_name: str = "Gunnar's Hold",
-    log: bool = True,
-) -> BehaviorTree:
-    """Prepare the build and unlock tournament access once before retries."""
-
-    return BT.Sequence(
-        name="Prepare Xandra Tournament",
-        children=[
-            UnlockNornTournamentSkills(log=log),
-            BT.Travel(target_map_name=return_outpost_name, log=log),
-            BT.MoveAndDialog(Vec2f(17763.00, -11467.00), 0x834A01),
-        ],
-    )
+def _steps_PrepareXandraTournament() -> list[PlannerStep]:
+    return [
+        ('PrepareXandraTournament - 01 Prepare Norn Tournament Skills', lambda: UnlockNornTournamentSkills(log=log)),
+        ('PrepareXandraTournament - 02 Travel', lambda: BT.Travel(target_map_name=return_outpost_name, log=log)),
+        ('PrepareXandraTournament - 03 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(17763.0, -11467.0), 8604161)),
+    ]
 
 
 
@@ -1279,320 +1306,159 @@ def CompleteOptionalXandraTournament(
     )
 
 
-def TravelToSifhalla() -> BehaviorTree:
-    return BT.Sequence(
-        name="Run to Sifhalla",
-        map_id_or_name=644,
-        children=[
-            _prepare_standard_party_xandra(),
-            _aggressive(),
-            BT.MoveAndExitMap(Vec2f(15193, -6387), target_map_name="Norrhart Domains"),
-            BT.VanquishNode([
-                (13337.167968, -3869.252929),
-                (9826.771484, 416.337768),
-                (6321.207031, 2398.933349),
-                (2982.609619, 2118.243164),
-                (176.124359, 2252.913574),
-                (-3766.605468, 3390.211669),
-                (-7325.385253, 2669.518066),
-                (-9555.996093, 5570.137695),
-                (-14153.492187, 5198.475585),
-                (-18538.169921, 7079.861816),
-                (-22717.630859, 8757.812500),
-                (-25531.134765, 10925.241210),
-                (-26333.171875, 11242.023437),
-            ]),
-            BT.WaitForMapLoad(map_name="Drakkar Lake"),
-            BT.VanquishNode([
-                (14399.201171, -16963.455078),
-                (12510.431640, -13414.477539),
-                (12011.655273, -9633.283203),
-                (11484.183593, -5569.488769),
-                (12456.843750, -411.864135),
-                (13398.728515, 4328.439453),
-                (14000.825195, 8676.782226),
-                (14210.789062, 12432.768554),
-                (13846.647460, 15850.121093),
-                (13595.982421, 18950.578125),
-                (13567.612304, 19432.314453),
-            ]),
-            BT.WaitForMapLoad(map_name="Sifhalla"),
-        ],
-    )
+def _steps_TravelToSifhalla() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('Travel To Sifhalla' + ' - 00 Map Preparation', 644),
+        ('Travel To Sifhalla - 01 Prepare Standard Party Xandra', lambda: _prepare_standard_party_xandra()),
+        ('Travel To Sifhalla - 02 Aggressive', lambda: _aggressive()),
+        ('Travel To Sifhalla - 03 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(15193, -6387), target_map_name='Norrhart Domains')),
+        *_planner_vanquish_point_steps('Travel To Sifhalla - 04 Vanquish Route 01', [(13337.167968, -3869.252929), (9826.771484, 416.337768), (6321.207031, 2398.933349), (2982.609619, 2118.243164), (176.124359, 2252.913574), (-3766.605468, 3390.211669), (-7325.385253, 2669.518066), (-9555.996093, 5570.137695), (-14153.492187, 5198.475585), (-18538.169921, 7079.861816), (-22717.630859, 8757.8125), (-25531.134765, 10925.24121), (-26333.171875, 11242.023437)]),
+        ('Travel To Sifhalla - 05 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Drakkar Lake')),
+        *_planner_vanquish_point_steps('Travel To Sifhalla - 06 Vanquish Route 02', [(14399.201171, -16963.455078), (12510.43164, -13414.477539), (12011.655273, -9633.283203), (11484.183593, -5569.488769), (12456.84375, -411.864135), (13398.728515, 4328.439453), (14000.825195, 8676.782226), (14210.789062, 12432.768554), (13846.64746, 15850.121093), (13595.982421, 18950.578125), (13567.612304, 19432.314453)]),
+        ('Travel To Sifhalla - 07 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Sifhalla')),
+    ]
 
 
-def CompleteTrackingTheNornbear() -> BehaviorTree:
-    return BT.Sequence(
-        name="Tracking the Nornbear",
-        map_id_or_name="Sifhalla",
-        children=[
-            _prepare_standard_party_xandra(),
-            _aggressive(),
-            BT.MoveAndDialog(Vec2f(14353.0, 23905.0), 0x84),
-            BT.WaitForMapLoad(map_id=678),
-            BT.Wait(2_000),
-            BT.Move(Vec2f(10388.0, 23888.0)),
-            BT.Wait(8_500),
-            BT.WaitForMapLoad(map_name="Sifhalla", timeout_ms=50000),
-            BT.MoveAndDialog(Vec2f(14353.0, 23905.0), 0x832807),
-        ],
-    )
+def _steps_CompleteTrackingTheNornbear() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('Tracking The Nornbear' + ' - 00 Map Preparation', 'Sifhalla'),
+        ('Tracking The Nornbear - 01 Prepare Standard Party Xandra', lambda: _prepare_standard_party_xandra()),
+        ('Tracking The Nornbear - 02 Aggressive', lambda: _aggressive()),
+        ('Tracking The Nornbear - 03 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14353.0, 23905.0), 132)),
+        ('Tracking The Nornbear - 04 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=678)),
+        ('Tracking The Nornbear - 05 Wait', lambda: BT.Wait(2000)),
+        ('Tracking The Nornbear - 06 Move', lambda: BT.Move(Vec2f(10388.0, 23888.0))),
+        ('Tracking The Nornbear - 07 Wait', lambda: BT.Wait(8500)),
+        ('Tracking The Nornbear - 08 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Sifhalla', timeout_ms=50000)),
+        ('Tracking The Nornbear - 09 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14353.0, 23905.0), 8595463)),
+    ]
 
 
-def CompleteCurseOfTheNornbear() -> BehaviorTree:
-    return BT.Sequence(
-        name="Curse of the Nornbear",
-        map_id_or_name="Sifhalla",
-        children=[
-            _prepare_standard_party_xandra(),
-            _aggressive(),
-            BT.MoveAndDialog(Vec2f(14353.0, 23905.0), 0x86),
-            BT.WaitForMapLoad(map_id=653),
-            BT.Wait(2_000),
-            BT.Move(Vec2f(-2638.0, 20433.0)),
-            BT.Wait(5_000),
-            BT.Move(Vec2f(-5793.0, 15818.0)),
-            BT.Wait(2_000),
-            BT.Move(Vec2f(8105.0, 14089.0)),
-            BT.Wait(2_000),
-            BT.Move(Vec2f(4940.0, 6551.0)),
-            BT.WaitForMapLoad(map_id=643,timeout_ms=60000),
-            BT.Wait(2_000),
-            BT.Move(Vec2f(14353.0, 23905.0)),
-            _pacifist(),
-            BT.MoveAndDialog(Vec2f(14353.0, 23905.0), 0x838904),
-            BT.AutoDialog(0x89),
-            BT.AutoDialog(0x8A),
-        ],
-    )
+def _steps_CompleteCurseOfTheNornbear() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('Curse Of The Nornbear' + ' - 00 Map Preparation', 'Sifhalla'),
+        ('Curse Of The Nornbear - 01 Prepare Standard Party Xandra', lambda: _prepare_standard_party_xandra()),
+        ('Curse Of The Nornbear - 02 Aggressive', lambda: _aggressive()),
+        ('Curse Of The Nornbear - 03 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14353.0, 23905.0), 134)),
+        ('Curse Of The Nornbear - 04 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=653)),
+        ('Curse Of The Nornbear - 05 Wait', lambda: BT.Wait(2000)),
+        ('Curse Of The Nornbear - 06 Move', lambda: BT.Move(Vec2f(-2638.0, 20433.0))),
+        ('Curse Of The Nornbear - 07 Wait', lambda: BT.Wait(5000)),
+        ('Curse Of The Nornbear - 08 Move', lambda: BT.Move(Vec2f(-5793.0, 15818.0))),
+        ('Curse Of The Nornbear - 09 Wait', lambda: BT.Wait(2000)),
+        ('Curse Of The Nornbear - 10 Move', lambda: BT.Move(Vec2f(8105.0, 14089.0))),
+        ('Curse Of The Nornbear - 11 Wait', lambda: BT.Wait(2000)),
+        ('Curse Of The Nornbear - 12 Move', lambda: BT.Move(Vec2f(4940.0, 6551.0))),
+        ('Curse Of The Nornbear - 13 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=643, timeout_ms=60000)),
+        ('Curse Of The Nornbear - 14 Wait', lambda: BT.Wait(2000)),
+        ('Curse Of The Nornbear - 15 Move', lambda: BT.Move(Vec2f(14353.0, 23905.0))),
+        ('Curse Of The Nornbear - 16 Pacifist', lambda: _pacifist()),
+        ('Curse Of The Nornbear - 17 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14353.0, 23905.0), 8620292)),
+        ('Curse Of The Nornbear - 18 Auto Dialog', lambda: BT.AutoDialog(137)),
+        ('Curse Of The Nornbear - 19 Auto Dialog', lambda: BT.AutoDialog(138)),
+    ]
 
 
-def BloodWashesBlood() -> BehaviorTree:
-    return BT.Sequence(
-        name="Blood Washes Blood",
-        map_id_or_name="Sifhalla",
-        children=[
-            _aggressive(),
-            BT.VanquishNode([(16163.0, 22852.0), (16717.0, 22789.0)]),
-            BT.WaitForMapLoad(map_name="Jaga Moraine"),
-            BT.VanquishNode([
-                (-11949.0, -23710.0),
-                (-8929.0, -21112.0),
-                (-6111.0, -14675.0),
-                (-5757.0, -13735.0),
-                (-4855.0, -10881.0),
-                (-3702.0, -8096.0),
-                (-2962.0, -7412.0),
-                (-1397.0, -6161.0),
-                (1055.0, -3190.0),
-                (2170.0, -397.0),
-                (2659.0, 484.0),
-                (3151.0, 1355.0),
-                (3726.0, 4064.0),
-                (4621.0, 5918.0),
-            ]),
-            _pacifist(),
-            BT.MoveAndDialog(Vec2f(4621.0, 5918.0), 0x832001),
-            _aggressive(),
-            BT.VanquishNode([
-                (3014.0, 3308.0),
-                (-567.0, -1090.0),
-                (5147.0, -5920.0),
-                (10490.0, -9516.0),
-                (11885.0, -16663.0),
-                (9771.0, -21332.0),
-            ]),
-            BT.Wait(80_000),
-            BT.Move(Vec2f(9221.0, -21462.0)),
-            _pacifist(),
-            BT.MoveAndDialog(Vec2f(9504.0, -21390.0), 0x832007),
-            BT.MoveAndDialog(Vec2f(9688.0, -21012.0), 0x84),
-            BT.MoveAndExitMap(Vec2f(16045.0, -20642.0),target_map_name="Blood Washes Blood"),
-            _aggressive(),
-            BT.VanquishNode([
-                (419.0, -3059.0),
-                (-2083.0, 1061.0),
-                (1742.0, 4963.0),
-                (228.0, 10003.0),
-                (3266.0, 12358.0),
-                (3299.0, 13489.0),
-                (365.0, 13684.0),
-                (2752.0, 13410.0),
-                (2258.0, 14533.0),
-                (1446.0, 15008.0),
-                (127.0, 14203.0),
-                (13.0, 13430.0),
-                (795.0, 13120.0),
-                (1519.0, 13251.0),
-                (940.0, 14144.0),
-            ]),
-            _pacifist(),
-            BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True),
-            BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True),
-            _select_and_equip_reward_skill(8),
-            _use_bear_skill_4(),
-            _aggressive(),
-            BT.VanquishNode([
-                (2360.0, 13448.0),
-                (9167.0, 11874.0),
-                (11309.0, 11588.0),
-                (11886.0, 10714.0),
-                (13453.0, 8619.0),
-                (15097.0, 5363.0),
-            ]),
-            _use_bear_skill_4(),
-            BT.VanquishNode([
-                (16024.0, 3473.0),
-                (16766.0, 5052.0),
-                (18332.0, 3893.0),
-                (17662.0, 3049.0),
-                (17960.0, 2005.0),
-                (16668.0, 1509.0),
-                (17388.0, -205.0),
-                (15749.0, 167.0),
-                (15724.0, -2018.0),
-            ]),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.WaitForMapLoad(map_name="Gunnar's Hold"),
-        ],
-    )
+def _steps_BloodWashesBlood() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('Blood Washes Blood' + ' - 00 Map Preparation', 'Sifhalla'),
+        ('Blood Washes Blood - 01 Aggressive', lambda: _aggressive()),
+        *_planner_vanquish_point_steps('Blood Washes Blood - 02 Vanquish Route 01', [(16163.0, 22852.0), (16717.0, 22789.0)]),
+        ('Blood Washes Blood - 03 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Jaga Moraine')),
+        *_planner_vanquish_point_steps('Blood Washes Blood - 04 Vanquish Route 02', [(-11949.0, -23710.0), (-8929.0, -21112.0), (-6111.0, -14675.0), (-5757.0, -13735.0), (-4855.0, -10881.0), (-3702.0, -8096.0), (-2962.0, -7412.0), (-1397.0, -6161.0), (1055.0, -3190.0), (2170.0, -397.0), (2659.0, 484.0), (3151.0, 1355.0), (3726.0, 4064.0), (4621.0, 5918.0)]),
+        ('Blood Washes Blood - 05 Pacifist', lambda: _pacifist()),
+        ('Blood Washes Blood - 06 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(4621.0, 5918.0), 8593409)),
+        ('Blood Washes Blood - 07 Aggressive', lambda: _aggressive()),
+        *_planner_vanquish_point_steps('Blood Washes Blood - 08 Vanquish Route 03', [(3014.0, 3308.0), (-567.0, -1090.0), (5147.0, -5920.0), (10490.0, -9516.0), (11885.0, -16663.0), (9771.0, -21332.0)]),
+        ('Blood Washes Blood - 09 Wait', lambda: BT.Wait(80000)),
+        ('Blood Washes Blood - 10 Move', lambda: BT.Move(Vec2f(9221.0, -21462.0))),
+        ('Blood Washes Blood - 11 Pacifist', lambda: _pacifist()),
+        ('Blood Washes Blood - 12 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(9504.0, -21390.0), 8593415)),
+        ('Blood Washes Blood - 13 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(9688.0, -21012.0), 132)),
+        ('Blood Washes Blood - 14 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(16045.0, -20642.0), target_map_name='Blood Washes Blood')),
+        ('Blood Washes Blood - 15 Aggressive', lambda: _aggressive()),
+        *_planner_vanquish_point_steps('Blood Washes Blood - 16 Vanquish Route 04', [(419.0, -3059.0), (-2083.0, 1061.0), (1742.0, 4963.0), (228.0, 10003.0), (3266.0, 12358.0), (3299.0, 13489.0), (365.0, 13684.0), (2752.0, 13410.0), (2258.0, 14533.0), (1446.0, 15008.0), (127.0, 14203.0), (13.0, 13430.0), (795.0, 13120.0), (1519.0, 13251.0), (940.0, 14144.0)]),
+        ('Blood Washes Blood - 17 Pacifist', lambda: _pacifist()),
+        ('Blood Washes Blood - 18 Move And Interact', lambda: BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True)),
+        ('Blood Washes Blood - 19 Move And Interact', lambda: BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True)),
+        ('Blood Washes Blood - 20 Select And Equip Reward Skill', lambda: _select_and_equip_reward_skill(8)),
+        ('Blood Washes Blood - 21 Use Bear Skill 4', lambda: _use_bear_skill_4()),
+        ('Blood Washes Blood - 22 Aggressive', lambda: _aggressive()),
+        *_planner_vanquish_point_steps('Blood Washes Blood - 23 Vanquish Route 05', [(2360.0, 13448.0), (9167.0, 11874.0), (11309.0, 11588.0), (11886.0, 10714.0), (13453.0, 8619.0), (15097.0, 5363.0)]),
+        ('Blood Washes Blood - 24 Use Bear Skill 4', lambda: _use_bear_skill_4()),
+        *_planner_vanquish_point_steps('Blood Washes Blood - 25 Vanquish Route 06', [(16024.0, 3473.0), (16766.0, 5052.0), (18332.0, 3893.0), (17662.0, 3049.0), (17960.0, 2005.0), (16668.0, 1509.0), (17388.0, -205.0), (15749.0, 167.0), (15724.0, -2018.0)]),
+        ('Blood Washes Blood - 26 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Blood Washes Blood - 27 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name="Gunnar's Hold")),
+    ]
 
 
-def TravelToOlafstead() -> BehaviorTree:
-    return BT.Sequence(
-        name="Run to Olafstead",
-        map_id_or_name="Sifhalla",
-        children=[
-            _prepare_standard_party_xandra(),
-            _aggressive(),
-            BT.MoveAndExitMap(Vec2f(13663.0, 18683.0), target_map_name="Drakkar Lake"),
-            BT.VanquishNode([
-                (13856.0, 5241.0),
-                (9243.0, -3148.0),
-                (10291.0, -14402.0),
-                (7425.0, -19995.0),
-                (4769.0, -23840.0),
-                (6651.0, -26797.0),
-            ]),
-            BT.WaitForMapLoad(map_name="Varajar Fells"),
-            BT.VanquishNode([
-                (8582.0, 11620.0),
-                (5853.0, 10407.0),
-                (1972.0, 12954.0),
-                (-696.0, 8467.0),
-                (-90.0, 6162.0),
-                (-2940.0, 3979.0),
-                (-4395.0, 341.0),
-                (-4759.0, -3843.0),
-                (-3712.0, -4655.0),
-                (-2911.0, -3789.0),
-                (-2351.0, -3477.0),
-                (-3126.0, -2708.0),
-                (-3074.0, -55.0),
-                (-1777.0, 1319.0),
-                (-670.0, 1382.0),
-            ]),
-            BT.WaitForMapLoad(map_name="Olafstead"),
-        ],
-    )
+def _steps_TravelToOlafstead() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('Travel To Olafstead' + ' - 00 Map Preparation', 'Sifhalla'),
+        ('Travel To Olafstead - 01 Prepare Standard Party Xandra', lambda: _prepare_standard_party_xandra()),
+        ('Travel To Olafstead - 02 Aggressive', lambda: _aggressive()),
+        ('Travel To Olafstead - 03 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(13663.0, 18683.0), target_map_name='Drakkar Lake')),
+        *_planner_vanquish_point_steps('Travel To Olafstead - 04 Vanquish Route 01', [(13856.0, 5241.0), (9243.0, -3148.0), (10291.0, -14402.0), (7425.0, -19995.0), (4769.0, -23840.0), (6651.0, -26797.0)]),
+        ('Travel To Olafstead - 05 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Varajar Fells')),
+        *_planner_vanquish_point_steps('Travel To Olafstead - 06 Vanquish Route 02', [(8582.0, 11620.0), (5853.0, 10407.0), (1972.0, 12954.0), (-696.0, 8467.0), (-90.0, 6162.0), (-2940.0, 3979.0), (-4395.0, 341.0), (-4759.0, -3843.0), (-3712.0, -4655.0), (-2911.0, -3789.0), (-2351.0, -3477.0), (-3126.0, -2708.0), (-3074.0, -55.0), (-1777.0, 1319.0), (-670.0, 1382.0)]),
+        ('Travel To Olafstead - 07 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Olafstead')),
+    ]
 
 
-def CompleteShrineOfRavenSpirit() -> BehaviorTree:
-    return BT.Sequence(
-        name="Shrine of the Raven Spirit",
-        map_id_or_name="Olafstead",
-        children=[
-            _prepare_standard_party_xandra(),
-            BT.MoveAndDialog(Vec2f(132.0, -684.0), 0x832E01),
-            _aggressive(),
-            BT.MoveAndExitMap(Vec2f(-1392.0, 1205.0), target_map_id=553),
-            BT.VanquishNode([
-                (-2252.0, 831.0),
-                (-2887.0, -2894.0),
-                (-3211.0, -3843.0),
-                (-3940.0, -3155.0),
-                (-4941.0, 728.0),
-                (-5310.0, 3693.0),
-                (-8984.0, 4861.0),
-                (-12866.0, 5695.0),
-                (-13612.0, 6369.0),
-                (-14355.0, 7040.0),
-                (-14909.0, 7880.0),
-                (-15520.0, 8680.0),
-            ]),
-            BT.MoveAndDialog(Vec2f(-15696.0, 8732.0), 0x85),
-            BT.WaitForClearEnemiesInArea(-15696.0, 8732.0, radius=Range.Spirit.value, stable_clear_ms=180000),
-            BT.Travel(target_map_name="Olafstead"),
-            BT.MoveAndDialog(Vec2f(132.0, -684.0), 0x832E07),
-            BT.Wait(2000),
-            
-        ],
-    )
+def _steps_CompleteShrineOfRavenSpirit() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('Shrine Of The Raven Spirit' + ' - 00 Map Preparation', 'Olafstead'),
+        ('Shrine Of The Raven Spirit - 01 Prepare Standard Party Xandra', lambda: _prepare_standard_party_xandra()),
+        ('Shrine Of The Raven Spirit - 02 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(132.0, -684.0), 8596993)),
+        ('Shrine Of The Raven Spirit - 03 Aggressive', lambda: _aggressive()),
+        ('Shrine Of The Raven Spirit - 04 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-1392.0, 1205.0), target_map_id=553)),
+        *_planner_vanquish_point_steps('Shrine Of The Raven Spirit - 05 Vanquish Route 01', [(-2252.0, 831.0), (-2887.0, -2894.0), (-3211.0, -3843.0), (-3940.0, -3155.0), (-4941.0, 728.0), (-5310.0, 3693.0), (-8984.0, 4861.0), (-12866.0, 5695.0), (-13612.0, 6369.0), (-14355.0, 7040.0), (-14909.0, 7880.0), (-15520.0, 8680.0)]),
+        ('Shrine Of The Raven Spirit - 06 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-15696.0, 8732.0), 133)),
+        ('Shrine Of The Raven Spirit - 07 Wait For Clear Area', lambda: BT.WaitForClearEnemiesInArea(-15696.0, 8732.0, radius=Range.Spirit.value, stable_clear_ms=180000)),
+        ('Shrine Of The Raven Spirit - 08 Travel', lambda: BT.Travel(target_map_name='Olafstead')),
+        ('Shrine Of The Raven Spirit - 09 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(132.0, -684.0), 8596999)),
+        ('Shrine Of The Raven Spirit - 10 Wait', lambda: BT.Wait(2000)),
+    ]
 
 
-def CompleteAGateTooFar() -> BehaviorTree:
-    return BT.Sequence(
-        name="A Gate Too Far",
-        map_id_or_name="Olafstead",
-        children=[
-            _prepare_standard_party_xandra(),
-            BT.MoveAndDialog(Vec2f(132.0, -684.0), 0x86),
-            BT.WaitForMapToChange(map_id=655, timeout_ms=5_000),
-            _aggressive(),
-            BT.VanquishNode([
-                (-8731,-5078),
-                (-8020,-3123),
-                (-6013,-3073),
-                (-4692,-2598),
-                (-4282,-1773),
-                (-4536,737),
-                (-6193,1490),
-            ],move_tolerance=800),
-            BT.VanquishNode([
-    (-6243,6484),
-    (-7508,7340),
-    (-8324,4864),
-    (-5239,3585),
-],log=True),
-            BT.WaitForClearEnemiesInArea(
-                            -6243,6484,
-                            radius=Range.Spirit.value,
-                            allowed_alive_enemies=0,
-                            interact_interval_ms=750,
-                            stable_clear_ms=20_000,
-                            keep_player_near_center=False,
-                            center_tolerance=750.0,
-                            log=True,
-                        ),            
-            BT.VanquishNode([(-18697.0, 9416.0), (-20211.0, 9897.0)]),
-            BT.WaitForMapLoad(map_id=656),
-            BT.Wait(2_000),
-            BT.Move(Vec2f(17054.0, 6568.0)),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.Move(Vec2f(13357.0, 11594.0)),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.Move(Vec2f(11271.0, 17040.0)),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.Move(Vec2f(5244.0, 17207.0)),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.Move(Vec2f(3249.0, 17858.0)),
-            BT.WaitForMapLoad(map_id=657),
-            BT.Wait(2_000),
-            BT.Move(Vec2f(6360.0, 16486.0)),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.Move(Vec2f(5233.0, 12570.0)),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.Move(Vec2f(6210.0, 10139.0)),
-            BT.Move(Vec2f(6716.0, 6344.0)),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.Move(Vec2f(7702.0, 4015.0)),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.Move(Vec2f(7510.0, 2854.0)),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.WaitForMapLoad(map_id=645),
-            BT.Wait(2_000),
-        ],
-    )
+def _steps_CompleteAGateTooFar() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('A Gate Too Far' + ' - 00 Map Preparation', 'Olafstead'),
+        ('A Gate Too Far - 01 Prepare Standard Party Xandra', lambda: _prepare_standard_party_xandra()),
+        ('A Gate Too Far - 02 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(132.0, -684.0), 134)),
+        ('A Gate Too Far - 03 Wait For Map Change', lambda: BT.WaitForMapToChange(map_id=655, timeout_ms=5000)),
+        ('A Gate Too Far - 04 Aggressive', lambda: _aggressive()),
+        *_planner_vanquish_point_steps('A Gate Too Far - 05 Vanquish Route 01', [(-8731, -5078), (-8020, -3123), (-6013, -3073), (-4692, -2598), (-4282, -1773), (-4536, 737), (-6193, 1490)], move_tolerance=800),
+        *_planner_vanquish_point_steps('A Gate Too Far - 06 Vanquish Route 02', [(-6243, 6484), (-7508, 7340), (-8324, 4864), (-5239, 3585)], log=True),
+        ('A Gate Too Far - 07 Wait For Clear Area', lambda: BT.WaitForClearEnemiesInArea(-6243, 6484, radius=Range.Spirit.value, allowed_alive_enemies=0, interact_interval_ms=750, stable_clear_ms=20000, keep_player_near_center=False, center_tolerance=750.0, log=True)),
+        *_planner_vanquish_point_steps('A Gate Too Far - 08 Vanquish Route 03', [(-18697.0, 9416.0), (-20211.0, 9897.0)]),
+        ('A Gate Too Far - 09 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=656)),
+        ('A Gate Too Far - 10 Wait', lambda: BT.Wait(2000)),
+        ('A Gate Too Far - 11 Move', lambda: BT.Move(Vec2f(17054.0, 6568.0))),
+        ('A Gate Too Far - 12 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('A Gate Too Far - 13 Move', lambda: BT.Move(Vec2f(13357.0, 11594.0))),
+        ('A Gate Too Far - 14 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('A Gate Too Far - 15 Move', lambda: BT.Move(Vec2f(11271.0, 17040.0))),
+        ('A Gate Too Far - 16 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('A Gate Too Far - 17 Move', lambda: BT.Move(Vec2f(5244.0, 17207.0))),
+        ('A Gate Too Far - 18 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('A Gate Too Far - 19 Move', lambda: BT.Move(Vec2f(3249.0, 17858.0))),
+        ('A Gate Too Far - 20 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=657)),
+        ('A Gate Too Far - 21 Wait', lambda: BT.Wait(2000)),
+        ('A Gate Too Far - 22 Move', lambda: BT.Move(Vec2f(6360.0, 16486.0))),
+        ('A Gate Too Far - 23 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('A Gate Too Far - 24 Move', lambda: BT.Move(Vec2f(5233.0, 12570.0))),
+        ('A Gate Too Far - 25 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('A Gate Too Far - 26 Move', lambda: BT.Move(Vec2f(6210.0, 10139.0))),
+        ('A Gate Too Far - 27 Move', lambda: BT.Move(Vec2f(6716.0, 6344.0))),
+        ('A Gate Too Far - 28 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('A Gate Too Far - 29 Move', lambda: BT.Move(Vec2f(7702.0, 4015.0))),
+        ('A Gate Too Far - 30 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('A Gate Too Far - 31 Move', lambda: BT.Move(Vec2f(7510.0, 2854.0))),
+        ('A Gate Too Far - 32 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('A Gate Too Far - 33 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=645)),
+        ('A Gate Too Far - 34 Wait', lambda: BT.Wait(2000)),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1600,250 +1466,115 @@ def CompleteAGateTooFar() -> BehaviorTree:
 # ---------------------------------------------------------------------------
 
 
-def AdvanceToLongeyeEdge() -> BehaviorTree:
-    return BT.Sequence(
-        name="Advance to Longeye's Edge",
-        map_id_or_name=644,
-        children=[
-            _prepare_standard_party_xandra(),
-            _aggressive(),
-            BT.VanquishNode([
-                (15886.204101, -6687.815917),
-                (15183.199218, -6381.958984),
-            ]),
-            BT.WaitForMapLoad(map_id=548),
-            BT.VanquishNode([
-                (14233.820312, -3638.702636),
-                (14944.690429, 1197.740966),
-                (14855.548828, 4450.144531),
-                (17964.738281, 6782.413574),
-                (19127.484375, 9809.458984),
-                (21742.705078, 14057.231445),
-                (19933.869140, 15609.059570),
-                (16294.676757, 16369.736328),
-                (16392.476562, 16768.855468),
-            ]),
-            BT.WaitForMapLoad(map_id=482),
-            BT.VanquishNode([
-                (-11232.550781, -16722.859375),
-                (-7655.780273, -13250.316406),
-                (-6672.132324, -13080.853515),
-                (-5497.732421, -11904.576171),
-                (-3598.337646, -11162.589843),
-                (-3013.927490, -9264.664062),
-                (-1002.166198, -8064.565429),
-                (3533.099609, -9982.698242),
-                (7472.125976, -10943.370117),
-                (12984.513671, -15341.864257),
-                (17305.523437, -17686.404296),
-                (19048.208984, -18813.695312),
-                (19634.173828, -19118.777343),
-            ]),
-            BT.WaitForMapLoad(map_id=650),
-        ],
-    )
+def _steps_AdvanceToLongeyeEdge() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step("Advance To Longeye's Edge" + ' - 00 Map Preparation', 644),
+        ("Advance To Longeye's Edge - 01 Prepare Standard Party Xandra", lambda: _prepare_standard_party_xandra()),
+        ("Advance To Longeye's Edge - 02 Aggressive", lambda: _aggressive()),
+        *_planner_vanquish_point_steps("Advance To Longeye's Edge - 03 Vanquish Route 01", [(15886.204101, -6687.815917), (15183.199218, -6381.958984)]),
+        ("Advance To Longeye's Edge - 04 Wait For Map Load", lambda: BT.WaitForMapLoad(map_id=548)),
+        *_planner_vanquish_point_steps("Advance To Longeye's Edge - 05 Vanquish Route 02", [(14233.820312, -3638.702636), (14944.690429, 1197.740966), (14855.548828, 4450.144531), (17964.738281, 6782.413574), (19127.484375, 9809.458984), (21742.705078, 14057.231445), (19933.86914, 15609.05957), (16294.676757, 16369.736328), (16392.476562, 16768.855468)]),
+        ("Advance To Longeye's Edge - 06 Wait For Map Load", lambda: BT.WaitForMapLoad(map_id=482)),
+        *_planner_vanquish_point_steps("Advance To Longeye's Edge - 07 Vanquish Route 03", [(-11232.550781, -16722.859375), (-7655.780273, -13250.316406), (-6672.132324, -13080.853515), (-5497.732421, -11904.576171), (-3598.337646, -11162.589843), (-3013.92749, -9264.664062), (-1002.166198, -8064.565429), (3533.099609, -9982.698242), (7472.125976, -10943.370117), (12984.513671, -15341.864257), (17305.523437, -17686.404296), (19048.208984, -18813.695312), (19634.173828, -19118.777343)]),
+        ("Advance To Longeye's Edge - 08 Wait For Map Load", lambda: BT.WaitForMapLoad(map_id=650)),
+    ]
 
 
-def SearchForTheEbonVanguard() -> BehaviorTree:
-    return BT.Sequence(
-        name="Search for the Ebon Vanguard",
-        map_id_or_name=650,
-        children=[
-            BT.MoveAndDialog(Vec2f(-25160.0, 13505.0), 0x831801),
-            _aggressive(),
-            BT.MoveAndExitMap(Vec2f(-21502.0,12458.0),target_map_name="Grothmar Wardowns"),
-            BT.VanquishNode([(-14000.0, 4297.0), (-9580.0, -2860.0)]),
-            _pacifist(),
-            BT.MoveAndDialog(Vec2f(-9580.0, -2860.0), 0x831807),
-            BT.AutoDialog(0x84),
-            BT.AutoDialog(0x84),
-            BT.WaitForMapLoad(map_id=665),
-            _aggressive(),
-            BT.VanquishNode([
-                (5221.0, -3019.0),
-                (18715.0, -3896.0),
-                (20010.0, -66.0),
-                (17938.0, 2493.0),
-                (19705.0, 3742.0),
-            ]),
-            BT.WaitForMapLoad(map_id=649),
-            _pacifist(),
-            BT.MoveAndDialog(Vec2f(19106.0, 413.0), 0x838C01),
-            _aggressive(),
-            BT.VanquishNode([
-                (11484.0, 1898.0),
-                (11388.0, 4143.0),
-                (23634.0, 15333.0),
-            ]),
-            BT.MoveAndExitMap(Vec2f(25604.0, 15412.0), target_map_id=647),
-            BT.VanquishNode([
-                (-13181.0, 3067.0),
-                (-14576.0, 10999.0),
-                (-15193.0, 13347.0),
-            ]),
-            BT.MoveAndInteractWithGadget(Vec2f(-15369.0, 13087.0)),
-            BT.Move(Vec2f(-17533.0, 14473.0)),
-            BT.Move(Vec2f(-16740.0, 17124.0)),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.WaitForMapLoad(map_id=648),
-            BT.MoveAndDialog(Vec2f(-19090.86, 18003.03), 0x838C07),
-        ],
-    )
+def _steps_SearchForTheEbonVanguard() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('Search For The Ebon Vanguard' + ' - 00 Map Preparation', 650),
+        ('Search For The Ebon Vanguard - 01 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-25160.0, 13505.0), 8591361)),
+        ('Search For The Ebon Vanguard - 02 Aggressive', lambda: _aggressive()),
+        ('Search For The Ebon Vanguard - 03 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-21502.0, 12458.0), target_map_name='Grothmar Wardowns')),
+        *_planner_vanquish_point_steps('Search For The Ebon Vanguard - 04 Vanquish Route 01', [(-14000.0, 4297.0), (-9580.0, -2860.0)]),
+        ('Search For The Ebon Vanguard - 05 Pacifist', lambda: _pacifist()),
+        ('Search For The Ebon Vanguard - 06 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-9580.0, -2860.0), 8591367)),
+        ('Search For The Ebon Vanguard - 07 Send Dialog', lambda: BT.SendDialog(132)),
+        ('Search For The Ebon Vanguard - 08 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=665)),
+        ('Search For The Ebon Vanguard - 09 Aggressive', lambda: _aggressive()),
+        *_planner_vanquish_point_steps('Search For The Ebon Vanguard - 10 Vanquish Route 02', [(5221.0, -3019.0), (18715.0, -3896.0), (20010.0, -66.0), (17938.0, 2493.0), (19705.0, 3742.0)]),
+        ('Search For The Ebon Vanguard - 11 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=649)),
+        ('Search For The Ebon Vanguard - 12 Pacifist', lambda: _pacifist()),
+        ('Search For The Ebon Vanguard - 13 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(19106.0, 413.0), 8621057)),
+        ('Search For The Ebon Vanguard - 14 Aggressive', lambda: _aggressive()),
+        *_planner_vanquish_point_steps('Search For The Ebon Vanguard - 15 Vanquish Route 03', [(11484.0, 1898.0), (11388.0, 4143.0), (23634.0, 15333.0)]),
+        ('Search For The Ebon Vanguard - 16 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(25604.0, 15412.0), target_map_id=647)),
+        *_planner_vanquish_point_steps('Search For The Ebon Vanguard - 17 Vanquish Route 04', [(-13181.0, 3067.0), (-14576.0, 10999.0), (-15193.0, 13347.0)]),
+        ('Search For The Ebon Vanguard - 18 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(-15369.0, 13087.0))),
+        ('Search For The Ebon Vanguard - 19 Move', lambda: BT.Move(Vec2f(-17533.0, 14473.0))),
+        ('Search For The Ebon Vanguard - 20 Move', lambda: BT.Move(Vec2f(-16740.0, 17124.0))),
+        ('Search For The Ebon Vanguard - 21 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Search For The Ebon Vanguard - 22 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=648)),
+        ('Search For The Ebon Vanguard - 23 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-19090.86, 18003.03), 8621063)),
+    ]
 
 
-def WarbandOfBrothers() -> BehaviorTree:
-    """Complete all three levels; the legacy level-3 indentation is fixed."""
-    return BT.Sequence(
-        name="Warband of Brothers",
-        map_id_or_name=648,
-        children=[
-            _aggressive(),
-            BT.MoveAndDialog(Vec2f(-19094.0, 17945.0), 0x84),
-            BT.WaitForMapLoad(map_id=666),
-            BT.AddModelToLootWhitelist(24628),
-            BT.VanquishNode([
-                (-13404.0, -2958.0),
-                (-7696.0, 4576.0),
-                (-5939.0, 3668.0),
-                (-7823.0, 6395.0),
-                (-5790.0, 7957.0),
-                (-4799.0, 6891.0),
-                (-9905.0, 5280.0),
-                (-13153.0, 3346.0),
-                (-4600.0, 6494.0),
-            ]),
-            BT.LootItems(distance=Range.Spirit.value),
-            BT.MoveAndInteractWithGadget(Vec2f(-4043.76, 6405.57), log=True),
-            BT.Wait(2_000),
-            BT.VanquishNode([
-                (-1959.15, 7955.19),
-                (1490.38, 8409.88),
-                (3217.90, 8404.31),
-                (-4608.37, 6540.96),
-                (-16482.0, 1716.68),
-                (-18616.02, 806.14),
-                (-19704.0, 318.0),
-            ]),
-            BT.WaitForMapLoad(map_id=667),
-            BT.AddModelToLootWhitelist(24628),
-            BT.VanquishNode([
-                (-3290.88, 15187.92),
-                (-1760.07, 12088.74),
-                (-475.83, 11932.78),
-                (-2164.81, 11785.08),
-                (-2061.81, 12930.91),
-                (-2407.16, 14068.22),
-                (-2030.78, 12776.65),
-            ]),
-            BT.LootItems(distance=Range.Spirit.value),
-            BT.MoveAndInteractWithGadget(Vec2f(-2254.0, 11176.0), log=True),
-            BT.VanquishNode([
-                (-2404.72, 9076.48),
-                (-1563.08, 11763.31),
-                (6634.50, 17973.61),
-                (7429.30, 13458.01),
-                (13162.54, 9219.06),
-                (15923.27, 8823.71),
-                (16782.0, 8642.0),
-            ]),
-            BT.WaitForMapLoad(map_id=668),
-            BT.AddModelToLootWhitelist(24628),
-            BT.VanquishNode([
-                (17337.79, -5963.91),
-                (16669.06, -4763.91),
-                (16089.83, -3724.50),
-                (17007.08, -5518.76),
-                (17159.0, -6461.0),
-            ]),
-            BT.LootItems(distance=Range.Spirit.value),
-            BT.MoveAndInteractWithGadget(Vec2f(17159.0, -6461.0), log=True),
-            BT.Wait(2_000),
-            BT.VanquishNode([
-                (17808.17, -9149.82),
-                (18827.79, -10402.15),
-                (18742.40, -12129.31),
-                (18194.92, -14704.77),
-                (18334.16, -13903.64),
-                (18704.73, -12773.99),
-                (18284.53, -14134.07),
-            ]),
-            BT.LootItems(distance=Range.Spirit.value),
-            BT.MoveAndInteractWithGadget(Vec2f(18147.0, -14974.0), log=True),
-            BT.Wait(2_000),
-            BT.VanquishNode([
-                (14379.01, -15352.70),
-                (10392.54, -14173.80),
-                (9714.57, -12360.55),
-                (8907.67, -11354.53),
-                (8425.21, -9845.09),
-                (8900.77, -10740.29),
-                (9908.98, -12902.71),
-            ]),
-            BT.LootItems(distance=Range.Spirit.value),
-            BT.MoveAndInteractWithGadget(Vec2f(10034.0, -14899.0), log=True),
-            BT.Wait(2_000),
-            BT.VanquishNode([
-                (7685.12, -16387.24),
-                (3930.38, -13150.31),
-                (1072.90, -8136.26),
-            ]),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.WaitForMapLoad(map_id=648),
-        ],
-    )
+def _steps_WarbandOfBrothers() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('Warband Of Brothers' + ' - 00 Map Preparation', 648),
+        ('Warband Of Brothers - 01 Aggressive', lambda: _aggressive()),
+        ('Warband Of Brothers - 02 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-19094.0, 17945.0), 132)),
+        ('Warband Of Brothers - 03 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=666)),
+        ('Warband Of Brothers - 04 Add Loot Whitelist', lambda: BT.AddModelToLootWhitelist(25413)),
+        *_planner_vanquish_point_steps('Warband Of Brothers - 05 Vanquish Route 01', [(-13404.0, -2958.0), (-7696.0, 4576.0), (-5939.0, 3668.0), (-7823.0, 6395.0), (-5790.0, 7957.0), (-12068.0, 3611.0), ]),
+        ('Warband Of Brothers - 06 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(-4043.76, 6405.57), log=True)),
+        ('Warband Of Brothers - 07 Wait', lambda: BT.Wait(2000)),
+        *_planner_vanquish_point_steps('Warband Of Brothers - 08 Vanquish Route 02', [(-4799.0, 6891.0), (-9905.0, 5280.0), (-13153.0, 3346.0), (-4600.0, 6494.0),(-1959.15, 7955.19), (1490.38, 8409.88), (3217.9, 8404.31), (-4608.37, 6540.96), (-16482.0, 1716.68), (-18616.02, 806.14), (-19704.0, 318.0)]),
+        ('Warband Of Brothers - 09 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=667)),
+        ('Warband Of Brothers - 10 Add Loot Whitelist', lambda: BT.AddModelToLootWhitelist(25413)),
+        *_planner_vanquish_point_steps('Warband Of Brothers - 11 Vanquish Route 03', [(-3290.88, 15187.92), (-1760.07, 12088.74), (-475.83, 11932.78), (-2164.81, 11785.08), (-2061.81, 12930.91), (-2407.16, 14068.22), (-2030.78, 12776.65)]),
+        ('Warband Of Brothers - 12 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(-2254.0, 11176.0), log=True)),
+        *_planner_vanquish_point_steps('Warband Of Brothers - 13 Vanquish Route 04', [(-2404.72, 9076.48), (-1563.08, 11763.31), (6634.5, 17973.61), (7429.3, 13458.01), (13162.54, 9219.06), (15923.27, 8823.71), (16782.0, 8642.0)]),
+        ('Warband Of Brothers - 14 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=668)),
+        ('Warband Of Brothers - 15 Add Loot Whitelist', lambda: BT.AddModelToLootWhitelist(25413)),
+        *_planner_vanquish_point_steps('Warband Of Brothers - 16 Vanquish Route 05', [(17337.79, -5963.91), (16669.06, -4763.91), (16089.83, -3724.5), (17007.08, -5518.76), (17159.0, -6461.0)]),
+        ('Warband Of Brothers - 17 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(17159.0, -6461.0), log=True)),
+        ('Warband Of Brothers - 18 Wait', lambda: BT.Wait(2000)),
+        *_planner_vanquish_point_steps('Warband Of Brothers - 19 Vanquish Route 06', [(17808.17, -9149.82), (18827.79, -10402.15), (18742.4, -12129.31), (18194.92, -14704.77), (18334.16, -13903.64), (18704.73, -12773.99), (18284.53, -14134.07)]),
+        ('Warband Of Brothers - 20 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(18147.0, -14974.0), log=True)),
+        ('Warband Of Brothers - 21 Wait', lambda: BT.Wait(2000)),
+        *_planner_vanquish_point_steps('Warband Of Brothers - 22 Vanquish Route 07', [(14379.01, -15352.7), (10392.54, -14173.8), (9714.57, -12360.55), (8907.67, -11354.53), (8425.21, -9845.09), (8900.77, -10740.29), (9908.98, -12902.71)]),
+        ('Warband Of Brothers - 23 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(10034.0, -14899.0), log=True)),
+        ('Warband Of Brothers - 24 Wait', lambda: BT.Wait(2000)),
+        *_planner_vanquish_point_steps('Warband Of Brothers - 25 Vanquish Route 08', [(7685.12, -16387.24), (3930.38, -13150.31), (1072.9, -8136.26)]),
+        ('Warband Of Brothers - 26 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Warband Of Brothers - 27 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=648)),
+    ]
 
 
-def WhatMustBeDone() -> BehaviorTree:
-    return BT.Sequence(
-        name="What Must Be Done",
-        map_id_or_name=648,
-        children=[
-            _aggressive(),
-            BT.MoveAndDialog(Vec2f(-14185.0, 17040.0), 0x838D01),
-            BT.MoveAndExitMap(Vec2f(-15479.0, 13484.0), target_map_id=647),
-            BT.VanquishNode([
-                (-12085.0, 8447.0),
-                (-9360.0, -298.0),
-                (-6856.0, -7620.0),
-                (-7908.02, -7825.38),
-            ]),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.Travel(target_map_id=648),
-            BT.MoveAndDialog(Vec2f(-14185.0, 17040.0), 0x84),
-            BT.WaitForMapLoad(map_id=674),
-            BT.Move(Vec2f(-16946.0, 17319.0)),
-            BT.WaitForMapLoad(map_id=648),
-            BT.MoveAndDialog(Vec2f(-14185.0, 17040.0), 0x838D07),
-        ],
-    )
+def _steps_WhatMustBeDone() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('What Must Be Done' + ' - 00 Map Preparation', 648),
+        ('What Must Be Done - 01 Aggressive', lambda: _aggressive()),
+        ('What Must Be Done - 02 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-14185.0, 17040.0), 8621313)),
+        ('What Must Be Done - 03 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-15479.0, 13484.0), target_map_id=647)),
+        *_planner_vanquish_point_steps('What Must Be Done - 04 Vanquish Route 01', [(-12085.0, 8447.0), (-9360.0, -298.0), (-6856.0, -7620.0), (-7908.02, -7825.38)]),
+        ('What Must Be Done - 05 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('What Must Be Done - 06 Travel', lambda: BT.Travel(target_map_id=648)),
+        ('What Must Be Done - 07 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-14185.0, 17040.0), 132)),
+        ('What Must Be Done - 08 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=674)),
+        ('What Must Be Done - 09 Move', lambda: BT.Move(Vec2f(-16946.0, 17319.0))),
+        ('What Must Be Done - 10 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=648)),
+        ('What Must Be Done - 11 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-14185.0, 17040.0), 8621319)),
+    ]
 
 
-def AssaultOnTheStrongHold() -> BehaviorTree:
-    return BT.Sequence(
-        name="Assault on the Stronghold",
-        map_id_or_name=648,
-        children=[
-            _aggressive(),
-            BT.MoveAndExitMap(Vec2f(-15479.0, 13484.0), target_map_id=647),
-            BT.MoveAndDialog(Vec2f(-13849.0, 11217.0), 0x84),
-            BT.WaitForMapLoad(map_id=669),
-            BT.VanquishNode([(5203.0, 12344.0), (5843.0, 9145.0)]),
-            BT.MoveAndDialog(Vec2f(5843.0, 9145.0), 0x84),
-            BT.MoveAndDialog(Vec2f(5203.0, 12344.0), 0x84),
-            BT.Move(Vec2f(936.0, 10709.0)),
-            BT.Wait(30_000),
-            BT.VanquishNode([
-                (-1671.0, 11103.0),
-                (-4202.0, 11045.0),
-                (-6271.0, 12087.0),
-                (-6896.0, 13899.0),
-                (-6393.0, 9770.0),
-                (-6895.0, 8102.0),
-            ]),
-            BT.WaitForMapLoad(map_id=649),
-            BT.MoveAndDialog(Vec2f(-21069.0, 12353.0), 0x831907),
-        ],
-    )
+def _steps_AssaultOnTheStrongHold() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('Assault On The Stronghold' + ' - 00 Map Preparation', 648),
+        ('Assault On The Stronghold - 01 Aggressive', lambda: _aggressive()),
+        ('Assault On The Stronghold - 02 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-15479.0, 13484.0), target_map_id=647)),
+        ('Assault On The Stronghold - 03 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-13849.0, 11217.0), 132)),
+        ('Assault On The Stronghold - 04 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=669)),
+        *_planner_vanquish_point_steps('Assault On The Stronghold - 05 Vanquish Route 01', [(5203.0, 12344.0), (5843.0, 9145.0)]),
+        ('Assault On The Stronghold - 06 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(5843.0, 9145.0), 132)),
+        ('Assault On The Stronghold - 07 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(5203.0, 12344.0), 132)),
+        ('Assault On The Stronghold - 08 Move', lambda: BT.Move(Vec2f(936.0, 10709.0))),
+        ('Assault On The Stronghold - 09 Wait', lambda: BT.Wait(30000)),
+        *_planner_vanquish_point_steps('Assault On The Stronghold - 10 Vanquish Route 02', [(-1671.0, 11103.0), (-4202.0, 11045.0), (-6271.0, 12087.0), (-6896.0, 13899.0), (-6393.0, 9770.0), (-6895.0, 8102.0)]),
+        ('Assault On The Stronghold - 11 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=649)),
+        ('Assault On The Stronghold - 12 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-21069.0, 12353.0), 8591623)),
+    ]
 
 
 def UnlockBattleHonorStandSkill() -> BehaviorTree:
@@ -1929,97 +1660,62 @@ def UnlockBattleHonorStandSkill() -> BehaviorTree:
 # ---------------------------------------------------------------------------
 
 
-def FindingGadd() -> BehaviorTree:
-    return BT.Sequence(
-        name="Finding Gadd",
-        map_id_or_name=624,
-        children=[
-            BT.MoveAndDialog(Vec2f(16363.0, 15909.0), 0x833301),
-            BT.Travel(target_map_id=638),
-            _aggressive(),
-            BT.Move(Vec2f(-8755.0, -23240.0)),
-            BT.MoveAndDialog(Vec2f(-8295.0, -23572.0), 0x833304),
-            BT.VanquishNode([
-                (-8755.0, -23240.0),
-                (-9888.17, -22106.70),
-            ]),
-            BT.MoveAndExitMap(Vec2f(-9690.0, -19524.0), target_map_id=558),
-            BT.VanquishNode([
-                (-4466.15, -21025.91),
-                (-6967.77, -19810.06),
-                (11669.0, -23829.0),
-            ]),
-            BT.MoveAndDialog(Vec2f(11881.0, -23802.0), 0x833304),
-            BT.VanquishNode([(8017.92, -20124.24), (11184.85, -14188.88)]),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.Wait(5_000),
-            BT.Move(Vec2f(-5740.47, -13723.29)),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.Wait(5_000),
-            BT.Move(Vec2f(2417.11, -25444.55)),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.Wait(5_000),
-            BT.Move(Vec2f(11758.78, -24063.51)),
-            BT.Wait(20_000),
-            BT.VanquishNode([
-                (Vec2f(12236.58, -24474.01)),
-                (Vec2f(11675.35, -23909.45)),
-            ]),
-            BT.AutoDialog(0x833304),
-            BT.Wait(10_000),
-            BT.Move(Vec2f(11795.0, -24125.0)),
-            BT.AutoDialog(0x833307),
-        ],
-    )
+def _steps_FindingGadd() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('Finding Gadd' + ' - 00 Map Preparation', 624),
+        ('Finding Gadd - 01 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(16363.0, 15909.0), 8598273)),
+        ('Finding Gadd - 02 Travel', lambda: BT.Travel(target_map_id=638)),
+        ('Finding Gadd - 03 Aggressive', lambda: _aggressive()),
+        ('Finding Gadd - 04 Move', lambda: BT.Move(Vec2f(-8755.0, -23240.0))),
+        ('Finding Gadd - 05 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-8295.0, -23572.0), 8598276)),
+        *_planner_vanquish_point_steps('Finding Gadd - 06 Vanquish Route 01', [(-8755.0, -23240.0), (-9888.17, -22106.7)]),
+        ('Finding Gadd - 07 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-9690.0, -19524.0), target_map_id=558)),
+        *_planner_vanquish_point_steps('Finding Gadd - 08 Vanquish Route 02', [(-4466.15, -21025.91), (-6967.77, -19810.06), (11669.0, -23829.0)]),
+        ('Finding Gadd - 09 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(11881.0, -23802.0), 8598276)),
+        *_planner_vanquish_point_steps('Finding Gadd - 10 Vanquish Route 03', [(8017.92, -20124.24), (11184.85, -14188.88)]),
+        ('Finding Gadd - 11 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Finding Gadd - 12 Wait', lambda: BT.Wait(5000)),
+        ('Finding Gadd - 13 Move', lambda: BT.Move(Vec2f(-5740.47, -13723.29))),
+        ('Finding Gadd - 14 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Finding Gadd - 15 Wait', lambda: BT.Wait(5000)),
+        ('Finding Gadd - 16 Move', lambda: BT.Move(Vec2f(2417.11, -25444.55))),
+        ('Finding Gadd - 17 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Finding Gadd - 18 Wait', lambda: BT.Wait(5000)),
+        ('Finding Gadd - 19 Move', lambda: BT.Move(Vec2f(11758.78, -24063.51))),
+        ('Finding Gadd - 20 Wait', lambda: BT.Wait(20000)),
+        *_planner_vanquish_point_steps('Finding Gadd - 21 Vanquish Route 04', [Vec2f(12236.58, -24474.01), Vec2f(11675.35, -23909.45)]),
+        ('Finding Gadd - 22 Auto Dialog', lambda: BT.AutoDialog(8598276)),
+        ('Finding Gadd - 23 Wait', lambda: BT.Wait(10000)),
+        ('Finding Gadd - 24 Move', lambda: BT.Move(Vec2f(11795.0, -24125.0))),
+        ('Finding Gadd - 25 Auto Dialog', lambda: BT.AutoDialog(8598279)),
+    ]
 
 
-def FindingTheBloodstone() -> BehaviorTree:
-    return BT.Sequence(
-        name="Finding the Bloodstone",
-        map_id_or_name=638,
-        children=[
-            _aggressive(),
-            BT.Move(Vec2f(-9888.17, -22106.70)),
-            BT.MoveAndExitMap(Vec2f(-9690.0, -19524.0), target_map_id=558),
-            BT.VanquishNode([(-6967.77, -19810.06), (11669.0, -23829.0)]),
-            BT.MoveAndDialog(Vec2f(11795.0, -24125.0), 0x833307),
-            BT.AutoDialog(0x84),
-            BT.WaitForMapLoad(map_id=661),
-            BT.VanquishNode([
-                (12437.0, 16557.0),
-                (12588.0, 14755.0),
-                (15387.0, 6941.0),
-            ]),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.Wait(10_000),
-            BT.VanquishNode([
-                (16165.77, 10441.95),
-                (17149.38, 13434.60),
-                (18529.0, 15977.0),
-                (18170.14, 15771.52),
-            ]),
-            BT.Wait(30_000),
-            BT.MoveAndExitMap(Vec2f(19212.0, 16155.0), target_map_id=662),
-            BT.VanquishNode([
-                (-611.51, 5115.83),
-                (3574.70, 3567.62),
-                (4827.10, 1968.97),
-                (11548.76, -2795.90),
-                (14596.0, -7708.0),
-            ]),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.Wait(10_000),
-            BT.Move(Vec2f(16743.0, -10170.0)),
-            BT.Wait(30_000),
-            BT.MoveAndExitMap(Vec2f(18450.0, -10273.0), target_map_id=663),
-            BT.VanquishNode([
-                (-7249.0, -16397.0),
-                (-10466.0, -16166.0),
-                (-15377.0, -16565.0),
-            ]),
-            BT.WaitForMapLoad(map_id=638),
-        ],
-    )
+def _steps_FindingTheBloodstone() -> list[PlannerStep]:
+    return [
+        _planner_map_prep_step('Finding The Bloodstone' + ' - 00 Map Preparation', 638),
+        ('Finding The Bloodstone - 01 Aggressive', lambda: _aggressive()),
+        ('Finding The Bloodstone - 02 Move', lambda: BT.Move(Vec2f(-9888.17, -22106.7))),
+        ('Finding The Bloodstone - 03 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-9690.0, -19524.0), target_map_id=558)),
+        *_planner_vanquish_point_steps('Finding The Bloodstone - 04 Vanquish Route 01', [(-6967.77, -19810.06), (11669.0, -23829.0)]),
+        ('Finding The Bloodstone - 05 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(11795.0, -24125.0), 8598279)),
+        ('Finding The Bloodstone - 06 Auto Dialog', lambda: BT.AutoDialog(132)),
+        ('Finding The Bloodstone - 07 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=661)),
+        *_planner_vanquish_point_steps('Finding The Bloodstone - 08 Vanquish Route 02', [(12437.0, 16557.0), (12588.0, 14755.0), (15387.0, 6941.0)]),
+        ('Finding The Bloodstone - 09 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Finding The Bloodstone - 10 Wait', lambda: BT.Wait(10000)),
+        *_planner_vanquish_point_steps('Finding The Bloodstone - 11 Vanquish Route 03', [(16165.77, 10441.95), (17149.38, 13434.6), (18529.0, 15977.0), (18170.14, 15771.52)]),
+        ('Finding The Bloodstone - 12 Wait', lambda: BT.Wait(30000)),
+        ('Finding The Bloodstone - 13 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(19212.0, 16155.0), target_map_id=662)),
+        *_planner_vanquish_point_steps('Finding The Bloodstone - 14 Vanquish Route 04', [(-611.51, 5115.83), (3574.7, 3567.62), (4827.1, 1968.97), (11548.76, -2795.9), (14596.0, -7708.0)]),
+        ('Finding The Bloodstone - 15 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Finding The Bloodstone - 16 Wait', lambda: BT.Wait(10000)),
+        ('Finding The Bloodstone - 17 Move', lambda: BT.Move(Vec2f(16743.0, -10170.0))),
+        ('Finding The Bloodstone - 18 Wait', lambda: BT.Wait(30000)),
+        ('Finding The Bloodstone - 19 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(18450.0, -10273.0), target_map_id=663)),
+        *_planner_vanquish_point_steps('Finding The Bloodstone - 20 Vanquish Route 05', [(-7249.0, -16397.0), (-10466.0, -16166.0), (-15377.0, -16565.0)]),
+        ('Finding The Bloodstone - 21 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=638)),
+    ]
 
 
 def LabSpace() -> BehaviorTree:
@@ -2044,8 +1740,8 @@ def LabSpace() -> BehaviorTree:
                 (-17671.37, 14695.37),
             ]),
             BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.AddModelToLootWhitelist(24628),
-            BT.LootItems(distance=Range.Spirit.value),
+            BT.AddModelToLootWhitelist(25413),
+
             BT.HandleAutoQuest(
                 pos=Vec2f(-17597.36, 15027.91),
                 buttons=[],
@@ -2053,7 +1749,7 @@ def LabSpace() -> BehaviorTree:
                 require_quest_marker=True,
                 log=True,
             ),
-            BT.LootItems(distance=Range.Spirit.value),
+
             BT.Move(Vec2f(-15851.13, 14795.02)),
             BT.AutoDialog(0x832C07),
             BT.AutoDialog(0x84),
@@ -2522,6 +2218,7 @@ def EnsureOliasUnlocked(log: bool = True) -> BehaviorTree:
         ],
     )
 
+
 # ---------------------------------------------------------------------------
 # Planner and entry point
 # ---------------------------------------------------------------------------
@@ -2529,32 +2226,30 @@ def EnsureOliasUnlocked(log: bool = True) -> BehaviorTree:
 
 def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
     return [
-        ("Initialize Bot", InitializeBot),
-        ("UnlockEyeOfTheNorthPool",UnlockEyeOfTheNorthPool),
-        ("Obtain Story Book", ObtainStoryBook),
-        ("Ensure MOX Unlocked", EnsureMOXUnlocked),
-        ("Ensure Olias Unlocked", EnsureOliasUnlocked),
-        ("Travel To Gunnar's Hold", TravelToGunnarsHold),
-        ("Talk To Gunnar", Unlock_Xandra),
-        ("Optional Xandra Tournament", CompleteOptionalXandraTournament),
-        ("PrepareXandraTournament",PrepareXandraTournament),
-        ("Fight Sequence",Fight_Sequence),
-        ("Travel To Sifhalla", TravelToSifhalla),
-        ("Tracking The Nornbear", CompleteTrackingTheNornbear),
-        ("Curse Of The Nornbear", CompleteCurseOfTheNornbear),
-        ("Blood Washes Blood", BloodWashesBlood),
-        ("Travel To Olafstead", TravelToOlafstead),
-        ("Shrine Of The Raven Spirit", CompleteShrineOfRavenSpirit),
-        ("A Gate Too Far", CompleteAGateTooFar),
-        ("Advance To Longeye's Edge", AdvanceToLongeyeEdge),
-        ("Search For The Ebon Vanguard", SearchForTheEbonVanguard),
-        ("Warband Of Brothers", WarbandOfBrothers),
-        ("What Must Be Done", WhatMustBeDone),
-        ("Assault On The Stronghold", AssaultOnTheStrongHold),
-        ("Finding Gadd", FindingGadd),
-        ("Finding The Bloodstone", FindingTheBloodstone)
-        #("Lab Space", LabSpace),
-        #("The Elusive Golemancer", TheElusiveGolemancer),
+        *_steps_InitializeBot(),
+        *_steps_UnlockEyeOfTheNorthPool(),
+        *_steps_ObtainStoryBook(),
+        ('Ensure MOX Unlocked', EnsureMOXUnlocked),
+        ('Ensure Olias Unlocked', EnsureOliasUnlocked),
+        *_steps_TravelToGunnarsHold(),
+        *_steps_Unlock_Xandra(),
+        ('Optional Xandra Tournament', CompleteOptionalXandraTournament),
+        *_steps_PrepareXandraTournament(),
+        ('Fight Sequence', Fight_Sequence),
+        *_steps_TravelToSifhalla(),
+        *_steps_CompleteTrackingTheNornbear(),
+        *_steps_CompleteCurseOfTheNornbear(),
+        *_steps_BloodWashesBlood(),
+        *_steps_TravelToOlafstead(),
+        *_steps_CompleteShrineOfRavenSpirit(),
+        *_steps_CompleteAGateTooFar(),
+        *_steps_AdvanceToLongeyeEdge(),
+        *_steps_SearchForTheEbonVanguard(),
+        *_steps_WarbandOfBrothers(),
+        *_steps_WhatMustBeDone(),
+        *_steps_AssaultOnTheStrongHold(),
+        *_steps_FindingGadd(),
+        *_steps_FindingTheBloodstone(),
     ]
 
 
@@ -2597,7 +2292,7 @@ def main() -> None:
     tree.tick()
     tree.UI.draw_window(
         icon_path=ICON_PATH,
-        main_child_dimensions=(500, 350),
+        main_child_dimensions=(550, 350),
     )
 
 
