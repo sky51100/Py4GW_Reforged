@@ -3976,8 +3976,10 @@ def Level1_EnterLevel2() -> BehaviorTree:
     return BT.Sequence(
         name=name,
         children=[
-            _map_guarded_point(name=name, map_id=SOO_LEVEL_1, child=BT.Sequence(name=f'{name} And Load Level 2', children=[BT.VanquishNode([L1_PATH_AFTER_DOOR[-1]], name=name, flag_heroes_to_waypoint=False, move_tolerance=500, log=False), BT.WaitForMapLoad(map_id=SOO_LEVEL_2, timeout_ms=60000)]), skip_if_in_maps=(SOO_LEVEL_2,)),
-            BT.WaitUntilOnExplorable(timeout_ms=30_000),
+            _map_guarded_point(name=name, map_id=SOO_LEVEL_1, child=BT.Sequence(name=f'{name} And Load Level 2',
+            children=[
+            BT.MoveAndExitMap(Vec2f(20400.5, 1300.0), target_map_id=SOO_LEVEL_2, log=False),
+            BT.WaitForMapLoad(map_id=SOO_LEVEL_2, timeout_ms=60000)]), skip_if_in_maps=(SOO_LEVEL_2,)),
             _mark_l2_start_node(),
             BT.Wait(2_000),
         ],
