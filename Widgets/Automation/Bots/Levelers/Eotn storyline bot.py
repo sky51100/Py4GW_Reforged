@@ -339,9 +339,62 @@ def _planner_map_prep_step(
     )
 
 
+class _TickSidecarWhileMainRunningNode(BehaviorTree.Node):
+    """Tick a side behavior while the main behavior is RUNNING.
+
+    The main child owns SUCCESS/FAILURE.  This is intentionally different from
+    ParallelNode: when Vanquish finishes, the side behavior cannot keep the
+    wrapper RUNNING and accidentally cause the completed Vanquish to restart.
+    """
+
+    def __init__(
+        self,
+        main: BehaviorTree | BehaviorTree.Node,
+        sidecar: BehaviorTree | BehaviorTree.Node,
+        *,
+        name: str,
+    ) -> None:
+        super().__init__(
+            name=name,
+            node_type="TickSidecarWhileMainRunning",
+            node_category="decorator",
+        )
+        self.main = self._coerce_node(main)
+        self.sidecar = self._coerce_node(sidecar)
+
+    def get_children(self) -> list[BehaviorTree.Node]:
+        return [self.main, self.sidecar]
+
+    def reset(self) -> None:
+        super().reset()
+        self.main.reset()
+        self.sidecar.reset()
+
+    def _tick_impl(self) -> BehaviorTree.NodeState:
+        if self.blackboard is not None:
+            self.main.blackboard = self.blackboard
+            self.sidecar.blackboard = self.blackboard
+
+        main_state = self.main.tick()
+
+        if main_state != BehaviorTree.NodeState.RUNNING:
+            self.sidecar.reset()
+            return main_state
+
+        sidecar_state = self.sidecar.tick()
+        if sidecar_state != BehaviorTree.NodeState.RUNNING:
+            # _use_bear_skill_4() is a one-shot selector. Reset it after each
+            # completed attempt so it is tried again on the next Vanquish tick.
+            self.sidecar.reset()
+
+        return BehaviorTree.NodeState.RUNNING
+
+
 def _planner_vanquish_point_steps(
     name: str,
     points: Sequence[PathPoint],
+    *,
+    during_step_factory: Callable[[], BehaviorTree] | None = None,
     **kwargs,
 ) -> list[PlannerStep]:
     """Expose every VanquishNode waypoint as an independent named planner step.
@@ -362,10 +415,23 @@ def _planner_vanquish_point_steps(
         def _factory(
             bound_point=point,
             bound_kwargs=bound_kwargs,
+            bound_step_name=step_name,
+            bound_during_step_factory=during_step_factory,
         ) -> BehaviorTree:
-            return BT.VanquishNode(
+            vanquish = BT.VanquishNode(
                 [bound_point],
                 **bound_kwargs,
+            )
+
+            if bound_during_step_factory is None:
+                return vanquish
+
+            return BehaviorTree(
+                _TickSidecarWhileMainRunningNode(
+                    main=vanquish,
+                    sidecar=bound_during_step_factory(),
+                    name=f"{bound_step_name} - Maintain Side Behavior",
+                )
             )
 
         result.append((step_name, _factory))
@@ -1355,9 +1421,9 @@ def _steps_CompleteCurseOfTheNornbear() -> list[PlannerStep]:
         ('Curse Of The Nornbear - 14 Wait', lambda: BT.Wait(2000)),
         ('Curse Of The Nornbear - 15 Move', lambda: BT.Move(Vec2f(14353.0, 23905.0))),
         ('Curse Of The Nornbear - 16 Pacifist', lambda: _pacifist()),
-        ('Curse Of The Nornbear - 17 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14353.0, 23905.0), 0x838904)),
-        ('Curse Of The Nornbear - 18 Send Dialog', lambda: BT.SendDialog(0x89)),
-        ('Curse Of The Nornbear - 19 Send Dialog', lambda: BT.SendDialog(0x8A)),
+        ('Curse Of The Nornbear - 17 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14353.0, 23905.0), 8620292)),
+        ('Curse Of The Nornbear - 18 Auto Dialog', lambda: BT.AutoDialog(137)),
+        ('Curse Of The Nornbear - 19 Auto Dialog', lambda: BT.AutoDialog(138)),
     ]
 
 
@@ -1384,13 +1450,19 @@ def _steps_BloodWashesBlood() -> list[PlannerStep]:
         ('Blood Washes Blood - 18 Move And Interact', lambda: BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True)),
         ('Blood Washes Blood - 19 Move And Interact', lambda: BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True)),
         ('Blood Washes Blood - 20 Select And Equip Reward Skill', lambda: _select_and_equip_reward_skill(8)),
-        ('Blood Washes Blood - 21 Use Bear Skill 4', lambda: _use_bear_skill_4()),
-        ('Blood Washes Blood - 22 Aggressive', lambda: _aggressive()),
-        *_planner_vanquish_point_steps('Blood Washes Blood - 23 Vanquish Route 05', [(2360.0, 13448.0), (9167.0, 11874.0), (11309.0, 11588.0), (11886.0, 10714.0), (13453.0, 8619.0), (15097.0, 5363.0)]),
-        ('Blood Washes Blood - 24 Use Bear Skill 4', lambda: _use_bear_skill_4()),
-        *_planner_vanquish_point_steps('Blood Washes Blood - 25 Vanquish Route 06', [(16024.0, 3473.0), (16766.0, 5052.0), (18332.0, 3893.0), (17662.0, 3049.0), (17960.0, 2005.0), (16668.0, 1509.0), (17388.0, -205.0), (15749.0, 167.0), (15724.0, -2018.0)]),
-        ('Blood Washes Blood - 26 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
-        ('Blood Washes Blood - 27 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name="Gunnar's Hold")),
+        ('Blood Washes Blood - 21 Aggressive', lambda: _aggressive()),
+        *_planner_vanquish_point_steps(
+            'Blood Washes Blood - 22 Vanquish Route 05',
+            [(2360.0, 13448.0), (9167.0, 11874.0), (11309.0, 11588.0), (11886.0, 10714.0), (13453.0, 8619.0), (15097.0, 5363.0)],
+            during_step_factory=_use_bear_skill_4,
+        ),
+        *_planner_vanquish_point_steps(
+            'Blood Washes Blood - 23 Vanquish Route 06',
+            [(16024.0, 3473.0), (16766.0, 5052.0), (18332.0, 3893.0), (17662.0, 3049.0), (17960.0, 2005.0), (16668.0, 1509.0), (17388.0, -205.0), (15749.0, 167.0), (15724.0, -2018.0)],
+            during_step_factory=_use_bear_skill_4,
+        ),
+        ('Blood Washes Blood - 24 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Blood Washes Blood - 25 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name="Gunnar's Hold")),
     ]
 
 
@@ -1554,7 +1626,7 @@ def _steps_WhatMustBeDone() -> list[PlannerStep]:
         ('What Must Be Done - 05 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
         ('What Must Be Done - 06 Travel', lambda: BT.Travel(target_map_id=648)),
         ('What Must Be Done - 07 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-14185.0, 17040.0), 132)),
-        ('What Must Be Done - 08 Wait For Map Load', lambda: BT.Wait(4000)),
+        ('What Must Be Done - 08 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=674)),
         ('What Must Be Done - 09 Move', lambda: BT.Move(Vec2f(-16946.0, 17319.0))),
         ('What Must Be Done - 10 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=648)),
         ('What Must Be Done - 11 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-14185.0, 17040.0), 8621319)),
@@ -1590,7 +1662,17 @@ def _steps_FindingGadd() -> list[PlannerStep]:
         *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 1',[(-3638,-4352),(-8976,-2448),(-11746,-6048),(-17007,-6187),(-20768,-9927),(-26166,-13391),],),
         ('Finding Gadd - Unlock Gadds Camp 1', lambda: BT.WaitForMapLoad(map_id=566)),
         *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 2', [(18151, 10252), (12551, 4510), (3069, -5735), (-10915, 3126), (-19310, 6501), (-23267, 7881)]),
-        ('Finding Gadd - Unlock Gadds Camp 2', lambda: BT.WaitForMapLoad(map_id=566)),
+        ('Finding Gadd - Unlock Gadds Camp 2', lambda: BT.WaitForMapLoad(map_id=639)),
+        ('Finding Gadd - Unlock Gadds Camp 2', lambda: BT.MoveAndExitMap(Vec2f(-26186,10582), target_map_id=604)),
+        *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 2',[(-14003,14202),(-16378,11031),(-17869,7983),(-16067,5680),(-16727,2566),(-17584,-472),(-18026,-11361),(-19478,-11785),]),
+        ('Finding Gadd - Unlock Gadds Camp 3', lambda: BT.MoveAndExitMap(Vec2f(-26186,10582), target_map_id=624)),
+        ('Finding Gadd - Unlock Gadds Camp 4', lambda: BT.MoveAndExitMap(Vec2f(15360,12015), target_map_id=485)),
+        *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 4',[(13856,11004),(6067,-95),(-4525,-4292),(-5923,-7830),(-2872,-11614),(-6080,-13317),(-12623,-14600),(-17826,-14505),]),
+        ('Finding Gadd - Unlock Gadds Camp 5', lambda: BT.MoveAndExitMap(Vec2f(-20751,-20094), target_map_id=572)),
+        *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 5',[(16143,13302),(11572,13967),(4551,15089),(-1219,14737),(-6124,15859),(-11606,14416),(-17312,12108),(-20647,9415),(-23916,9351),(-25863,10650),]),
+
+
+        ('Finding Gadd - Unlock Gadds Camp 5', lambda: BT.MoveAndExitMap(Vec2f(15360,12015), target_map_id=485)),
         ('Finding Gadd - 01 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(16363.0, 15909.0), 8598273)),
         ('Finding Gadd - 02 Travel', lambda: BT.Travel(target_map_id=638)),
         ('Finding Gadd - 03 Aggressive', lambda: _aggressive()),
