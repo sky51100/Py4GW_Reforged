@@ -1355,9 +1355,9 @@ def _steps_CompleteCurseOfTheNornbear() -> list[PlannerStep]:
         ('Curse Of The Nornbear - 14 Wait', lambda: BT.Wait(2000)),
         ('Curse Of The Nornbear - 15 Move', lambda: BT.Move(Vec2f(14353.0, 23905.0))),
         ('Curse Of The Nornbear - 16 Pacifist', lambda: _pacifist()),
-        ('Curse Of The Nornbear - 17 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14353.0, 23905.0), 8620292)),
-        ('Curse Of The Nornbear - 18 Auto Dialog', lambda: BT.AutoDialog(137)),
-        ('Curse Of The Nornbear - 19 Auto Dialog', lambda: BT.AutoDialog(138)),
+        ('Curse Of The Nornbear - 17 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14353.0, 23905.0), 0x838904)),
+        ('Curse Of The Nornbear - 18 Send Dialog', lambda: BT.SendDialog(0x89)),
+        ('Curse Of The Nornbear - 19 Send Dialog', lambda: BT.SendDialog(0x8A)),
     ]
 
 
@@ -1554,7 +1554,7 @@ def _steps_WhatMustBeDone() -> list[PlannerStep]:
         ('What Must Be Done - 05 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
         ('What Must Be Done - 06 Travel', lambda: BT.Travel(target_map_id=648)),
         ('What Must Be Done - 07 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-14185.0, 17040.0), 132)),
-        ('What Must Be Done - 08 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=674)),
+        ('What Must Be Done - 08 Wait For Map Load', lambda: BT.Wait(4000)),
         ('What Must Be Done - 09 Move', lambda: BT.Move(Vec2f(-16946.0, 17319.0))),
         ('What Must Be Done - 10 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=648)),
         ('What Must Be Done - 11 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-14185.0, 17040.0), 8621319)),
@@ -1579,84 +1579,6 @@ def _steps_AssaultOnTheStrongHold() -> list[PlannerStep]:
     ]
 
 
-def UnlockBattleHonorStandSkill() -> BehaviorTree:
-    """Optional legacy side quest retained as an addable BT step."""
-    return BT.Sequence(
-        name="Unlock Battle Honor Stand Skill",
-        children=[
-            BT.MoveAndDialog(Vec2f(-21141.81, 12378.68), 0x836001),
-            BT.VanquishNode([
-                (-21593.0, 12517.0),
-                (-20064.0, 11212.0),
-                (-18659.0, 9768.0),
-                (-17352.0, 8246.0),
-                (-16126.0, 6640.0),
-                (-14663.0, 5256.0),
-                (-13347.0, 3732.0),
-                (-11993.0, 2247.0),
-                (-11088.0, 402.0),
-                (-9414.0, -699.0),
-                (-7532.0, 132.0),
-                (-5576.0, -322.0),
-                (-3621.0, -814.0),
-                (-1677.0, -1304.0),
-                (177.0, -2140.0),
-                (1759.0, -3373.0),
-                (3730.0, -3747.0),
-                (5650.0, -4349.0),
-                (7421.0, -5292.0),
-                (8547.0, -6957.0),
-                (10587.0, -6733.0),
-                (12591.0, -6583.0),
-                (14521.0, -7151.0),
-                (16095.0, -8448.0),
-                (17681.0, -9721.0),
-                (19282.0, -11005.0),
-                (20765.0, -12412.0),
-                (22538.0, -13411.0),
-                (23410.0, -13901.0),
-            ], clear_area_radius=Range.Earshot.value),
-            BT.WaitForMapLoad(map_id=651),
-            BT.VanquishNode([
-                (-17861.0, 16317.0),
-                (-16404.0, 14900.0),
-                (-16459.0, 12851.0),
-                (-17542.0, 11132.0),
-                (-17939.0, 9166.0),
-                (-16308.0, 7932.0),
-                (-15150.0, 6294.0),
-                (-14010.0, 4577.0),
-                (-13622.0, 2552.0),
-                (-13094.0, 598.0),
-                (-11367.0, -490.0),
-                (-9393.0, -831.0),
-                (-7616.0, -1762.0),
-                (-5677.0, -2456.0),
-                (-4372.0, -4015.0),
-                (-3143.0, -5620.0),
-                (-2954.0, -7657.0),
-                (-2423.0, -9586.0),
-                (-593.0, -10426.0),
-                (1413.0, -10033.0),
-                (3432.0, -9958.0),
-                (4945.0, -8637.0),
-                (6962.0, -8362.0),
-                (8991.0, -8392.0),
-                (4471.0, -7294.0),
-                (6525.0, -7403.0),
-                (8415.0, -8062.0),
-                (10082.0, -9228.0),
-                (11715.0, -8045.0),
-            ], clear_area_radius=Range.Earshot.value),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.Travel(target_map_id=650),
-            BT.Move(Vec2f(-21902.0, 12807.0)),
-            BT.WaitForMapLoad(map_id=649),
-            BT.MoveAndDialog(Vec2f(-21141.81, 12378.68), 0x836007),
-        ],
-    )
-
-
 # ---------------------------------------------------------------------------
 # Asuran storyline
 # ---------------------------------------------------------------------------
@@ -1664,7 +1586,11 @@ def UnlockBattleHonorStandSkill() -> BehaviorTree:
 
 def _steps_FindingGadd() -> list[PlannerStep]:
     return [
-        _planner_map_prep_step('Finding Gadd' + ' - 00 Map Preparation', 624),
+        _planner_map_prep_step('Finding Gadd' + ' - 00 Map Preparation', 645),
+        *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 1',[(-3638,-4352),(-8976,-2448),(-11746,-6048),(-17007,-6187),(-20768,-9927),(-26166,-13391),],),
+        ('Finding Gadd - Unlock Gadds Camp 1', lambda: BT.WaitForMapLoad(map_id=566)),
+        *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 2', [(18151, 10252), (12551, 4510), (3069, -5735), (-10915, 3126), (-19310, 6501), (-23267, 7881)]),
+        ('Finding Gadd - Unlock Gadds Camp 2', lambda: BT.WaitForMapLoad(map_id=566)),
         ('Finding Gadd - 01 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(16363.0, 15909.0), 8598273)),
         ('Finding Gadd - 02 Travel', lambda: BT.Travel(target_map_id=638)),
         ('Finding Gadd - 03 Aggressive', lambda: _aggressive()),
