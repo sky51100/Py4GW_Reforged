@@ -1610,7 +1610,8 @@ def _steps_BloodWashesBlood() -> list[PlannerStep]:
         ('Blood Washes Blood - 10 Move', lambda: BT.Move(Vec2f(9221.0, -21462.0))),
         ('Blood Washes Blood - 11 Pacifist', lambda: _pacifist()),
         ('Blood Washes Blood - 12 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(9504.0, -21390.0), 8593415)),
-        ('Blood Washes Blood - 13 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(9688.0, -21012.0), 132)),
+        ('Blood Washes Blood - 13 Move And Dialog', lambda: BT.Move(Vec2f(9285,-20889))),
+        ('Blood Washes Blood - 13bis Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(9688.0, -21012.0), 132)),
         ('Blood Washes Blood - 14 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(16045.0, -20642.0), target_map_name='Blood Washes Blood')),
         ('Blood Washes Blood - 15 Aggressive', lambda: _aggressive()),
         *_planner_vanquish_point_steps('Blood Washes Blood - 16 Vanquish Route 04', [(419.0, -3059.0), (-2083.0, 1061.0), (1742.0, 4963.0), (228.0, 10003.0), (3266.0, 12358.0), (3299.0, 13489.0), (365.0, 13684.0), (2752.0, 13410.0), (2258.0, 14533.0), (1446.0, 15008.0), (127.0, 14203.0), (13.0, 13430.0), (795.0, 13120.0), (1519.0, 13251.0), (940.0, 14144.0)]),
@@ -1656,7 +1657,7 @@ def _steps_CompleteShrineOfRavenSpirit() -> list[PlannerStep]:
         ('Shrine Of The Raven Spirit - 04 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-1392.0, 1205.0), target_map_id=553)),
         *_planner_vanquish_point_steps('Shrine Of The Raven Spirit - 05 Vanquish Route 01', [(-2252.0, 831.0), (-2887.0, -2894.0), (-3211.0, -3843.0), (-3940.0, -3155.0), (-4941.0, 728.0), (-5310.0, 3693.0), (-8984.0, 4861.0), (-12866.0, 5695.0), (-13612.0, 6369.0), (-14355.0, 7040.0), (-14909.0, 7880.0), (-15520.0, 8680.0)]),
         ('Shrine Of The Raven Spirit - 06 Target Olaf And Dialog', lambda: BT.TargetAgentByModelIDAndSendDialog(OLAF_OLAFSON_MODEL_ID, 133, log=True)),
-        ('Shrine Of The Raven Spirit - 07 Wait For Clear Area', lambda: BT.WaitForClearEnemiesInArea(-15696.0, 8732.0, radius=Range.Spirit.value, stable_clear_ms=180000)),
+        ('Shrine Of The Raven Spirit - 07 Wait For Clear Area', lambda: BT.WaitForClearEnemiesInArea(-15696.0, 8732.0, radius=Range.Longbow.value, stable_clear_ms=60000, log=True)),
         ('Shrine Of The Raven Spirit - 08 Travel', lambda: BT.Travel(target_map_name='Olafstead')),
         ('Shrine Of The Raven Spirit - 09 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(132.0, -684.0), 8596999)),
         ('Shrine Of The Raven Spirit - 10 Wait', lambda: BT.Wait(2000)),
@@ -2410,10 +2411,6 @@ def ensure_botting_tree() -> BottingTree:
                 looting_enabled=True,
                 resurrection_scroll=True,
                 auto_inventory_handler_enabled=True,
-                consumable_upkeeps=tuple(
-                    int(model_id)
-                    for model_id in CONSUMABLE_UPKEEPS
-                ),
                 heroai_state_logging=False,
                 enable_party_wipe_recovery=True,
             ),
