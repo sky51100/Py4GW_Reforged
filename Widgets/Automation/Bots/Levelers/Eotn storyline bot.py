@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+
+import PySkillbar
 from Py4GWCoreLib.FrameTree import Frame
 import PySystem
 
@@ -43,6 +45,7 @@ ICON_PATH = os.path.join(
 )
 MAP_TIMEOUT_MS = 190_000
 KAINENG_CENTER_MAP_ID = 194
+OLAF_OLAFSON_MODEL_ID = 6403
 
 botting_tree: BottingTree | None = None
 initialized = False
@@ -87,7 +90,7 @@ def _prepare_standard_party_olias() -> BehaviorTree:
         "OwUTMwmCZaj4upB8ioLKDoHghAA",
         "OQhkAsC8gFKCNM95gpLDDRGcxA",
         "OgejkqrMLOfb2Luj7Ku72jbzLA",
-        "OAhjUwGpYOyhqAVANUVxYezLGA",
+        "OAhjUwGZYOyhqAVANUVncSzLGA",
     ]
     return BT.Sequence(
         name="Prepare Standard EotN Party",
@@ -119,7 +122,7 @@ def _prepare_standard_party_xandra() -> BehaviorTree:
             "OwUTMwmCZaj4upB8ioLKDoHghAA",
             "OQhkAsC8gFKCNM95gpLDDRGcxA",
             "OgejkqrMLOfb2Luj7Ku72jbzLA",
-            "OAhjUwGpYOyhqAVANUVxYezLGA",
+            "OAhjUwGZYOyhqAVANUVncSzLGA",
             "OAOjAyhDJPYTnp17xFOhmtkLGA"
         ]
     return BT.Sequence(
@@ -196,16 +199,137 @@ def _prepare_standard_party2() -> BehaviorTree:
         ],
     )
 
-def _use_bear_skill_4() -> BehaviorTree:
+BLOOD_WASHES_BLOOD_BEAR_FORM_EFFECT_ID = 228
+BLOOD_WASHES_BLOOD_URSAN_FORCE_SKILL_ID = 2396
+
+
+def _maintain_blood_washes_blood_bear_form() -> BehaviorTree:
+    """Use the temporary bear transformation when available without blocking combat.
+
+    Normal skillbar:
+      - If Ursan Aura is present and ready, cast it.
+      - Otherwise do nothing and let HeroAI use the normal build.
+
+    Bear skillbar:
+      - While bear form effect 228 is active, use mission Ursan Force (2396)
+        whenever it is present/ready and its own effect is not already active.
+      - Never cast an arbitrary normal-build slot 4.
+    """
+
+    def _has_bear_form() -> BehaviorTree.NodeState:
+        player_id = int(Player.GetAgentID() or 0)
+        if player_id <= 0:
+            return BehaviorTree.NodeState.FAILURE
+        return (
+            BehaviorTree.NodeState.SUCCESS
+            if GLOBAL_CACHE.Effects.HasEffect(
+                player_id,
+                BLOOD_WASHES_BLOOD_BEAR_FORM_EFFECT_ID,
+            )
+            else BehaviorTree.NodeState.FAILURE
+        )
+
+    def _does_not_have_bear_form() -> BehaviorTree.NodeState:
+        return (
+            BehaviorTree.NodeState.FAILURE
+            if _has_bear_form() == BehaviorTree.NodeState.SUCCESS
+            else BehaviorTree.NodeState.SUCCESS
+        )
+
+    def _ursan_aura_is_in_skillbar() -> BehaviorTree.NodeState:
+        ursan_aura_id = int(GLOBAL_CACHE.Skill.GetID("Ursan_Aura") or 0)
+        if ursan_aura_id <= 0:
+            return BehaviorTree.NodeState.FAILURE
+
+        slot = int(GLOBAL_CACHE.SkillBar.GetSlotBySkillID(ursan_aura_id) or 0)
+        return (
+            BehaviorTree.NodeState.SUCCESS
+            if 1 <= slot <= 8
+            else BehaviorTree.NodeState.FAILURE
+        )
+
+    def _ursan_force_is_in_bear_bar_and_needed() -> BehaviorTree.NodeState:
+        player_id = int(Player.GetAgentID() or 0)
+        if player_id <= 0:
+            return BehaviorTree.NodeState.FAILURE
+
+        slot = int(
+            GLOBAL_CACHE.SkillBar.GetSlotBySkillID(
+                BLOOD_WASHES_BLOOD_URSAN_FORCE_SKILL_ID
+            ) or 0
+        )
+        if not 1 <= slot <= 8:
+            return BehaviorTree.NodeState.FAILURE
+
+        return (
+            BehaviorTree.NodeState.FAILURE
+            if GLOBAL_CACHE.Effects.HasEffect(
+                player_id,
+                BLOOD_WASHES_BLOOD_URSAN_FORCE_SKILL_ID,
+            )
+            else BehaviorTree.NodeState.SUCCESS
+        )
+
+    def _cast_ursan_aura() -> BehaviorTree:
+        ursan_aura_id = int(GLOBAL_CACHE.Skill.GetID("Ursan_Aura") or 0)
+        if ursan_aura_id <= 0:
+            return BT.Failer(name="Ursan Aura Is Not Available")
+
+        return RoutinesBT.Skills.CastSkillID(
+            skill_id=ursan_aura_id,
+            aftercast_delay=250,
+            log=True,
+        )
+
     return BT.Selector(
-        name="Use Bear Skill 4 If Ready",
+        name="Maintain Blood Washes Blood Bear Form",
         children=[
-            RoutinesBT.Skills.CastSkillSlot(
-                slot=4,
-                aftercast_delay=250,
-                log=True,
+            BT.Sequence(
+                name="Use Ursan Force While In Bear Form",
+                children=[
+                    BehaviorTree(
+                        BehaviorTree.ConditionNode(
+                            name="Check Bear Form Active",
+                            condition_fn=_has_bear_form,
+                        )
+                    ),
+                    BehaviorTree(
+                        BehaviorTree.ConditionNode(
+                            name="Check Mission Ursan Force Is Available",
+                            condition_fn=_ursan_force_is_in_bear_bar_and_needed,
+                        )
+                    ),
+                    RoutinesBT.Skills.CastSkillID(
+                        skill_id=BLOOD_WASHES_BLOOD_URSAN_FORCE_SKILL_ID,
+                        aftercast_delay=250,
+                        log=True,
+                    ),
+                ],
             ),
-            BT.Succeeder(name="Skip Bear Skill 4 If Unavailable"),
+            BT.Sequence(
+                name="Enter Bear Form When Ursan Aura Is Ready",
+                children=[
+                    BehaviorTree(
+                        BehaviorTree.ConditionNode(
+                            name="Check Bear Form Inactive",
+                            condition_fn=_does_not_have_bear_form,
+                        )
+                    ),
+                    BehaviorTree(
+                        BehaviorTree.ConditionNode(
+                            name="Check Ursan Aura Is In Skillbar",
+                            condition_fn=_ursan_aura_is_in_skillbar,
+                        )
+                    ),
+                    BT.Subtree(
+                        name="Cast Ursan Aura Transformation",
+                        subtree_fn=lambda _node: _cast_ursan_aura(),
+                    ),
+                ],
+            ),
+            BT.Succeeder(
+                name="Bear Transformation Unavailable - Continue Normal HeroAI Combat"
+            ),
         ],
     )
 
@@ -803,54 +927,98 @@ def _ritualist_secondary_unlocked(log: bool = True) -> BehaviorTree:
 
 
 def _activate_ritualist_secondary(log: bool = True) -> BehaviorTree:
-    """Activate Ritualist without visiting GToB when it is already unlocked."""
+    """Activate Ritualist as secondary profession when already unlocked."""
 
-    def _build(_node: BehaviorTree.Node) -> BehaviorTree:
+    ritualist_id = int(Profession.Ritualist.value)
+
+    def _change_secondary() -> BehaviorTree.NodeState:
         player_id = int(Player.GetAgentID() or 0)
+        if player_id <= 0:
+            return BehaviorTree.NodeState.FAILURE
+
         primary_id, secondary_id = Agent.GetProfessionIDs(player_id)
         primary_id = int(primary_id or 0)
         secondary_id = int(secondary_id or 0)
-        ritualist_id = int(Profession.Ritualist.value)
 
-        if primary_id == ritualist_id or secondary_id == ritualist_id:
-            return BT.Succeeder(name="Ritualist Profession Already Active")
+        # Ritualist primary: nothing to change.
+        if primary_id == ritualist_id:
+            return BehaviorTree.NodeState.SUCCESS
 
-        template = Utils.GenerateSkillbarTemplateFrom(
-            prof_primary=primary_id,
-            prof_secondary=ritualist_id,
-            attributes={},
-            skills=[0, 0, 0, 0, 0, 0, 0, 0],
+        # Ritualist already active as secondary.
+        if secondary_id == ritualist_id:
+            return BehaviorTree.NodeState.SUCCESS
+
+        changed = bool(
+            PySkillbar.change_second_profession(
+                ritualist_id,
+                0,  # 0 = player
+            )
         )
-        if not template:
-            return BT.Failer(name="Generate Ritualist Activation Template Failed")
 
-        def _verify_active() -> BehaviorTree.NodeState:
-            _, loaded_secondary_id = Agent.GetProfessionIDs(player_id)
-            return (
-                BehaviorTree.NodeState.SUCCESS
-                if int(loaded_secondary_id) == ritualist_id
-                else BehaviorTree.NodeState.FAILURE
+        if log:
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    "Requested Ritualist as secondary profession."
+                    if changed
+                    else "Failed to request Ritualist as secondary profession."
+                ),
+                log=True,
             )
 
-        return BT.Sequence(
-            name="Activate Ritualist Secondary",
-            children=[
-                BT.LoadSkillbar(template=template, log=log),
-                BT.Wait(1_000),
-                BehaviorTree(
-                    BehaviorTree.ConditionNode(
-                        name="Verify Ritualist Secondary Is Active",
-                        condition_fn=_verify_active,
-                    )
-                ),
-            ],
+        return (
+            BehaviorTree.NodeState.SUCCESS
+            if changed
+            else BehaviorTree.NodeState.FAILURE
         )
 
-    return BT.Subtree(
-        name="Activate Ritualist Secondary Subtree",
-        subtree_fn=_build,
-    )
+    def _verify_active() -> BehaviorTree.NodeState:
+        player_id = int(Player.GetAgentID() or 0)
+        if player_id <= 0:
+            return BehaviorTree.NodeState.FAILURE
 
+        primary_id, secondary_id = Agent.GetProfessionIDs(player_id)
+
+        active = bool(
+            int(primary_id or 0) == ritualist_id
+            or int(secondary_id or 0) == ritualist_id
+        )
+
+        if log:
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    "Ritualist profession is active."
+                    if active
+                    else "Ritualist profession activation verification failed."
+                ),
+                log=True,
+            )
+
+        return (
+            BehaviorTree.NodeState.SUCCESS
+            if active
+            else BehaviorTree.NodeState.FAILURE
+        )
+
+    return BT.Sequence(
+        name="Activate Ritualist Secondary",
+        children=[
+            BehaviorTree(
+                BehaviorTree.ActionNode(
+                    name="Change Secondary Profession To Ritualist",
+                    action_fn=_change_secondary,
+                    aftercast_ms=500,
+                )
+            ),
+            BehaviorTree(
+                BehaviorTree.ConditionNode(
+                    name="Verify Ritualist Secondary Is Active",
+                    condition_fn=_verify_active,
+                )
+            ),
+        ],
+    )
 
 def EnsureRitualistSecondaryUnlocked(
     *,
@@ -997,7 +1165,7 @@ def EnsureSignetOfSpirits(log: bool = True) -> BehaviorTree:
                     ),
                     BT.InteractTarget(log=log),
                     BT.Wait(1_000),
-                    BT.ExchangeCollectorItem(
+                    BT.CraftItem(
                         output_model_id=RITUALIST_ELITE_TOME_MODEL_ID,
                         trade_model_ids=[GOLD_ZAISHEN_COIN_MODEL_ID],
                         quantity_list=[1],
@@ -1328,8 +1496,8 @@ def _is_kaineng_center_unlocked(log: bool = True) -> BehaviorTree:
 
 def _steps_PrepareXandraTournament() -> list[PlannerStep]:
     return [
-        ('PrepareXandraTournament - 01 Prepare Norn Tournament Skills', lambda: UnlockNornTournamentSkills(log=log)),
-        ('PrepareXandraTournament - 02 Travel', lambda: BT.Travel(target_map_name=return_outpost_name, log=log)),
+        ('PrepareXandraTournament - 01 Prepare Norn Tournament Skills', lambda: UnlockNornTournamentSkills(log=True)),
+        ('PrepareXandraTournament - 02 Travel', lambda: BT.Travel(target_map_name="Gunnar's Hold", log=True)),
         ('PrepareXandraTournament - 03 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(17763.0, -11467.0), 8604161)),
     ]
 
@@ -1454,12 +1622,12 @@ def _steps_BloodWashesBlood() -> list[PlannerStep]:
         *_planner_vanquish_point_steps(
             'Blood Washes Blood - 22 Vanquish Route 05',
             [(2360.0, 13448.0), (9167.0, 11874.0), (11309.0, 11588.0), (11886.0, 10714.0), (13453.0, 8619.0), (15097.0, 5363.0)],
-            during_step_factory=_use_bear_skill_4,
+            during_step_factory=_maintain_blood_washes_blood_bear_form,
         ),
         *_planner_vanquish_point_steps(
             'Blood Washes Blood - 23 Vanquish Route 06',
             [(16024.0, 3473.0), (16766.0, 5052.0), (18332.0, 3893.0), (17662.0, 3049.0), (17960.0, 2005.0), (16668.0, 1509.0), (17388.0, -205.0), (15749.0, 167.0), (15724.0, -2018.0)],
-            during_step_factory=_use_bear_skill_4,
+            during_step_factory=_maintain_blood_washes_blood_bear_form,
         ),
         ('Blood Washes Blood - 24 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
         ('Blood Washes Blood - 25 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name="Gunnar's Hold")),
@@ -1487,7 +1655,7 @@ def _steps_CompleteShrineOfRavenSpirit() -> list[PlannerStep]:
         ('Shrine Of The Raven Spirit - 03 Aggressive', lambda: _aggressive()),
         ('Shrine Of The Raven Spirit - 04 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-1392.0, 1205.0), target_map_id=553)),
         *_planner_vanquish_point_steps('Shrine Of The Raven Spirit - 05 Vanquish Route 01', [(-2252.0, 831.0), (-2887.0, -2894.0), (-3211.0, -3843.0), (-3940.0, -3155.0), (-4941.0, 728.0), (-5310.0, 3693.0), (-8984.0, 4861.0), (-12866.0, 5695.0), (-13612.0, 6369.0), (-14355.0, 7040.0), (-14909.0, 7880.0), (-15520.0, 8680.0)]),
-        ('Shrine Of The Raven Spirit - 06 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-15696.0, 8732.0), 133)),
+        ('Shrine Of The Raven Spirit - 06 Target Olaf And Dialog', lambda: BT.TargetAgentByModelIDAndSendDialog(OLAF_OLAFSON_MODEL_ID, 133, log=True)),
         ('Shrine Of The Raven Spirit - 07 Wait For Clear Area', lambda: BT.WaitForClearEnemiesInArea(-15696.0, 8732.0, radius=Range.Spirit.value, stable_clear_ms=180000)),
         ('Shrine Of The Raven Spirit - 08 Travel', lambda: BT.Travel(target_map_name='Olafstead')),
         ('Shrine Of The Raven Spirit - 09 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(132.0, -684.0), 8596999)),
@@ -1662,54 +1830,44 @@ def _steps_FindingGadd() -> list[PlannerStep]:
         *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 1',[(-3638,-4352),(-8976,-2448),(-11746,-6048),(-17007,-6187),(-20768,-9927),(-26166,-13391),],),
         ('Finding Gadd - Unlock Gadds Camp 1', lambda: BT.WaitForMapLoad(map_id=566)),
         *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 2', [(18151, 10252), (12551, 4510), (3069, -5735), (-10915, 3126), (-19310, 6501), (-23267, 7881)]),
-        ('Finding Gadd - Unlock Gadds Camp 2', lambda: BT.WaitForMapLoad(map_id=639)),
-        ('Finding Gadd - Unlock Gadds Camp 2', lambda: BT.MoveAndExitMap(Vec2f(-26186,10582), target_map_id=604)),
-        *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 2',[(-14003,14202),(-16378,11031),(-17869,7983),(-16067,5680),(-16727,2566),(-17584,-472),(-18026,-11361),(-19478,-11785),]),
-        ('Finding Gadd - Unlock Gadds Camp 3', lambda: BT.MoveAndExitMap(Vec2f(-26186,10582), target_map_id=624)),
-        ('Finding Gadd - Unlock Gadds Camp 4', lambda: BT.MoveAndExitMap(Vec2f(15360,12015), target_map_id=485)),
-        *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 4',[(13856,11004),(6067,-95),(-4525,-4292),(-5923,-7830),(-2872,-11614),(-6080,-13317),(-12623,-14600),(-17826,-14505),]),
-        ('Finding Gadd - Unlock Gadds Camp 5', lambda: BT.MoveAndExitMap(Vec2f(-20751,-20094), target_map_id=572)),
-        *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 5',[(16143,13302),(11572,13967),(4551,15089),(-1219,14737),(-6124,15859),(-11606,14416),(-17312,12108),(-20647,9415),(-23916,9351),(-25863,10650),]),
+        ('Finding Gadd - Unlock Gadds Camp 3', lambda: BT.WaitForMapLoad(map_id=639)),
+        ('Finding Gadd - Unlock Gadds Camp 4', lambda: BT.MoveAndExitMap(Vec2f(-26186,10582), target_map_id=604)),
+        *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 5',[(-14003,14202),(-16378,11031),(-17869,7983),(-16067,5680),(-16727,2566),(-17584,-472),(-18026,-11361),(-19478,-11785),]),
+        ('Finding Gadd - Unlock Gadds Camp 6', lambda: BT.MoveAndExitMap(Vec2f(-26186,10582), target_map_id=624)),
+        ('Finding Gadd - Unlock Gadds Camp 7', lambda: BT.MoveAndDialog(Vec2f(16363, 15909), 0x833301,)),
+        *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 8', [(13455.43, 10678.0), (9850.0, 5025.0), (11207.11, 1872.32), (10452.02, 178.5), (10782.86, -3321.0), (8360.94, -6550.0), (10382.85, -12342.0), (10080.3, -13995.0),(10667.0, -16116.0), (10747.49, -17546.0), (11156.0, -17802.0)]),
+        ('Finding Gadd - Unlock Gadds Camp 8', lambda: BT.MoveAndExitMap(Vec2f(9240.07, -20260.95), target_map_id=581)),
 
+        *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 9', [(-10109,9330),(-1896,13284),(3117,15816),(5902,13035),(11314,13724),(16086,17089),(16926,13169),]),
+        ('Finding Gadd - Unlock Gadds Camp 10', lambda: BT.MoveAndExitMap(Vec2f(14354,11783), target_map_id=638)),
 
-        ('Finding Gadd - Unlock Gadds Camp 5', lambda: BT.MoveAndExitMap(Vec2f(15360,12015), target_map_id=485)),
-        ('Finding Gadd - 01 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(16363.0, 15909.0), 8598273)),
-        ('Finding Gadd - 02 Travel', lambda: BT.Travel(target_map_id=638)),
-        ('Finding Gadd - 03 Aggressive', lambda: _aggressive()),
-        ('Finding Gadd - 04 Move', lambda: BT.Move(Vec2f(-8755.0, -23240.0))),
-        ('Finding Gadd - 05 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-8295.0, -23572.0), 8598276)),
-        *_planner_vanquish_point_steps('Finding Gadd - 06 Vanquish Route 01', [(-8755.0, -23240.0), (-9888.17, -22106.7)]),
-        ('Finding Gadd - 07 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-9690.0, -19524.0), target_map_id=558)),
-        *_planner_vanquish_point_steps('Finding Gadd - 08 Vanquish Route 02', [(-4466.15, -21025.91), (-6967.77, -19810.06), (11669.0, -23829.0)]),
-        ('Finding Gadd - 09 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(11881.0, -23802.0), 8598276)),
-        *_planner_vanquish_point_steps('Finding Gadd - 10 Vanquish Route 03', [(8017.92, -20124.24), (11184.85, -14188.88)]),
-        ('Finding Gadd - 11 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
-        ('Finding Gadd - 12 Wait', lambda: BT.Wait(5000)),
-        ('Finding Gadd - 13 Move', lambda: BT.Move(Vec2f(-5740.47, -13723.29))),
-        ('Finding Gadd - 14 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
-        ('Finding Gadd - 15 Wait', lambda: BT.Wait(5000)),
-        ('Finding Gadd - 16 Move', lambda: BT.Move(Vec2f(2417.11, -25444.55))),
-        ('Finding Gadd - 17 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
-        ('Finding Gadd - 18 Wait', lambda: BT.Wait(5000)),
-        ('Finding Gadd - 19 Move', lambda: BT.Move(Vec2f(11758.78, -24063.51))),
-        ('Finding Gadd - 20 Wait', lambda: BT.Wait(20000)),
-        *_planner_vanquish_point_steps('Finding Gadd - 21 Vanquish Route 04', [Vec2f(12236.58, -24474.01), Vec2f(11675.35, -23909.45)]),
-        ('Finding Gadd - 22 Auto Dialog', lambda: BT.AutoDialog(8598276)),
-        ('Finding Gadd - 23 Wait', lambda: BT.Wait(10000)),
-        ('Finding Gadd - 24 Move', lambda: BT.Move(Vec2f(11795.0, -24125.0))),
-        ('Finding Gadd - 25 Auto Dialog', lambda: BT.AutoDialog(8598279)),
+        ('Finding Gadd - 01 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-8295.0, -23572.0), 8598276)),
+        ('Finding Gadd - 02 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(16230.20, 16030.80), 8596481)),
+        ('Finding Gadd - 03 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(16517.00, 16089.00), 8598529)),
+        ('Finding Gadd - 02 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-9690.0, -19524.0), target_map_id=558)),
+        *_planner_vanquish_point_steps('Finding Gadd - 03 Vanquish Route 02', [(-4466.15, -21025.91), (-6967.77, -19810.06), (11669.0, -23829.0)]),
+        ('Finding Gadd - 04 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(11881.0, -23802.0), 8598276)),
+        *_planner_vanquish_point_steps('Finding Gadd - 05 Vanquish Route 03', [(8017.92, -20124.24), (11184.85, -14188.88)]),
+        ('Finding Gadd - 06 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Finding Gadd - 07 Wait', lambda: BT.Wait(5000)),
+        ('Finding Gadd - 08 Move', lambda: BT.Move(Vec2f(-5740.47, -13723.29))),
+        ('Finding Gadd - 09 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Finding Gadd - 10 Wait', lambda: BT.Wait(5000)),
+        ('Finding Gadd - 11 Move', lambda: BT.Move(Vec2f(2417.11, -25444.55), avoid_obstacles=False)),
+        ('Finding Gadd - 12 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Finding Gadd - 13 Wait', lambda: BT.Wait(5000)),
+        ('Finding Gadd - 14 Move', lambda: BT.Move(Vec2f(11566,-23851))),
+        ('Finding Gadd - 15 Wait', lambda: BT.Wait(20000)),
+
+        ('Finding Gadd - 17 Dialog', lambda: BT.MoveAndDialog(Vec2f(11812.06, -23920.79), 8598276)),
+        ('Finding Gadd - 18 Wait', lambda: BT.Wait(10000)),
+        ('Finding Gadd - 19 Move', lambda: BT.MoveAndDialog(Vec2f(11795.0, -24125.0), 8598279)),
     ]
 
 
 def _steps_FindingTheBloodstone() -> list[PlannerStep]:
     return [
-        _planner_map_prep_step('Finding The Bloodstone' + ' - 00 Map Preparation', 638),
-        ('Finding The Bloodstone - 01 Aggressive', lambda: _aggressive()),
-        ('Finding The Bloodstone - 02 Move', lambda: BT.Move(Vec2f(-9888.17, -22106.7))),
-        ('Finding The Bloodstone - 03 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-9690.0, -19524.0), target_map_id=558)),
-        *_planner_vanquish_point_steps('Finding The Bloodstone - 04 Vanquish Route 01', [(-6967.77, -19810.06), (11669.0, -23829.0)]),
-        ('Finding The Bloodstone - 05 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(11795.0, -24125.0), 8598279)),
-        ('Finding The Bloodstone - 06 Auto Dialog', lambda: BT.AutoDialog(132)),
+        ('Finding The Bloodstone - 06 Auto Dialog', lambda: BT.SendDialog(132)),
         ('Finding The Bloodstone - 07 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=661)),
         *_planner_vanquish_point_steps('Finding The Bloodstone - 08 Vanquish Route 02', [(12437.0, 16557.0), (12588.0, 14755.0), (15387.0, 6941.0)]),
         ('Finding The Bloodstone - 09 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
@@ -1727,151 +1885,121 @@ def _steps_FindingTheBloodstone() -> list[PlannerStep]:
         ('Finding The Bloodstone - 21 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=638)),
     ]
 
+def _steps_LabSpace() -> list[PlannerStep]:
+    return [
+        ('LabSpace - Unlock Rata Sum 0', lambda: BT.Travel(target_map_id=624)),        
+        ('LabSpace - Unlock Rata Sum 1', lambda: BT.MoveAndExitMap(Vec2f(15360,12015), target_map_id=485)),
+        *_planner_vanquish_point_steps('LabSpace - Unlock Rata Sum 2',[(13856,11004),(6067,-95),(-4525,-4292),(-5923,-7830),(-2872,-11614),(-6080,-13317),(-12623,-14600),(-17826,-14505),]),
+        ('LabSpace - Unlock Rata Sum 3', lambda: BT.MoveAndExitMap(Vec2f(-20751,-20094), target_map_id=572)),
+        *_planner_vanquish_point_steps('LabSpace - Unlock Rata Sum 4',[(16143,13302),(11572,13967),(4551,15089),(-1219,14737),(-6124,15859),(-11606,14416),(-17312,12108),(-20647,9415),(-23916,9351),(-25863,10650),]),
+        ('LabSpace - Unlock Rata Sum 5', lambda: BT.MoveAndExitMap(Vec2f(-26394,10028), target_map_id=569)),
+        *_planner_vanquish_point_steps('LabSpace - Unlock Rata Sum 6',[ (17610,-6862),(17279,-1470),(17874,7038), (16322,13060)]),
+        ('LabSpace - Unlock Rata Sum 7', lambda: BT.MoveAndExitMap(Vec2f(16411,14405), target_map_id=640)),
+        ('LabSpace - 1', lambda: BT.MoveAndDialog(Vec2f(16024.0, 18468.0), 8596484)),
 
-def LabSpace() -> BehaviorTree:
-    return BT.Sequence(
-        name="Lab Space",
-        map_id_or_name=624,
-        children=[
-            _aggressive(),
-            #BT.MoveAndDialog(Vec2f(16202.0, 16092.0)),
-            BT.Travel(target_map_id=640),
-           # BT.MoveAndDialog(Vec2f(16024.0, 18468.0)),
-            BT.MoveAndExitMap(Vec2f(-6062.0, -2688.0), target_map_name="Magus Stones"),
-            #BT.MoveAndDialog(Vec2f(10228.0, 11488.0)),
-            BT.VanquishNode([
-                (8329.03, 9954.58),
-                (7258.69, 10987.36),
-                (4812.16, 11197.93),
-                (2778.98, 13297.53),
-                (499.76, 14253.58),
-                (-4305.25, 13044.76),
-                (-11493.07, 16584.55),
-                (-17671.37, 14695.37),
-            ], clear_area_radius=Range.Earshot.value),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.AddModelToLootWhitelist(25413),
+            
+        ('LabSpace - 2', lambda: BT.MoveAndExitMap(Vec2f(16376,13436), target_map_name="Magus Stones")),
+        ('LabSpace - 3', lambda: BT.MoveAndDialog(Vec2f(10228.0, 11488.0), 8596484)),
+        *_planner_vanquish_point_steps('LabSpace - 4', [(8329.03, 9954.58), (7258.69, 10987.36), (4812.16, 11197.93), (2778.98, 13297.53), (499.76, 14253.58), (-4305.25, 13044.76), (-11493.07, 16584.55), (-17671.37, 14695.37)]),
+        ('LabSpace - 6', lambda: BT.AddModelToLootWhitelist(25413)),
+        ('LabSpace - 5', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)),
+        ('LabSpace - 7', lambda:BT.MoveDirect(Vec2f(-18513,16437))),
+        ('LabSpace - 7', lambda:BT.MoveAndDialog(Vec2f(-18794.00, 16287.00),8596487)),
+    ]
 
-            BT.HandleAutoQuest(
-                pos=Vec2f(-17597.36, 15027.91),
-                buttons=[],
-                use_npc_model_or_enc_str=6725,
-                require_quest_marker=True,
-                log=True,
-            ),
+FLUCTUATION_MATRIX_MODEL_IDS = {
+    22782,
+    25413,
+}
 
-            BT.Move(Vec2f(-15851.13, 14795.02)),
-            BT.AutoDialog(0x832C07),
-            BT.AutoDialog(0x84),
-            BT.WaitForMapLoad(map_name="Magus Stones"),
-            BT.Move(Vec2f(-18608.72, 16541.34)),
-            #BT.MoveAndDialog(Vec2f(-18794.0, 16287.0)),
-            BT.Move(Vec2f(-20599.0, 14444.0)),
-            BT.WaitForMapLoad(map_id=658),
-        ],
-    )
+def _steps_TheElusiveGolemancer() -> list[PlannerStep]:
+    return [
+        ('TheElusiveGolemancer 0', lambda: BT.MoveAndExitMap(Vec2f(-20318,14531), target_map_id=658)),
+        ('TheElusiveGolemancer 1', lambda: BT.MoveAndDialog(Vec2f(-14542.0, 12237.0),129)),
+        ('TheElusiveGolemancer 1', lambda: BT.Move(Vec2f(-17204.16, 8545.91))),
+        ('TheElusiveGolemancer 2', lambda: BT.MoveAndInteractWithGadget(Vec2f(-17601.0, 8150.0), log=True)),
+        ('TheElusiveGolemancer 3', lambda: BT.Wait(20_000)),
+        ('TheElusiveGolemancer 4', lambda: BT.Move([Vec2f(-15960.14, 3309.37), Vec2f(-13369.91, -965.44)], avoid_obstacles=False, tolerance=800)),
+        ('TheElusiveGolemancer 5', lambda: BT.MoveAndInteractWithGadget(Vec2f(-11737.0, -3710.0), log=True)),
+            *_planner_vanquish_point_steps('TheElusiveGolemancer 6', [(-15108.84, -2793.48),(-16518.94, -662.78),]),
+            ('TheElusiveGolemancer 7', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)),
+            *_planner_vanquish_point_steps('TheElusiveGolemancer 8', [(-16898.24, -612.0), (-17391.0, -528.0), (-17597.36, 15027.91), (18755.0, -19827.0)]),
+            ('TheElusiveGolemancer 9', lambda: BT.WaitForMapLoad(map_id=659)),
+            ('TheElusiveGolemancer 10', lambda: BT.MoveAndInteractWithGadget(Vec2f(15979.0, -17531.0), log=True)),
+            ('TheElusiveGolemancer 11', lambda: _pacifist()),
+            *_planner_vanquish_point_steps('TheElusiveGolemancer 12', [(18031.51, -13929.63),(17886.86, -13218.39),]),
+            ('TheElusiveGolemancer 13', lambda: BT.MoveAndInteractWithGadget(Vec2f(15551.0, -13705.0), log=True)),
+            ('TheElusiveGolemancer 14', lambda: BT.Wait(3_000)),
+            ('TheElusiveGolemancer 11', lambda: _aggressive()),
+            *_planner_vanquish_point_steps('TheElusiveGolemancer 15', [(15551.0, -13705.0),(9928.16, -10998.24),(5953.36, -9815.89),(4531.82, -9827.91),(3035.53, -9450.54),(3485.59, -11380.60),],),
+            ('TheElusiveGolemancer 17', lambda: BT.MoveAndDialog((-229.0, -12033.0), 0x84)),
+            ('TheElusiveGolemancer 18', lambda: BT.Move(Vec2f(3176.96, -17026.31))),
+            ('TheElusiveGolemancer 19', lambda: BT.Wait(10_000)),
+            ('TheElusiveGolemancer 20', lambda: BT.MoveAndDialog((-2639.00, -15247.00), 0x84)),
+            ('TheElusiveGolemancer 21', lambda: BT.Move(Vec2f(3468.83, -16308.18))),
+            ('TheElusiveGolemancer 22', lambda: BT.Wait(10_000)),
+            ('TheElusiveGolemancer 23', lambda: _pacifist()),
+            ('TheElusiveGolemancer 24', lambda: BT.Move(Vec2f(5107.97, -17710.35))),
+            ('TheElusiveGolemancer 25', lambda: BT.FlagAllHeroes(5413.07, -19400.44)),
+            ('TheElusiveGolemancer 26', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS),max_distance=10_000.0,timeout_ms=10_000,allow_unassigned=True,interaction_interval_ms=500,log=True,),),
+            ('TheElusiveGolemancer 27', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
+            ('TheElusiveGolemancer 28', lambda: _pixel_stack()),
+            ('TheElusiveGolemancer 29', lambda: BT.Wait(5_000)),
+            ('TheElusiveGolemancer 30', lambda: BT.DropBundle(log=True)),
+            ('TheElusiveGolemancer 31', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS),max_distance=10_000.0,timeout_ms=10_000,allow_unassigned=True,interaction_interval_ms=500,log=True,),),
+            ('TheElusiveGolemancer 32', lambda: BT.Wait(1_000)),
+            ('TheElusiveGolemancer 33', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
+            ('TheElusiveGolemancer 34', lambda: _pixel_stack()),
+            ('TheElusiveGolemancer 35', lambda: BT.Wait(5_000)),
+            ('TheElusiveGolemancer 36', lambda: BT.DropBundle(log=True)),
+            ('TheElusiveGolemancer 37', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS),max_distance=10_000.0,timeout_ms=10_000,allow_unassigned=True,interaction_interval_ms=500,log=True,)),
+            ('TheElusiveGolemancer 38', lambda: BT.Wait(1_000)),
+            ('TheElusiveGolemancer 39', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
+            ('TheElusiveGolemancer 40', lambda: _pixel_stack()),
+            ('TheElusiveGolemancer 41', lambda: BT.Wait(5_000)),
+            ('TheElusiveGolemancer 42', lambda: BT.DropBundle(log=True)),
+            ('TheElusiveGolemancer 43', lambda: BT.VanquishNode([(6882.36, -20769.41), (6566.0, -21425.0)], clear_area_radius=Range.Earshot.value)),
+            ('TheElusiveGolemancer 44', lambda: BT.WaitForMapLoad(map_id=660)),
+            ('TheElusiveGolemancer 45', lambda: _aggressive()),
+            *_planner_vanquish_point_steps('TheElusiveGolemancer 46', [(-12164.0, 10409.53),(-12584.28, 13570.28),(-15062.15, 16139.62),(-18265.0, 13647.0),]),
+            ('TheElusiveGolemancer 46', lambda: BT.WaitForMapLoad(map_id=640)),
+        ]
+    
+def _steps_ALittleHelp() -> list[PlannerStep]:
+        return [
+('ALittleHelp 0', lambda: BT.MoveAndExitMap(Vec2f(20320,16861), target_map_id=501)),
+*_planner_vanquish_point_steps('ALittleHelp 1', [(-22469,-5887),(-12978,-8490),(2552,-9452),(9029,-9692),(14574,-9613)]),
+('ALittleHelp 2', lambda: BT.MoveAndDialog(Vec2f(17611.00, -9341.00), 8598532)),
+*_planner_vanquish_point_steps('ALittleHelp 3',[(8016,-10470),(1025,-8638),(-4327,-10132),(-8425,-12543),]),
+('ALittleHelp 4', lambda: BT.MoveAndExitMap(Vec2f(-8618,-14375), target_map_id=572)),
+*_planner_vanquish_point_steps('ALittleHelp 4',[(-5413,15875),(-15672,11827),(-10182,-115),(-16273,-5484),(-20039,-10133),(-21923,-9612),(-24115,-10567)]),
+('ALittleHelp 6', lambda: BT.WaitUntilOutOfCombat()),
+('ALittleHelp 7', lambda: BT.MoveAndDialog(Vec2f(-24216.00, -10563.00), 8598532)),
+('ALittleHelp 8', lambda: BT.Travel(target_map_name="Rata Sum")),
+('ALittleHelp 9', lambda: BT.MoveAndDialog(Vec2f(16051.00, 15183.00), 8598535)),
+('ALittleHelp 10', lambda: BT.SendDialog(132)),
+('ALittleHelp 11', lambda: BT.WaitForMapLoad(map_id=664)),
+('ALittleHelp 17', lambda: BT.Move(Vec2f(-16715.00, 8931.00))),
+('ALittleHelp 14', lambda: BT.FlagHero(1, -17880.37, 10046.01)),
+('ALittleHelp 15', lambda: BT.FlagHero(2, -17880.37, 10046.01)),
+('ALittleHelp 16', lambda: BT.FlagHero(3, -17880.37, 10046.01)),
+('ALittleHelp 17', lambda: BT.Move(Vec2f(-15538.57, 7641.21))),
+('ALittleHelp 18', lambda: BT.Wait(5000)),
+('ALittleHelp 18', lambda: BT.WaitForClearEnemiesInArea(-15538.57, 7641.21,stable_clear_ms=180_000, radius=Range.Spirit.value, log=True)),
+('ALittleHelp 19', lambda: BT.UnflagAllHeroes(log=True)),
+('ALittleHelp 20', lambda:BT.TargetAgentByName(agent_name='Sokka', log=True)),
+('ALittleHelp 21', lambda:BT.InteractTargetAndSendDialog(132)),
+('ALittleHelp 22', lambda: BT.DropBundle(log=True)),
+('ALittleHelp 23', lambda: BT.Wait(5000)),
+('ALittleHelp 21', lambda:BT.InteractTargetAndSendDialog(132)),
+('ALittleHelp 22', lambda: BT.DropBundle(log=True)),
 
 
-def TheElusiveGolemancer() -> BehaviorTree:
-    return BT.Sequence(
-        name="The Elusive Golemancer",
-        children=[
-            BT.WaitForMapLoad(map_id=658),
-            _aggressive(),
-            #BT.MoveAndDialog(Vec2f(-14542.0, 12237.0)),
-            BT.Move(Vec2f(-17204.16, 8545.91)),
-            BT.MoveAndInteractWithGadget(Vec2f(-17601.0, 8150.0), log=True),
-            BT.Wait(20_000),
-            BT.VanquishNode([
-                (-15960.14, 3309.37),
-                (-13369.91, -965.44),
-            ], clear_area_radius=Range.Earshot.value),
-            BT.MoveAndInteractWithGadget(Vec2f(-11737.0, -3710.0), log=True),
-            BT.VanquishNode([
-                (-15108.84, -2793.48),
-                (-16518.94, -662.78),
-            ], clear_area_radius=Range.Earshot.value),
-            BT.WaitUntilOutOfCombat(timeout_ms=120_000),
-            BT.VanquishNode([
-                (-16898.24, -612.0),
-                (-17391.0, -528.0),
-                (-17597.36, 15027.91),
-                (18755.0, -19827.0),
-            ], clear_area_radius=Range.Earshot.value),
-            BT.WaitForMapLoad(map_id=659),
-            _aggressive(),
-            BT.MoveAndInteractWithGadget(Vec2f(15979.0, -17531.0), log=True),
-            _pacifist(),
-            BT.VanquishNode([
-                (18031.51, -13929.63),
-                (17886.86, -13218.39),
-            ], clear_area_radius=Range.Earshot.value),
-            BT.MoveAndInteractWithGadget(Vec2f(15551.0, -13705.0), log=True),
-            BT.Wait(3_000),
-            BT.VanquishNode([
-                (15551.0, -13705.0),
-                (9928.16, -10998.24),
-                (5953.36, -9815.89),
-                (4531.82, -9827.91),
-                (3035.53, -9450.54),
-                (3485.59, -11380.60),
-                (-229.0, -12033.0),
-            ], clear_area_radius=Range.Earshot.value),
-            _aggressive(),
-            BT.AutoDialog(0x84),
-            #BT.MoveAndDialog(Vec2f(-2639.0, -15247.0)),
-            #BT.MoveAndDialog(Vec2f(3833.0, -16855.0)),
-            BT.VanquishNode([(3042.09, -16940.08), (2763.47, -17007.67)], clear_area_radius=Range.Earshot.value),
-            BT.Wait(10_000),
-            BT.Move(Vec2f(3348.06, -16214.14)),
-            BT.Wait(10_000),
-            _pacifist(),
-            BT.Move(Vec2f(5107.97, -17710.35)),
-            BT.FlagAllHeroes(5413.07, -19400.44),
-            BT.PickupGroundItemByModelID(
-                22782,
-                max_distance=5_000.0,
-                timeout_ms=30_000,
-                log=True,
-            ),
-            BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True),
-            _pixel_stack(),
-            BT.Wait(10_000),
-            BT.DropBundle(log=True),
-            BT.PickupGroundItemByModelID(
-                22782,
-                max_distance=5_000.0,
-                timeout_ms=30_000,
-                log=True,
-            ),
-            BT.Wait(1_000),
-            BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True),
-            _pixel_stack(),
-            BT.Wait(10_000),
-            BT.DropBundle(log=True),
-            BT.PickupGroundItemByModelID(
-                22782,
-                max_distance=5_000.0,
-                timeout_ms=30_000,
-                log=True,
-            ),
-            BT.Wait(1_000),
-            BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True),
-            _pixel_stack(),
-            BT.Wait(10_000),
-            BT.DropBundle(log=True),
-            BT.VanquishNode([(6882.36, -20769.41), (6566.0, -21425.0)], clear_area_radius=Range.Earshot.value),
-            BT.WaitForMapLoad(map_id=660),
-            _aggressive(),
-            BT.VanquishNode([
-                (-12164.0, 10409.53),
-                (-12584.28, 13570.28),
-                (-15062.15, 16139.62),
-                (-18265.0, 13647.0),
-            ], clear_area_radius=Range.Earshot.value),
-            BT.WaitForMapLoad(map_id=640),
-        ],
-    )
+
+
+
+
+    ]
 
 
 
@@ -2261,6 +2389,9 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
         *_steps_AssaultOnTheStrongHold(),
         *_steps_FindingGadd(),
         *_steps_FindingTheBloodstone(),
+        *_steps_LabSpace(),
+        *_steps_TheElusiveGolemancer(),
+        *_steps_ALittleHelp(),
     ]
 
 
