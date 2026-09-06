@@ -670,6 +670,152 @@ GOLD_ZAISHEN_COIN_MODEL_ID = int(ModelID.Gold_Zaishen_Coin.value)
 from Py4GWCoreLib.Skill import Skill
 Painful_Bond_ID = Skill.GetID("Painful_Bond")
 
+PRE_XANDRA_BUILD_BLACKBOARD_KEY = "eotn_pre_xandra_player_build"
+
+
+def SavePreXandraPlayerBuild(log: bool = True) -> BehaviorTree:
+    """Capture the player's current profession, attributes and 8-slot skillbar."""
+
+    def _save(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        player_id = int(Player.GetAgentID() or 0)
+        if player_id <= 0:
+            return BehaviorTree.NodeState.FAILURE
+
+        primary_id, secondary_id = Agent.GetProfessionIDs(player_id)
+        primary_id = int(primary_id or 0)
+        secondary_id = int(secondary_id or 0)
+        if primary_id <= 0:
+            return BehaviorTree.NodeState.FAILURE
+
+        raw_attributes = Agent.GetAttributesDict(player_id) or {}
+        attributes = {
+            int(attribute_id): max(0, min(12, int(value or 0)))
+            for attribute_id, value in raw_attributes.items()
+            if int(value or 0) > 0
+        }
+        skills = tuple(
+            int(GLOBAL_CACHE.SkillBar.GetSkillIDBySlot(slot) or 0)
+            for slot in range(1, 9)
+        )
+
+        template = Utils.GenerateSkillbarTemplateFrom(
+            prof_primary=primary_id,
+            prof_secondary=secondary_id,
+            attributes=attributes,
+            skills=list(skills),
+        )
+        if not template:
+            ConsoleLog(
+                MODULE_NAME,
+                "Unable to generate the pre-Xandra player build template.",
+                log=True,
+            )
+            return BehaviorTree.NodeState.FAILURE
+
+        node.blackboard[PRE_XANDRA_BUILD_BLACKBOARD_KEY] = {
+            "template": str(template),
+            "primary_id": primary_id,
+            "secondary_id": secondary_id,
+            "attributes": dict(attributes),
+            "skills": skills,
+        }
+
+        if log:
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    "Saved pre-Xandra player build: "
+                    f"primary={primary_id}, secondary={secondary_id}, "
+                    f"skills={list(skills)}."
+                ),
+                log=True,
+            )
+
+        return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Save Pre-Xandra Player Build",
+            action_fn=_save,
+            aftercast_ms=0,
+        )
+    )
+
+
+def RestorePreXandraPlayerBuild(log: bool = True) -> BehaviorTree:
+    """Reload the build captured by SavePreXandraPlayerBuild after Xandra."""
+
+    def _build(node: BehaviorTree.Node) -> BehaviorTree:
+        snapshot = node.blackboard.get(PRE_XANDRA_BUILD_BLACKBOARD_KEY)
+        if not isinstance(snapshot, dict):
+            return BT.Failer(name="Pre-Xandra Build Snapshot Missing")
+
+        template = str(snapshot.get("template", "") or "")
+        primary_id = int(snapshot.get("primary_id", 0) or 0)
+        secondary_id = int(snapshot.get("secondary_id", 0) or 0)
+        saved_skills = tuple(int(value or 0) for value in snapshot.get("skills", ()))
+
+        if not template or primary_id <= 0 or len(saved_skills) != 8:
+            return BT.Failer(name="Pre-Xandra Build Snapshot Invalid")
+
+        def _verify() -> BehaviorTree.NodeState:
+            player_id = int(Player.GetAgentID() or 0)
+            if player_id <= 0:
+                return BehaviorTree.NodeState.FAILURE
+
+            loaded_primary_id, loaded_secondary_id = Agent.GetProfessionIDs(player_id)
+            loaded_skills = tuple(
+                int(GLOBAL_CACHE.SkillBar.GetSkillIDBySlot(slot) or 0)
+                for slot in range(1, 9)
+            )
+
+            valid = bool(
+                int(loaded_primary_id or 0) == primary_id
+                and int(loaded_secondary_id or 0) == secondary_id
+                and loaded_skills == saved_skills
+            )
+
+            if log:
+                ConsoleLog(
+                    MODULE_NAME,
+                    (
+                        "Pre-Xandra player build restored successfully."
+                        if valid
+                        else (
+                            "Pre-Xandra build restore verification failed: "
+                            f"primary={int(loaded_primary_id or 0)}/{primary_id}, "
+                            f"secondary={int(loaded_secondary_id or 0)}/{secondary_id}, "
+                            f"skills={list(loaded_skills)}/{list(saved_skills)}."
+                        )
+                    ),
+                    log=True,
+                )
+
+            return (
+                BehaviorTree.NodeState.SUCCESS
+                if valid
+                else BehaviorTree.NodeState.FAILURE
+            )
+
+        return BT.Sequence(
+            name="Restore Pre-Xandra Player Build",
+            children=[
+                BT.LoadSkillbar(template=template, log=log),
+                BT.Wait(1_000),
+                BehaviorTree(
+                    BehaviorTree.ConditionNode(
+                        name="Verify Pre-Xandra Player Build",
+                        condition_fn=_verify,
+                    )
+                ),
+            ],
+        )
+
+    return BT.Subtree(
+        name="Restore Saved Pre-Xandra Player Build",
+        subtree_fn=_build,
+    )
+
 NORN_TOURNAMENT_SPIRIT_CASTS = (
     ("Bloodsong", 3_500),
     ("Shadowsong", 3_500),
@@ -2372,10 +2518,12 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
         ('Ensure MOX Unlocked', EnsureMOXUnlocked),
         ('Ensure Olias Unlocked', EnsureOliasUnlocked),
         *_steps_TravelToGunnarsHold(),
+        ('Save Pre-Xandra Player Build', SavePreXandraPlayerBuild),
         *_steps_Unlock_Xandra(),
         ('Optional Xandra Tournament', CompleteOptionalXandraTournament),
         *_steps_PrepareXandraTournament(),
         ('Fight Sequence', Fight_Sequence),
+        ('Restore Pre-Xandra Player Build', RestorePreXandraPlayerBuild),
         *_steps_TravelToSifhalla(),
         *_steps_CompleteTrackingTheNornbear(),
         *_steps_CompleteCurseOfTheNornbear(),
