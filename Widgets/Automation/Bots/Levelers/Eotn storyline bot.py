@@ -1905,7 +1905,7 @@ def _steps_WarbandOfBrothers() -> list[PlannerStep]:
         ('Warband Of Brothers - 02 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-19094.0, 17945.0), 132)),
         ('Warband Of Brothers - 03 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=666)),
         ('Warband Of Brothers - 04 Add Loot Whitelist', lambda: BT.AddModelToLootWhitelist(25413)),
-        *_planner_vanquish_point_steps('Warband Of Brothers - 05 Vanquish Route 01', [(-13404.0, -2958.0), (-7696.0, 4576.0), (-5939.0, 3668.0), (-7823.0, 6395.0), (-5790.0, 7957.0), (-12068.0, 3611.0), ]),
+        *_planner_vanquish_point_steps('Warband Of Brothers - 05 Vanquish Route 01', [(-13404.0, -2958.0), (-7696.0, 4576.0), (-5939.0, 3668.0), (-7823.0, 6395.0), (-5790.0, 7957.0), (-12068.0, 3611.0),(-4043.76, 6405.57) ]),
         ('Warband Of Brothers - 06 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(-4043.76, 6405.57), log=True)),
         ('Warband Of Brothers - 07 Wait', lambda: BT.Wait(2000)),
         *_planner_vanquish_point_steps('Warband Of Brothers - 08 Vanquish Route 02', [(-4799.0, 6891.0), (-9905.0, 5280.0), (-13153.0, 3346.0), (-4600.0, 6494.0),(-1959.15, 7955.19), (1490.38, 8409.88), (3217.9, 8404.31), (-4608.37, 6540.96), (-16482.0, 1716.68), (-18616.02, 806.14), (-19704.0, 318.0)]),
