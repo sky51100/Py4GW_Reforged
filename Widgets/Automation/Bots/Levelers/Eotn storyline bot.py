@@ -1926,7 +1926,7 @@ def _steps_WarbandOfBrothers() -> list[PlannerStep]:
         ('Warband Of Brothers - 23 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(10034.0, -14899.0), log=True)),
         ('Warband Of Brothers - 24 Wait', lambda: BT.Wait(2000)),
         *_planner_vanquish_point_steps('Warband Of Brothers - 25 Vanquish Route 08', [(7685.12, -16387.24), (3930.38, -13150.31), (1072.9, -8136.26)]),
-        ('Warband Of Brothers - 26 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Warband Of Brothers - 26 Wait Until Out Of Combat', lambda: BT.ClearEnemiesInArea(Vec2f(-7908.02, -7825.38))),
         ('Warband Of Brothers - 27 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=648)),
     ]
 
@@ -1938,7 +1938,8 @@ def _steps_WhatMustBeDone() -> list[PlannerStep]:
         ('What Must Be Done - 02 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-14185.0, 17040.0), 8621313)),
         ('What Must Be Done - 03 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-15479.0, 13484.0), target_map_id=647)),
         *_planner_vanquish_point_steps('What Must Be Done - 04 Vanquish Route 01', [(-12085.0, 8447.0), (-9360.0, -298.0), (-6856.0, -7620.0), (-7908.02, -7825.38)]),
-        ('What Must Be Done - 05 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('What Must Be Done - 05 Wait Until Out Of Combat', lambda: BT.ClearEnemiesInArea(Vec2f(-7908.02, -7825.38))),
+        ('What Must Be Done - 06 Secure step', lambda: BT.WaitForClearEnemiesInArea(-7908.02,-7825.38, radius=Range.Spirit.value, stable_clear_ms=20000,)),
         ('What Must Be Done - 06 Travel', lambda: BT.Travel(target_map_id=648)),
         ('What Must Be Done - 07 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-14185.0, 17040.0), 132)),
         ('What Must Be Done - 08 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=674)),
