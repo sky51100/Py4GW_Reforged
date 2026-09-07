@@ -1985,8 +1985,8 @@ def _steps_FindingGadd() -> list[PlannerStep]:
         *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 8', [(13455.43, 10678.0), (9850.0, 5025.0), (11207.11, 1872.32), (10452.02, 178.5), (10782.86, -3321.0), (8360.94, -6550.0), (10382.85, -12342.0), (10080.3, -13995.0),(10667.0, -16116.0), (10747.49, -17546.0), (11156.0, -17802.0)]),
         ('Finding Gadd - Unlock Gadds Camp 8', lambda: BT.MoveAndExitMap(Vec2f(9240.07, -20260.95), target_map_id=581)),
 
-        *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 9', [(-10109,9330),(-1896,13284),(3117,15816),(5902,13035),(11314,13724),(16086,17089),(16926,13169),]),
-        ('Finding Gadd - Unlock Gadds Camp 10', lambda: BT.MoveAndExitMap(Vec2f(14354,11783), target_map_id=638)),
+        *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 9', [(-10109,9330),(-1896,13284),(3117,15816),(5902,13035),(11314,13724),(16086,17089),(16926,13169),(15907,11619)]),
+        ('Finding Gadd - Unlock Gadds Camp 10', lambda: BT.MoveAndExitMap(Vec2f(14224,11771), target_map_id=638)),
 
         ('Finding Gadd - 01 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-8295.0, -23572.0), 8598276)),
         ('Finding Gadd - 02 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(16230.20, 16030.80), 8596481)),
@@ -2014,22 +2014,22 @@ def _steps_FindingGadd() -> list[PlannerStep]:
 
 def _steps_FindingTheBloodstone() -> list[PlannerStep]:
     return [
-        ('Finding The Bloodstone - 06 Auto Dialog', lambda: BT.SendDialog(132)),
-        ('Finding The Bloodstone - 07 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=661)),
-        *_planner_vanquish_point_steps('Finding The Bloodstone - 08 Vanquish Route 02', [(12437.0, 16557.0), (12588.0, 14755.0), (15387.0, 6941.0)]),
-        ('Finding The Bloodstone - 09 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
-        ('Finding The Bloodstone - 10 Wait', lambda: BT.Wait(10000)),
-        *_planner_vanquish_point_steps('Finding The Bloodstone - 11 Vanquish Route 03', [(16165.77, 10441.95), (17149.38, 13434.6), (18529.0, 15977.0), (18170.14, 15771.52)]),
-        ('Finding The Bloodstone - 12 Wait', lambda: BT.Wait(30000)),
-        ('Finding The Bloodstone - 13 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(19212.0, 16155.0), target_map_id=662)),
-        *_planner_vanquish_point_steps('Finding The Bloodstone - 14 Vanquish Route 04', [(-611.51, 5115.83), (3574.7, 3567.62), (4827.1, 1968.97), (11548.76, -2795.9), (14596.0, -7708.0)]),
-        ('Finding The Bloodstone - 15 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
-        ('Finding The Bloodstone - 16 Wait', lambda: BT.Wait(10000)),
-        ('Finding The Bloodstone - 17 Move', lambda: BT.Move(Vec2f(16743.0, -10170.0))),
-        ('Finding The Bloodstone - 18 Wait', lambda: BT.Wait(30000)),
-        ('Finding The Bloodstone - 19 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(18450.0, -10273.0), target_map_id=663)),
-        *_planner_vanquish_point_steps('Finding The Bloodstone - 20 Vanquish Route 05', [(-7249.0, -16397.0), (-10466.0, -16166.0), (-15377.0, -16565.0)]),
-        ('Finding The Bloodstone - 21 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=638)),
+        ('Finding The Bloodstone - 01 Auto Dialog', lambda: BT.SendDialog(132)),
+        ('Finding The Bloodstone - 02 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=661)),
+        *_planner_vanquish_point_steps('Finding The Bloodstone - 03 Vanquish Route 02', [(12437.0, 16557.0), (12588.0, 14755.0), (15387.0, 6941.0)]),
+        ('Finding The Bloodstone - 04 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Finding The Bloodstone - 05 Wait', lambda: BT.Wait(10000)),
+        *_planner_vanquish_point_steps('Finding The Bloodstone - 06 Vanquish Route 03', [(16165.77, 10441.95), (17149.38, 13434.6), (18529.0, 15977.0), (18170.14, 15771.52)]),
+        ('Finding The Bloodstone - 11 Wait', lambda: BT.Wait(30000)),
+        ('Finding The Bloodstone - 12 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(19212.0, 16155.0), target_map_id=662)),
+        *_planner_vanquish_point_steps('Finding The Bloodstone - 13 Vanquish Route 04', [(-611.51, 5115.83), (3574.7, 3567.62), (4827.1, 1968.97), (11548.76, -2795.9), (14596.0, -7708.0)]),
+        ('Finding The Bloodstone - 14 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Finding The Bloodstone - 15 Wait', lambda: BT.Wait(10000)),
+        ('Finding The Bloodstone - 16 Move', lambda: BT.Move(Vec2f(16743.0, -10170.0))),
+        ('Finding The Bloodstone - 17 Wait', lambda: BT.Wait(30000)),
+        ('Finding The Bloodstone - 18 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(18450.0, -10273.0), target_map_id=663)),
+        *_planner_vanquish_point_steps('Finding The Bloodstone - 19 Vanquish Route 05', [(-7249.0, -16397.0), (-10466.0, -16166.0), (-15377.0, -16565.0)]),
+        ('Finding The Bloodstone - 20 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=638)),
     ]
 
 def _steps_LabSpace() -> list[PlannerStep]:
