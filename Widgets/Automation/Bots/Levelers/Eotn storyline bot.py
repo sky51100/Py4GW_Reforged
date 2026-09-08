@@ -1802,6 +1802,7 @@ def _steps_CompleteShrineOfRavenSpirit() -> list[PlannerStep]:
         ('Shrine Of The Raven Spirit - 03 Aggressive', lambda: _aggressive()),
         ('Shrine Of The Raven Spirit - 04 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-1392.0, 1205.0), target_map_id=553)),
         *_planner_vanquish_point_steps('Shrine Of The Raven Spirit - 05 Vanquish Route 01', [(-2252.0, 831.0), (-2887.0, -2894.0), (-3211.0, -3843.0), (-3940.0, -3155.0), (-4941.0, 728.0), (-5310.0, 3693.0), (-8984.0, 4861.0), (-12866.0, 5695.0), (-13612.0, 6369.0), (-14355.0, 7040.0), (-14909.0, 7880.0), (-15520.0, 8680.0)]),
+        ('Shrine Of The Raven Spirit - 06 Target Olaf And Dialog', lambda: _pacifist()),
         ('Shrine Of The Raven Spirit - 06 Target Olaf And Dialog', lambda: BT.TargetAgentByModelIDAndSendDialog(OLAF_OLAFSON_MODEL_ID, 133, log=True)),
         ('Shrine Of The Raven Spirit - 07 Wait For Clear Area', lambda: BT.WaitForClearEnemiesInArea(-15696.0, 8732.0, radius=Range.Longbow.value, stable_clear_ms=60000, log=True)),
         ('Shrine Of The Raven Spirit - 08 Travel', lambda: BT.Travel(target_map_name='Olafstead')),
