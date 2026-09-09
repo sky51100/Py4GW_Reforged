@@ -1447,6 +1447,146 @@ def EnsureSignetOfSpirits(log: bool = True) -> BehaviorTree:
     )
 
 
+def _learn_signet_of_spirits_from_elite_tome(
+    log: bool = True,
+) -> BehaviorTree:
+    """Learn Signet of Spirits with the validated native SkillTome routine."""
+
+    skill_id = int(
+        GLOBAL_CACHE.Skill.GetID(NORN_TOURNAMENT_OPTIONAL_ELITE_SKILL) or 0
+    )
+    if skill_id <= 0:
+        return BT.Failer(name="Resolve Signet Of Spirits Failed")
+
+    # LearnSkillFromTome performs the complete native GW flow:
+    # UseItem -> select the SkillTome row with real PyMouse input ->
+    # click Learn -> verify IsSkillLearnt. No SendDialog is used.
+    return RoutinesBT.Player.LearnSkillFromTome(
+        skill_id=skill_id,
+        log=log,
+    )
+
+
+def EnsureSignetOfSpirits(log: bool = True) -> BehaviorTree:
+    """Learn Signet of Spirits when unlocked and a tome can be obtained."""
+
+    skill_name = NORN_TOURNAMENT_OPTIONAL_ELITE_SKILL
+
+    acquire_tome = BT.Selector(
+        name="Acquire Elite Ritualist Tome If Available",
+        children=[
+            BT.HasItemQuantity(RITUALIST_ELITE_TOME_MODEL_ID, 1),
+            BT.Sequence(
+                name="Withdraw Stored Elite Ritualist Tome",
+                children=[
+                    _storage_has_model(
+                        RITUALIST_ELITE_TOME_MODEL_ID,
+                        1,
+                        "Check Stored Elite Ritualist Tome",
+                    ),
+                    BT.RestockItems(
+                        model_id=RITUALIST_ELITE_TOME_MODEL_ID,
+                        desired_quantity=1,
+                        allow_missing=False,
+                    ),
+                    BT.HasItemQuantity(RITUALIST_ELITE_TOME_MODEL_ID, 1),
+                ],
+            ),
+            BT.Sequence(
+                name="Buy Elite Ritualist Tome With Zaishen Coin",
+                children=[
+                    BT.Selector(
+                        name="Check Gold Zaishen Coin Availability",
+                        children=[
+                            BT.HasItemQuantity(GOLD_ZAISHEN_COIN_MODEL_ID, 1),
+                            _storage_has_model(
+                                GOLD_ZAISHEN_COIN_MODEL_ID,
+                                1,
+                                "Check Stored Gold Zaishen Coin",
+                            ),
+                        ],
+                    ),
+                    BT.Travel(target_map_id=248, log=log),
+                    BT.RestockItems(
+                        model_id=GOLD_ZAISHEN_COIN_MODEL_ID,
+                        desired_quantity=1,
+                        allow_missing=False,
+                    ),
+                    BT.EqualizeGold(
+                        target_gold=100,
+                        deposit_all=False,
+                        log=log,
+                    ),
+                    BT.TargetAgentByName(
+                        agent_name="Jessie Llam",
+                        log=log,
+                    ),
+                    BT.InteractTarget(log=log),
+                    BT.Wait(1_000),
+                    BT.CraftItem(
+                        output_model_id=RITUALIST_ELITE_TOME_MODEL_ID,
+                        trade_model_ids=[GOLD_ZAISHEN_COIN_MODEL_ID],
+                        quantity_list=[1],
+                        cost=100,
+                        aftercast_ms=500,
+                    ),
+                    BT.Wait(1_000),
+                    BT.HasItemQuantity(RITUALIST_ELITE_TOME_MODEL_ID, 1),
+                ],
+            ),
+        ],
+    )
+
+    return BT.Selector(
+        name="Ensure Optional Signet Of Spirits",
+        children=[
+            _skill_state_condition(
+                skill_name,
+                learned=True,
+                name="Check Signet Of Spirits Learned",
+            ),
+            BT.Sequence(
+                name="Learn Signet Of Spirits If Resources Are Available",
+                children=[
+                    _skill_state_condition(
+                        skill_name,
+                        learned=False,
+                        name="Check Signet Of Spirits Account Unlock",
+                    ),
+                    acquire_tome,
+                    _learn_signet_of_spirits_from_elite_tome(log=log),
+                    _skill_state_condition(
+                        skill_name,
+                        learned=True,
+                        name="Verify Signet Of Spirits Learned",
+                    ),
+                    BT.LogMessage(
+                        message=(
+                            "Signet of Spirits was learned from an "
+                            "Elite Ritualist Tome."
+                        ),
+                        module_name=MODULE_NAME,
+                    ),
+                ],
+            ),
+            BT.Sequence(
+                name="Skip Optional Signet Of Spirits",
+                children=[
+                    BT.LogMessage(
+                        message=(
+                            "Signet of Spirits is unavailable or no usable Elite "
+                            "Ritualist Tome / Gold Zaishen Coin could be obtained; "
+                            "the tournament setup continues without it."
+                        ),
+                        module_name=MODULE_NAME,
+                    ),
+                    BT.Succeeder(name="Continue Without Signet Of Spirits"),
+                ],
+            ),
+        ],
+    )
+
+
 def _equip_norn_tournament_build(log: bool = True) -> BehaviorTree:
     def _build(_node: BehaviorTree.Node) -> BehaviorTree:
         player_id = int(Player.GetAgentID() or 0)
@@ -2729,6 +2869,17 @@ def _heart_wait_until_cyndr_dead(timeout_ms: int = 10 * 60_000) -> BehaviorTree:
         )
     )
 
+def _steps_LabSpace() -> list[PlannerStep]:
+    return [
+        ('LabSpace - Unlock Rata Sum 0', lambda: BT.Travel(target_map_id=624)),        
+        ('LabSpace - Unlock Rata Sum 1', lambda: BT.MoveAndExitMap(Vec2f(15360,12015), target_map_id=485)),
+        *_planner_vanquish_point_steps('LabSpace - Unlock Rata Sum 2',[(13856,11004),(6067,-95),(-4525,-4292),(-5923,-7830),(-2872,-11614),(-6080,-13317),(-12623,-14600),(-17826,-14505),]),
+        ('LabSpace - Unlock Rata Sum 3', lambda: BT.MoveAndExitMap(Vec2f(-20751,-20094), target_map_id=572)),
+        *_planner_vanquish_point_steps('LabSpace - Unlock Rata Sum 4',[(16143,13302),(11572,13967),(4551,15089),(-1219,14737),(-6124,15859),(-11606,14416),(-17312,12108),(-20647,9415),(-23916,9351),(-25863,10650),]),
+        ('LabSpace - Unlock Rata Sum 5', lambda: BT.MoveAndExitMap(Vec2f(-26394,10028), target_map_id=569)),
+        *_planner_vanquish_point_steps('LabSpace - Unlock Rata Sum 6',[ (17610,-6862),(17279,-1470),(17874,7038), (16322,13060)]),
+        ('LabSpace - Unlock Rata Sum 7', lambda: BT.MoveAndExitMap(Vec2f(16411,14405), target_map_id=640)),
+        ('LabSpace - 1', lambda: BT.MoveAndDialog(Vec2f(16024.0, 18468.0), 8596484)),
 
 def _heart_cyndr_encounter() -> BehaviorTree:
     """Defeat Cyndr with the validated Touch team.
@@ -2755,6 +2906,92 @@ def _heart_cyndr_encounter() -> BehaviorTree:
         ],
     )
 
+FLUCTUATION_MATRIX_MODEL_IDS = {
+    22782,
+    25413,
+}
+
+def _steps_TheElusiveGolemancer() -> list[PlannerStep]:
+    return [
+        ('TheElusiveGolemancer 0', lambda: BT.MoveAndExitMap(Vec2f(-20318,14531), target_map_id=658)),
+        ('TheElusiveGolemancer 1', lambda: BT.MoveAndDialog(Vec2f(-14542.0, 12237.0),129)),
+        ('TheElusiveGolemancer 1', lambda: BT.Move(Vec2f(-17204.16, 8545.91))),
+        ('TheElusiveGolemancer 2', lambda: BT.MoveAndInteractWithGadget(Vec2f(-17601.0, 8150.0), log=True)),
+        ('TheElusiveGolemancer 3', lambda: BT.Wait(20_000)),
+        ('TheElusiveGolemancer 4', lambda: BT.Move([Vec2f(-15960.14, 3309.37), Vec2f(-13369.91, -965.44)], avoid_obstacles=False, tolerance=800)),
+        ('TheElusiveGolemancer 5', lambda: BT.MoveAndInteractWithGadget(Vec2f(-11737.0, -3710.0), log=True)),
+            *_planner_vanquish_point_steps('TheElusiveGolemancer 6', [(-15108.84, -2793.48),(-16518.94, -662.78),]),
+            ('TheElusiveGolemancer 7', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)),
+            *_planner_vanquish_point_steps('TheElusiveGolemancer 8', [(-16898.24, -612.0), (-17391.0, -528.0), (-17597.36, 15027.91), (18755.0, -19827.0)]),
+            ('TheElusiveGolemancer 9', lambda: BT.WaitForMapLoad(map_id=659)),
+            ('TheElusiveGolemancer 10', lambda: BT.MoveAndInteractWithGadget(Vec2f(15979.0, -17531.0), log=True)),
+            ('TheElusiveGolemancer 11', lambda: _pacifist()),
+            *_planner_vanquish_point_steps('TheElusiveGolemancer 12', [(18031.51, -13929.63),(17886.86, -13218.39),]),
+            ('TheElusiveGolemancer 13', lambda: BT.MoveAndInteractWithGadget(Vec2f(15551.0, -13705.0), log=True)),
+            ('TheElusiveGolemancer 14', lambda: BT.Wait(3_000)),
+            ('TheElusiveGolemancer 11', lambda: _aggressive()),
+            *_planner_vanquish_point_steps('TheElusiveGolemancer 15', [(15551.0, -13705.0),(9928.16, -10998.24),(5953.36, -9815.89),(4531.82, -9827.91),(3035.53, -9450.54),(3485.59, -11380.60),],),
+            ('TheElusiveGolemancer 17', lambda: BT.MoveAndDialog((-229.0, -12033.0), 0x84)),
+            ('TheElusiveGolemancer 18', lambda: BT.Move(Vec2f(3176.96, -17026.31))),
+            ('TheElusiveGolemancer 19', lambda: BT.Wait(10_000)),
+            ('TheElusiveGolemancer 20', lambda: BT.MoveAndDialog((-2639.00, -15247.00), 0x84)),
+            ('TheElusiveGolemancer 21', lambda: BT.Move(Vec2f(3468.83, -16308.18))),
+            ('TheElusiveGolemancer 22', lambda: BT.Wait(10_000)),
+            ('TheElusiveGolemancer 23', lambda: _pacifist()),
+            ('TheElusiveGolemancer 24', lambda: BT.Move(Vec2f(5107.97, -17710.35))),
+            ('TheElusiveGolemancer 25', lambda: BT.FlagAllHeroes(5413.07, -19400.44)),
+            ('TheElusiveGolemancer 26', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS),max_distance=10_000.0,timeout_ms=10_000,allow_unassigned=True,interaction_interval_ms=500,log=True,),),
+            ('TheElusiveGolemancer 27', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
+            ('TheElusiveGolemancer 28', lambda: _pixel_stack()),
+            ('TheElusiveGolemancer 29', lambda: BT.Wait(5_000)),
+            ('TheElusiveGolemancer 30', lambda: BT.DropBundle(log=True)),
+            ('TheElusiveGolemancer 31', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS),max_distance=10_000.0,timeout_ms=10_000,allow_unassigned=True,interaction_interval_ms=500,log=True,),),
+            ('TheElusiveGolemancer 32', lambda: BT.Wait(1_000)),
+            ('TheElusiveGolemancer 33', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
+            ('TheElusiveGolemancer 34', lambda: _pixel_stack()),
+            ('TheElusiveGolemancer 35', lambda: BT.Wait(5_000)),
+            ('TheElusiveGolemancer 36', lambda: BT.DropBundle(log=True)),
+            ('TheElusiveGolemancer 37', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS),max_distance=10_000.0,timeout_ms=10_000,allow_unassigned=True,interaction_interval_ms=500,log=True,)),
+            ('TheElusiveGolemancer 38', lambda: BT.Wait(1_000)),
+            ('TheElusiveGolemancer 39', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
+            ('TheElusiveGolemancer 40', lambda: _pixel_stack()),
+            ('TheElusiveGolemancer 41', lambda: BT.Wait(5_000)),
+            ('TheElusiveGolemancer 42', lambda: BT.DropBundle(log=True)),
+            ('TheElusiveGolemancer 43', lambda: BT.VanquishNode([(6882.36, -20769.41), (6566.0, -21425.0)], clear_area_radius=Range.Earshot.value)),
+            ('TheElusiveGolemancer 44', lambda: BT.WaitForMapLoad(map_id=660)),
+            ('TheElusiveGolemancer 45', lambda: _aggressive()),
+            *_planner_vanquish_point_steps('TheElusiveGolemancer 46', [(-12164.0, 10409.53),(-12584.28, 13570.28),(-15062.15, 16139.62),(-18265.0, 13647.0),]),
+            ('TheElusiveGolemancer 46', lambda: BT.WaitForMapLoad(map_id=640)),
+        ]
+    
+def _steps_ALittleHelp() -> list[PlannerStep]:
+        return [
+('ALittleHelp 0', lambda: BT.MoveAndExitMap(Vec2f(20320,16861), target_map_id=501)),
+*_planner_vanquish_point_steps('ALittleHelp 1', [(-22469,-5887),(-12978,-8490),(2552,-9452),(9029,-9692),(14574,-9613)]),
+('ALittleHelp 2', lambda: BT.MoveAndDialog(Vec2f(17611.00, -9341.00), 8598532)),
+*_planner_vanquish_point_steps('ALittleHelp 3',[(8016,-10470),(1025,-8638),(-4327,-10132),(-8425,-12543),]),
+('ALittleHelp 4', lambda: BT.MoveAndExitMap(Vec2f(-8618,-14375), target_map_id=572)),
+*_planner_vanquish_point_steps('ALittleHelp 4',[(-5413,15875),(-15672,11827),(-10182,-115),(-16273,-5484),(-20039,-10133),(-21923,-9612),(-24115,-10567)]),
+('ALittleHelp 6', lambda: BT.WaitUntilOutOfCombat()),
+('ALittleHelp 7', lambda: BT.MoveAndDialog(Vec2f(-24216.00, -10563.00), 8598532)),
+('ALittleHelp 8', lambda: BT.Travel(target_map_name="Rata Sum")),
+('ALittleHelp 9', lambda: BT.MoveAndDialog(Vec2f(16051.00, 15183.00), 8598535)),
+('ALittleHelp 10', lambda: BT.SendDialog(132)),
+('ALittleHelp 11', lambda: BT.WaitForMapLoad(map_id=664)),
+('ALittleHelp 17', lambda: BT.Move(Vec2f(-16715.00, 8931.00))),
+('ALittleHelp 14', lambda: BT.FlagHero(1, -17880.37, 10046.01)),
+('ALittleHelp 15', lambda: BT.FlagHero(2, -17880.37, 10046.01)),
+('ALittleHelp 16', lambda: BT.FlagHero(3, -17880.37, 10046.01)),
+('ALittleHelp 17', lambda: BT.Move(Vec2f(-15538.57, 7641.21))),
+('ALittleHelp 18', lambda: BT.Wait(5000)),
+('ALittleHelp 18', lambda: BT.WaitForClearEnemiesInArea(-15538.57, 7641.21,stable_clear_ms=180_000, radius=Range.Spirit.value, log=True)),
+('ALittleHelp 19', lambda: BT.UnflagAllHeroes(log=True)),
+('ALittleHelp 20', lambda:BT.TargetAgentByName(agent_name='Sokka', log=True)),
+('ALittleHelp 21', lambda:BT.InteractTargetAndSendDialog(132)),
+('ALittleHelp 22', lambda: BT.DropBundle(log=True)),
+('ALittleHelp 23', lambda: BT.Wait(5000)),
+('ALittleHelp 21', lambda:BT.InteractTargetAndSendDialog(132)),
+('ALittleHelp 22', lambda: BT.DropBundle(log=True)),
 
 def _steps_HeartofTheShiverspeak() -> list[PlannerStep]:
     return [
