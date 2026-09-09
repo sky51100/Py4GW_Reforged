@@ -178,6 +178,41 @@ def _prepare_standard_party_full() -> BehaviorTree:
             ],
         )
 
+def _prepare_touch_team() -> BehaviorTree:
+    heroes = [
+            HeroType.Vekk.value,
+            HeroType.Ogden.value,
+            HeroType.Gwen.value,
+            HeroType.Olias.value,
+            HeroType.Xandra.value,
+            HeroType.Livia.value,
+            HeroType.PyreFierceshot.value
+        ]
+    templates = [
+            "OgNDwcnfO1CahWseAG/IkEdC",
+            "OwUTMwmCZaj4upB8ioLKDoHghAA",
+            "OQhkAsC8gFKTIc6lDMdyghQG4iB",
+            "OABCQsx0MTNUmQjohDN0ggAA",
+            "OAOjAyhDJPYTnp17xFOhmtkLGA",
+            "OAhjQwGc4QzM1QZCNiGO0QDCXMA",
+            "OgQUQ4DdXcN1QOhmA1IJGECHfDA"
+
+        ]
+    return BT.Sequence(
+            name="Prepare Standard EotN Party",
+            children=[
+                BT.CreateParty(
+                    hero_ids=heroes,
+                    multibox_invite=False,
+                    log=True,
+                ),
+                *[
+                    BT.LoadHeroSkillbar(index, template, log=True)
+                    for index, template in enumerate(templates, start=1)
+                ],
+            ],
+        )
+
 def _prepare_standard_party() -> BehaviorTree:
     heroes = [
         HeroType.Vekk.value,
@@ -2240,6 +2275,7 @@ def _steps_Jalis() -> list[PlannerStep]:
 ('Jalis 7 - Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-4575,5752), target_map_id=646)),
 ('Jalis 8 - Interact with Jalis', lambda: BT.MoveAndDialog(Vec2f(-6662.00, 6584.00), 0x63F)),
 ('Jalis 9 - Travel Eyes of The North', lambda: BT.Travel(642)),
+('Jalis 10 - Prepare Touch Team', lambda: _prepare_touch_team()),
 ('Jalis 10 - Exit Map', lambda: BT.MoveAndExitMap(Vec2f(1522.0, 464.0), target_map_id=499)),
 ('Jalis 11 - Navigate to Target Location', lambda: BT.Move([(-1797,-3176),(-8148,-3770),])),
 ('Jalis 12 - Enter to Battledepths', lambda: BT.MoveAndExitMap(Vec2f(-10224,-3758), target_map_id=625)),
@@ -2251,19 +2287,9 @@ def _steps_Jalis() -> list[PlannerStep]:
 
 HEART_BUDGER_MODEL_ID = 6230
 HEART_CYNDR_MODEL_ID = 6965
-HEART_CYNDR_XANDRA_HERO_POSITION = 6
+HEART_CYNDR_XANDRA_HERO_POSITION = 5
 HEART_CYNDR_BLACKBOARD_KEY = "heart_cyndr_agent_id"
-HEART_CYNDR_FORMATION_OFFSET_KEY = "heart_cyndr_formation_offset"
-HEART_CYNDR_REUSE_FORMATION_KEY = "heart_cyndr_reuse_current_formation"
-HEART_CYNDR_FORMATION_POSITIONS = (
-    Vec2f(-9960.0, -16320.0),
-    Vec2f(-8746.0, -17818.0),
-    Vec2f(-6887.0, -17740.0),
-    Vec2f(-5079.0, -16165.0),
-    Vec2f(-5854.0, -15261.0),
-    Vec2f(-7249.0, -15364.0),
-    Vec2f(-8617.0, -16346.0),
-)
+HEART_CYNDR_XANDRA_FLAG = Vec2f(-6814.0, -14431.0)
 
 
 def _heart_player_near(
@@ -2444,213 +2470,6 @@ def _heart_wait_for_cyndr(timeout_ms: int = 15_000) -> BehaviorTree:
     )
 
 
-def _heart_flag_cyndr_formation(*, advance: bool) -> BehaviorTree:
-    """Flag all seven heroes on distributed Cyndr positions.
-
-    This helper applies one distributed formation immediately. Continuous movement
-    during keg running is handled separately by _HeartCyndrRotateFormationEvery3sNode.
-    Death recovery reapplies the currently active assignment before restarting keg 1.
-    """
-
-    def _select_offset(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        raw_current = node.blackboard.get(HEART_CYNDR_FORMATION_OFFSET_KEY, None)
-        current = int(raw_current) if raw_current is not None else -1
-        reuse_current = bool(node.blackboard.get(HEART_CYNDR_REUSE_FORMATION_KEY, False))
-
-        if current < 0:
-            offset = 0
-        elif advance and not reuse_current:
-            offset = (current + 1) % len(HEART_CYNDR_FORMATION_POSITIONS)
-        else:
-            offset = current
-
-        node.blackboard[HEART_CYNDR_FORMATION_OFFSET_KEY] = offset
-        if advance:
-            node.blackboard[HEART_CYNDR_REUSE_FORMATION_KEY] = False
-
-        assignment = []
-        for hero_position in range(1, 8):
-            pos = HEART_CYNDR_FORMATION_POSITIONS[(hero_position - 1 + offset) % 7]
-            assignment.append(
-                f"H{hero_position}=({int(pos.x)},{int(pos.y)})"
-            )
-        ConsoleLog(
-            MODULE_NAME,
-            f"Heart: Cyndr formation offset {offset}: " + ", ".join(assignment),
-            log=True,
-        )
-        return BehaviorTree.NodeState.SUCCESS
-
-    def _offset_condition(expected: int) -> BehaviorTree:
-        def _check(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-            return (
-                BehaviorTree.NodeState.SUCCESS
-                if int(node.blackboard.get(HEART_CYNDR_FORMATION_OFFSET_KEY, -1)) == expected
-                else BehaviorTree.NodeState.FAILURE
-            )
-
-        return BehaviorTree(
-            BehaviorTree.ConditionNode(
-                name=f"Heart - Check Cyndr Formation Offset {expected}",
-                condition_fn=_check,
-            )
-        )
-
-    formation_choices = []
-    for offset in range(len(HEART_CYNDR_FORMATION_POSITIONS)):
-        children = [_offset_condition(offset)]
-        for hero_position in range(1, 8):
-            pos = HEART_CYNDR_FORMATION_POSITIONS[(hero_position - 1 + offset) % 7]
-            children.append(
-                BT.FlagHero(
-                    hero_position,
-                    pos.x,
-                    pos.y,
-                )
-            )
-        children.append(BT.Wait(400))
-        formation_choices.append(
-            BT.Sequence(
-                name=f"Heart - Apply Cyndr Formation Offset {offset}",
-                children=children,
-            )
-        )
-
-    return BT.Sequence(
-        name=(
-            "Heart - Rotate And Flag Cyndr Formation"
-            if advance
-            else "Heart - Reflag Current Cyndr Formation"
-        ),
-        children=[
-            BehaviorTree(
-                BehaviorTree.ActionNode(
-                    name="Heart - Select Cyndr Formation Offset",
-                    action_fn=_select_offset,
-                    aftercast_ms=0,
-                )
-            ),
-            BT.Selector(
-                name="Heart - Apply Selected Cyndr Formation",
-                children=formation_choices,
-            ),
-        ],
-    )
-
-
-class _HeartCyndrRotateFormationEvery3sNode(BehaviorTree.Node):
-    """Rotate every flagged hero to the next Cyndr room position every 3 seconds.
-
-    The seven positions form a ring.  Every shift increments one shared offset, so
-    H1->next spot, H2->next spot, ... H7->next spot simultaneously.  After seven
-    shifts every hero has occupied every position once and the pattern repeats.
-    """
-
-    def __init__(
-        self,
-        *,
-        interval_ms: int = 3_000,
-        name: str = "Heart - Rotate Cyndr Hero Formation Every 3s",
-    ) -> None:
-        super().__init__(
-            name=name,
-            node_type="CyndrHeroFormationRotation",
-            node_category="service",
-        )
-        self.interval_ms = max(250, int(interval_ms))
-        self.last_shift_ms = 0.0
-        self.shift_node: BehaviorTree.Node | None = None
-
-    def reset(self) -> None:
-        super().reset()
-        if self.shift_node is not None:
-            self.shift_node.reset()
-        self.shift_node = None
-        self.last_shift_ms = 0.0
-
-    def _build_shift_tree(self, offset: int) -> BehaviorTree:
-        children: list[BehaviorTree | BehaviorTree.Node] = []
-        for hero_position in range(1, 8):
-            pos = HEART_CYNDR_FORMATION_POSITIONS[
-                (hero_position - 1 + offset) % len(HEART_CYNDR_FORMATION_POSITIONS)
-            ]
-            children.append(BT.FlagHero(hero_position, pos.x, pos.y))
-
-        return BT.Sequence(
-            name=f"Heart - Shift Cyndr Formation To Offset {offset}",
-            children=children,
-        )
-
-    def _tick_impl(self) -> BehaviorTree.NodeState:
-        now_ms = time.monotonic() * 1000.0
-
-        # Let an in-progress batch of seven FlagHero commands finish first.
-        if self.shift_node is not None:
-            if self.blackboard is not None:
-                self.shift_node.blackboard = self.blackboard
-
-            state = self.shift_node.tick()
-            if state == BehaviorTree.NodeState.RUNNING:
-                return BehaviorTree.NodeState.RUNNING
-
-            self.shift_node.reset()
-            self.shift_node = None
-            self.last_shift_ms = now_ms
-            return BehaviorTree.NodeState.RUNNING
-
-        # The initial distributed formation is applied by the encounter sequence.
-        # Start the 3-second clock on the first service tick instead of immediately
-        # shifting everybody again.
-        if self.last_shift_ms <= 0.0:
-            self.last_shift_ms = now_ms
-            return BehaviorTree.NodeState.RUNNING
-
-        if now_ms - self.last_shift_ms < float(self.interval_ms):
-            return BehaviorTree.NodeState.RUNNING
-
-        current = 0
-        if self.blackboard is not None:
-            current = int(
-                self.blackboard.get(HEART_CYNDR_FORMATION_OFFSET_KEY, 0) or 0
-            )
-        next_offset = (current + 1) % len(HEART_CYNDR_FORMATION_POSITIONS)
-
-        if self.blackboard is not None:
-            self.blackboard[HEART_CYNDR_FORMATION_OFFSET_KEY] = next_offset
-            self.blackboard[HEART_CYNDR_REUSE_FORMATION_KEY] = False
-
-        ConsoleLog(
-            MODULE_NAME,
-            f"Heart: rotating all Cyndr heroes to formation offset {next_offset}.",
-            log=True,
-        )
-        self.shift_node = self._coerce_node(self._build_shift_tree(next_offset))
-        if self.blackboard is not None:
-            self.shift_node.blackboard = self.blackboard
-
-        return BehaviorTree.NodeState.RUNNING
-
-
-def _heart_cyndr_rotating_keg_phase() -> BehaviorTree:
-    """Deliver the three Cyndr kegs while all seven heroes rotate every 3 seconds."""
-    keg_sequence = BT.Sequence(
-        name="Heart - Deliver Three Cyndr Kegs",
-        children=[
-            _heart_deliver_cyndr_keg(1),
-            _heart_deliver_cyndr_keg(2),
-            _heart_deliver_cyndr_keg(3),
-        ],
-    )
-
-    return BehaviorTree(
-        _TickSidecarWhileMainRunningNode(
-            main=keg_sequence,
-            sidecar=BehaviorTree(_HeartCyndrRotateFormationEvery3sNode()),
-            name="Heart - Deliver Kegs While Rotating Hero Formation",
-        )
-    )
-
-
 def _heart_cyndr_is_dead() -> BehaviorTree:
     def _check(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
         agent_id = int(node.blackboard.get(HEART_CYNDR_BLACKBOARD_KEY, 0) or 0)
@@ -2679,139 +2498,6 @@ def _heart_cyndr_is_dead() -> BehaviorTree:
             condition_fn=_check,
         )
     )
-
-
-class _HeartCyndrDeathRecoveryNode(BehaviorTree.Node):
-    """Temporarily release every hero when the player dies, then rebuild keg setup.
-
-    Normal Cyndr rule keeps Xandra (hero position 6) permanently flagged. Death is
-    the only exception: all heroes are released so they can reach/resurrect the
-    player. Once the player is alive again, HeroAI is forced back to Pacifist, the
-    current distributed formation is restored, and the wrapped encounter is reset so
-    the carapace sequence restarts cleanly from keg 1.
-    """
-
-    def __init__(
-        self,
-        child: BehaviorTree | BehaviorTree.Node,
-        *,
-        name: str = "Heart - Cyndr Player Death Recovery",
-    ) -> None:
-        super().__init__(
-            name=name,
-            node_type="CyndrPlayerDeathRecovery",
-            node_category="decorator",
-        )
-        self.child = self._coerce_node(child)
-        self.recovering = False
-        self.recovery_node: BehaviorTree.Node | None = None
-
-    def get_children(self) -> list[BehaviorTree.Node]:
-        children = [self.child]
-        if self.recovery_node is not None:
-            children.append(self.recovery_node)
-        return children
-
-    def reset(self) -> None:
-        super().reset()
-        self.child.reset()
-        if self.recovery_node is not None:
-            self.recovery_node.reset()
-        self.recovery_node = None
-        self.recovering = False
-
-    @staticmethod
-    def _player_is_dead() -> bool:
-        player_id = int(Player.GetAgentID() or 0)
-        if player_id <= 0:
-            return False
-        try:
-            return bool(
-                Agent.IsDead(player_id)
-                or float(Agent.GetHealth(player_id) or 0.0) <= 0.001
-            )
-        except Exception:
-            return False
-
-    @staticmethod
-    def _release_all_heroes() -> None:
-        hero_count = int(GLOBAL_CACHE.Party.GetHeroCount() or 0)
-        for hero_position in range(1, hero_count + 1):
-            try:
-                GLOBAL_CACHE.Party.Heroes.UnflagHero(hero_position)
-            except Exception as exc:
-                ConsoleLog(
-                    MODULE_NAME,
-                    f"Heart: failed to unflag hero {hero_position} during death recovery: {exc}",
-                    log=True,
-                )
-
-    def _build_recovery_tree(self) -> BehaviorTree:
-        return BT.Sequence(
-            name="Heart - Restore Cyndr Keg Setup After Resurrection",
-            children=[
-                # The player may have died during an Aggressive DPS window.
-                # Disable combat again before rebuilding the keg formation.
-                _pacifist(),
-                _heart_flag_cyndr_formation(advance=False),
-                BT.Wait(750),
-            ],
-        )
-
-    def _tick_impl(self) -> BehaviorTree.NodeState:
-        if self.blackboard is not None:
-            self.child.blackboard = self.blackboard
-
-        if self._player_is_dead():
-            if not self.recovering:
-                self.recovering = True
-                self.child.reset()
-                self._release_all_heroes()
-                ConsoleLog(
-                    MODULE_NAME,
-                    (
-                        "Heart: player died during Cyndr. All heroes, including "
-                        "Xandra, were temporarily unflagged for resurrection."
-                    ),
-                    log=True,
-                )
-            return BehaviorTree.NodeState.RUNNING
-
-        if self.recovering:
-            if self.recovery_node is None:
-                self.recovery_node = self._coerce_node(self._build_recovery_tree())
-
-            if self.blackboard is not None:
-                self.recovery_node.blackboard = self.blackboard
-
-            recovery_state = self.recovery_node.tick()
-            if recovery_state == BehaviorTree.NodeState.SUCCESS:
-                self.recovery_node.reset()
-                self.recovery_node = None
-                self.recovering = False
-                if self.blackboard is not None:
-                    self.blackboard[HEART_CYNDR_REUSE_FORMATION_KEY] = True
-                self.child.reset()
-                ConsoleLog(
-                    MODULE_NAME,
-                    (
-                        "Heart: player resurrected. HeroAI is Pacifist, the current "
-                        "distributed formation is restored, and the Cyndr keg cycle "
-                        "restarts from keg 1."
-                    ),
-                    log=True,
-                )
-                return BehaviorTree.NodeState.RUNNING
-
-            if recovery_state == BehaviorTree.NodeState.FAILURE:
-                # Keep trying the small recovery setup locally instead of failing
-                # the planner step because of a transient flag/config call.
-                self.recovery_node.reset()
-
-            return BehaviorTree.NodeState.RUNNING
-
-        return self.child.tick()
-
 
 
 HEART_CYNDR_XANDRA_SKILL_SEQUENCE = (2, 1, 3, 4, 5, 6)
@@ -2999,300 +2685,74 @@ def _heart_xandra_cyndr_skill_sequence() -> BehaviorTree:
     )
 
 def _heart_unflag_cyndr_dps_heroes() -> BehaviorTree:
-    """Release every hero except Xandra (party hero position 6)."""
+    """Unflag every Touch-team hero except Xandra."""
 
-    def _unflag(hero_position: int) -> BehaviorTree:
-        def _action() -> BehaviorTree.NodeState:
-            hero_count = int(GLOBAL_CACHE.Party.GetHeroCount() or 0)
-            if hero_position <= 0 or hero_position > hero_count:
-                return BehaviorTree.NodeState.SUCCESS
+    def _apply() -> BehaviorTree.NodeState:
+        hero_count = int(GLOBAL_CACHE.Party.GetHeroCount() or 0)
+        failed = False
+
+        for hero_position in range(1, hero_count + 1):
             if hero_position == HEART_CYNDR_XANDRA_HERO_POSITION:
-                return BehaviorTree.NodeState.SUCCESS
-
+                continue
             try:
                 GLOBAL_CACHE.Party.Heroes.UnflagHero(hero_position)
-                return BehaviorTree.NodeState.SUCCESS
             except Exception as exc:
+                failed = True
                 ConsoleLog(
                     MODULE_NAME,
                     f"Heart: failed to unflag hero {hero_position}: {exc}",
                     log=True,
                 )
-                return BehaviorTree.NodeState.FAILURE
 
-        return BehaviorTree(
-            BehaviorTree.ActionNode(
-                name=f"Heart - Unflag Cyndr DPS Hero {hero_position}",
-                action_fn=_action,
-                aftercast_ms=100,
-            )
+        return (
+            BehaviorTree.NodeState.FAILURE
+            if failed
+            else BehaviorTree.NodeState.SUCCESS
         )
-
-    return BT.Sequence(
-        name="Heart - Release Cyndr DPS Heroes Keep Xandra Flagged",
-        children=[
-            _unflag(1),
-            _unflag(2),
-            _unflag(3),
-            _unflag(4),
-            _unflag(5),
-            _unflag(7),
-            BT.Wait(250),
-        ],
-    )
-
-
-HEART_CYNDR_KEG_DROP_RANGE = 220.0
-HEART_CYNDR_KEG_APPROACH_TIMEOUT_MS = 12_000
-HEART_CYNDR_KEG_REPATH_INTERVAL_MS = 300
-
-
-def _heart_move_into_cyndr_keg_range(
-    *,
-    keg_number: int,
-    attempt: int,
-) -> BehaviorTree:
-    """Approach Cyndr without ever trying to stand on his exact coordinates.
-
-    MoveToModelID chases the agent centre and can orbit forever around a large boss
-    because that exact point is inside the collision body.  This node instead tracks
-    Cyndr dynamically and succeeds as soon as the player is close enough to drop a
-    powder keg.
-    """
-
-    state = {
-        "started_ms": 0.0,
-        "last_move_ms": 0.0,
-    }
-
-    def _reset_state() -> None:
-        state["started_ms"] = 0.0
-        state["last_move_ms"] = 0.0
-
-    def _approach() -> BehaviorTree.NodeState:
-        now_ms = time.monotonic() * 1000.0
-        if state["started_ms"] <= 0.0:
-            state["started_ms"] = now_ms
-
-        player_id = int(Player.GetAgentID() or 0)
-        if player_id <= 0 or Agent.IsDead(player_id):
-            _reset_state()
-            return BehaviorTree.NodeState.FAILURE
-
-        # If Cyndr destroys the carried keg on the way, immediately fail this local
-        # attempt so the selector can fetch another one instead of running empty.
-        if not Agent.IsHoldingItem(player_id):
-            _reset_state()
-            return BehaviorTree.NodeState.FAILURE
-
-        cyndr_id = _heart_find_agent_by_model_id(HEART_CYNDR_MODEL_ID)
-        if cyndr_id <= 0:
-            if now_ms - state["started_ms"] >= HEART_CYNDR_KEG_APPROACH_TIMEOUT_MS:
-                _reset_state()
-                return BehaviorTree.NodeState.FAILURE
-            return BehaviorTree.NodeState.RUNNING
-
-        try:
-            player_x, player_y = Player.GetXY()
-            cyndr_x, cyndr_y = Agent.GetXY(cyndr_id)
-        except Exception:
-            return BehaviorTree.NodeState.RUNNING
-
-        dx = float(player_x) - float(cyndr_x)
-        dy = float(player_y) - float(cyndr_y)
-        distance_sq = dx * dx + dy * dy
-
-        if distance_sq <= HEART_CYNDR_KEG_DROP_RANGE * HEART_CYNDR_KEG_DROP_RANGE:
-            ConsoleLog(
-                MODULE_NAME,
-                (
-                    f"Heart: keg {keg_number} attempt {attempt} reached Cyndr "
-                    f"drop range ({distance_sq ** 0.5:.0f} <= "
-                    f"{HEART_CYNDR_KEG_DROP_RANGE:.0f})."
-                ),
-                log=True,
-            )
-            _reset_state()
-            return BehaviorTree.NodeState.SUCCESS
-
-        if now_ms - state["started_ms"] >= HEART_CYNDR_KEG_APPROACH_TIMEOUT_MS:
-            ConsoleLog(
-                MODULE_NAME,
-                f"Heart: keg {keg_number} approach to Cyndr timed out.",
-                log=True,
-            )
-            _reset_state()
-            return BehaviorTree.NodeState.FAILURE
-
-        if now_ms - state["last_move_ms"] >= HEART_CYNDR_KEG_REPATH_INTERVAL_MS:
-            # Keep tracking Cyndr's current position.  We intentionally issue the
-            # move toward the boss, but success is based on distance, not arrival at
-            # the boss centre, so collision can no longer keep this node RUNNING.
-            Player.Move(float(cyndr_x), float(cyndr_y))
-            state["last_move_ms"] = now_ms
-
-        return BehaviorTree.NodeState.RUNNING
 
     return BehaviorTree(
         BehaviorTree.ActionNode(
-            name=f"Heart - Cyndr Keg {keg_number} Approach Within Drop Range",
-            action_fn=_approach,
-            aftercast_ms=0,
+            name="Heart - Unflag All Touch Heroes Except Xandra",
+            action_fn=_apply,
+            aftercast_ms=250,
         )
     )
 
 
-def _heart_deliver_cyndr_keg(keg_number: int) -> BehaviorTree:
-    """Fetch and deliver one keg; retry locally if the runner loses it en route."""
-
-    def _attempt(attempt: int) -> BehaviorTree:
-        return BT.Sequence(
-            name=f"Heart - Cyndr Keg {keg_number} Attempt {attempt}",
-            children=[
-                BT.MoveAndInteractByModelID(
-                    HEART_BUDGER_MODEL_ID,
-                    log=True,
-                ),
-                _heart_wait_bundle_state(
-                    holding=True,
-                    timeout_ms=5_000,
-                    name=f"Heart - Cyndr Keg {keg_number} Wait For Pickup",
-                ),
-                _heart_move_into_cyndr_keg_range(
-                    keg_number=keg_number,
-                    attempt=attempt,
-                ),
-                _heart_wait_bundle_state(
-                    holding=True,
-                    timeout_ms=500,
-                    name=f"Heart - Cyndr Keg {keg_number} Verify Still Carried",
-                ),
-                BT.DropBundle(log=True),
-                _heart_wait_bundle_state(
-                    holding=False,
-                    timeout_ms=2_000,
-                    name=f"Heart - Cyndr Keg {keg_number} Verify Drop",
-                ),
-                BT.Wait(3_250),
-            ],
-        )
-
-    return BT.Selector(
-        name=f"Heart - Deliver Cyndr Keg {keg_number}",
-        children=[
-            _attempt(1),
-            _attempt(2),
-            _attempt(3),
-        ],
-    )
-
-
-def _heart_wait_cyndr_dps_until_dead_or_stalled(
-    *,
-    stall_ms: int = 4_500,
-    timeout_ms: int = 30_000,
-) -> BehaviorTree:
-    state: dict[str, float | int | None] = {
-        "last_hp": None,
-        "last_progress_ms": None,
-    }
-
-    def _check(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        agent_id = int(node.blackboard.get(HEART_CYNDR_BLACKBOARD_KEY, 0) or 0)
-        if agent_id <= 0:
-            return BehaviorTree.NodeState.RUNNING
-
-        living = Agent.GetLivingAgentByID(agent_id)
-        if living is None:
-            return BehaviorTree.NodeState.RUNNING
-
-        if Agent.IsDead(agent_id):
-            return BehaviorTree.NodeState.SUCCESS
-
-        hp = float(Agent.GetHealth(agent_id) or 0.0)
-        if hp <= 0.001:
-            return BehaviorTree.NodeState.SUCCESS
-
-        now = int(Utils.GetBaseTimestamp())
-        last_hp = state["last_hp"]
-        if last_hp is None:
-            state["last_hp"] = hp
-            state["last_progress_ms"] = now
-            return BehaviorTree.NodeState.RUNNING
-
-        if hp < float(last_hp) - 0.001:
-            state["last_progress_ms"] = now
-
-        state["last_hp"] = hp
-        last_progress_ms = int(state["last_progress_ms"] or now)
-
-        if now - last_progress_ms >= max(1_000, int(stall_ms)):
-            ConsoleLog(
-                MODULE_NAME,
-                "Heart: Cyndr HP stopped falling; assuming the carapace is active again.",
-                log=True,
-            )
-            return BehaviorTree.NodeState.SUCCESS
-
-        return BehaviorTree.NodeState.RUNNING
-
+def _heart_wait_until_cyndr_dead(timeout_ms: int = 10 * 60_000) -> BehaviorTree:
+    """Wait for the Touch team to kill Cyndr without using powder kegs."""
     return BehaviorTree(
-        BehaviorTree.WaitUntilNode(
-            name="Heart - Cyndr DPS Until Dead Or Carapace Returns",
-            condition_fn=_check,
-            throttle_interval_ms=250,
+        BehaviorTree.RepeaterUntilSuccessNode(
+            name="Heart - Wait Until Cyndr Is Dead",
+            child=BT.Node(_heart_cyndr_is_dead()),
             timeout_ms=max(0, int(timeout_ms)),
         )
     )
 
 
 def _heart_cyndr_encounter() -> BehaviorTree:
-    cycle = BT.Selector(
-        name="Heart - Cyndr Dead Or Run Combat Cycle",
+    """Defeat Cyndr with the validated Touch team.
+
+    Boss powder-keg mechanics are intentionally not used here. Xandra stays
+    fixed in the room and performs the requested 2 -> 1 -> 3 -> 4 -> 5 -> 6
+    sequence once. Every other hero is explicitly unflagged so HeroAI can
+    freely engage Cyndr and can also reach the player for resurrection.
+    """
+    return BT.Sequence(
+        name="Heart - Defeat Cyndr With Touch Team",
         children=[
-            _heart_cyndr_is_dead(),
-            BT.Sequence(
-                name="Heart - Cyndr Carapace And DPS Cycle",
-                children=[
-                    # Absolute rule during keg running: no HeroAI combat.
-                    _pacifist(),
-                    # Start/restart from the currently selected distributed formation.
-                    # Formation movement itself is continuous during the keg phase:
-                    # every 3 seconds all seven heroes advance to the next room spot.
-                    _heart_flag_cyndr_formation(advance=False),
-                    # Keep the formation still while Xandra executes the strict manual
-                    # setup order so FlagHero movement cannot interrupt her casts.
-                    _heart_xandra_cyndr_skill_sequence(),
-                    _heart_cyndr_rotating_keg_phase(),
-                    _heart_unflag_cyndr_dps_heroes(),
-                    _aggressive(),
-                    BT.TargetAgentByModelID(HEART_CYNDR_MODEL_ID, log=True),
-                    _heart_wait_cyndr_dps_until_dead_or_stalled(),
-                    BT.Selector(
-                        name="Heart - Cyndr Cycle Result",
-                        children=[
-                            _heart_cyndr_is_dead(),
-                            BT.Failer(name="Heart - Cyndr Carapace Returned Retry Kegs"),
-                        ],
-                    ),
-                ],
+            _aggressive(),
+            _heart_unflag_cyndr_dps_heroes(),
+            BT.FlagHero(
+                HEART_CYNDR_XANDRA_HERO_POSITION,
+                HEART_CYNDR_XANDRA_FLAG.x,
+                HEART_CYNDR_XANDRA_FLAG.y,
             ),
+            BT.Wait(400),
+            BT.TargetAgentByModelID(HEART_CYNDR_MODEL_ID, log=True),
+            _heart_xandra_cyndr_skill_sequence(),
+            _heart_wait_until_cyndr_dead(),
         ],
-    )
-
-    encounter_loop = BehaviorTree(
-        BehaviorTree.RepeaterUntilSuccessNode(
-            name="Heart - Repeat Cyndr Cycles Until Dead",
-            child=BT.Node(cycle),
-            timeout_ms=10 * 60_000,
-        )
-    )
-
-    return BehaviorTree(
-        _HeartCyndrDeathRecoveryNode(
-            encounter_loop,
-            name="Heart - Cyndr Encounter With Player Death Recovery",
-        )
     )
 
 
@@ -3327,7 +2787,7 @@ def _steps_HeartofTheShiverspeak() -> list[PlannerStep]:
             lambda: _heart_destroy_wall(
                 name='Heart Wall 3',
                 wall_pos=Vec2f(1273,-17228),
-                verify_pos=Vec2f(828,-16794),
+                verify_pos=Vec2f(728,-16696),
             ),
         ),
         *_planner_vanquish_point_steps('HeartofTheShiverspeak - 12 Vanquish Route 04', [(828,-16794),(-722,-14645),(-1331,-13489),(-4122,-10775),]),
@@ -3342,6 +2802,49 @@ def _steps_HeartofTheShiverspeak() -> list[PlannerStep]:
         ('HeartofTheShiverspeak - 14 Move to Cyndr Room', lambda: BT.Move([(-5499,-11675),(-6779,-14780)], pause_on_combat=False)),
         ('HeartofTheShiverspeak - 15 Wait For Cyndr', lambda: _heart_wait_for_cyndr()),
         ('HeartofTheShiverspeak - 16 Defeat Cyndr', lambda: _heart_cyndr_encounter()),
+        ('HeartofTheShiverspeak - 17 Exit Level 3', lambda: BT.MoveAndInteract(Vec2f(-5739.00, -17127.00))),
+        ('HeartofTheShiverspeak - 18 Move To Exit', lambda: BT.MoveAndInteract(Vec2f(-6592.00, -16928.00),)),
+        ('HeartofTheShiverspeak - 19 Wait For Map Change', lambda: BT.WaitForMapToChange(map_id=625, timeout_ms=190_000)),
+        ('HeartofTheShiverspeak - 20 Talk to Jalis', lambda: BT.MoveAndDialog(Vec2f(-4874.00, 17584.00),0x833107)),
+        ('HeartofTheShiverspeak - 21 Talk to Jalis for next step', lambda: BT.SendDialog(0x84)),
+    ]
+
+def _steps_DestructionsDepth() -> list[PlannerStep]:
+    return [
+        ('DestructionsDepth - 01 Wait for map change', lambda: BT.WaitForMapToChange(map_id=670)),
+        ('DestructionsDepth - 02 Move and interact with golem 1', lambda: BT.MoveAndDialog(Vec2f(14875.00, -577.00),0x88)),
+        ('DestructionsDepth - 10 Change Golem Type', lambda: BT.MoveAndDialog(Vec2f(14875.00, -577.00),0x85)),
+        ('DestructionsDepth - 03 Wait mana', lambda: BT.Wait(5000)),
+        ('DestructionsDepth - 03 Move and interact with golem 2', lambda: BT.MoveAndDialog(Vec2f(14615.07, -518.46),0x88)),
+        ('DestructionsDepth - 03 Wait mana', lambda: BT.Wait(5000)),
+        ('DestructionsDepth - 04 Move and interact with golem 3', lambda: BT.MoveAndDialog(Vec2f(14206.00, -373.00),0x88)),
+        *_planner_vanquish_point_steps('DestructionsDepth - 05 Vanquish Route', [(13838,-1004),(9735,-795),(6821,-1560),(7233,-4327),(4614,-3797),]),
+        ('DestructionsDepth - 06 Wait open door', lambda: BT.Wait(15000)),
+        *_planner_vanquish_point_steps('DestructionsDepth - 07 Vanquish Route', [(1602,-4001),(531,-5912),(-2602,-7593),(-3055,-9348),(-2090,-14031),(-5409,-16717),(-8116,-16917),]),
+        ('DestructionsDepth - 08 Move and exit', lambda: BT.MoveAndExitMap(Vec2f(-7550,-18381),target_map_id=671)),
+        ('DestructionsDepth - 09 Move and interact with golem 1', lambda: BT.MoveAndDialog(Vec2f(1863.00, 2429.00),0x88)),
+        ('DestructionsDepth - 10 Change Golem Type', lambda: BT.MoveAndDialog(Vec2f(1863.00, 2429.00),0x85)),
+        ('DestructionsDepth - 10 Wait mana', lambda: BT.Wait(5000)),
+        ('DestructionsDepth - 11 Move and interact with golem 2', lambda: BT.MoveAndDialog(Vec2f(2115.00, 2518.00),0x88)),
+        ('DestructionsDepth - 12 Wait mana', lambda: BT.Wait(5000)),
+        ('DestructionsDepth - 13 Move and interact with golem 3', lambda: BT.MoveAndDialog(Vec2f(2333.00, 2556.00),0x88)),
+        *_planner_vanquish_point_steps('DestructionsDepth - 14 Vanquish Route', [(5039,2032),(5939,152),(7203,-3396),(5053,-7207),]),
+        ('DestructionsDepth - 15 Clear Area', lambda: BT.ClearEnemiesInArea(Vec2f(5053,-7207),radius=Range.Compass.value,)),
+        ('DestructionsDepth - 16 Wait for Clear Enemies', lambda: BT.WaitForClearEnemiesInArea(5053,-7207, radius=Range.Compass.value, stable_clear_ms=60_000,)),
+        *_planner_vanquish_point_steps('DestructionsDepth - 17 Vanquish Route', [(7318,-3547),(12260,-3868),(14750,-5535),(15423,-17214),]),
+        ('DestructionsDepth - 18 Move and exit', lambda: BT.MoveAndExitMap(Vec2f(15474,-18742),target_map_id=672)),
+        ('DestructionsDepth - 19 Move and interact with golem 1', lambda: BT.MoveAndDialog(Vec2f(-40.00, 3742.00),0x88)),
+        ('DestructionsDepth - 20 Change Golem Type', lambda: BT.MoveAndDialog(Vec2f(-40.00, 3742.00),0x85)),
+        ('DestructionsDepth - 20 Wait mana', lambda: BT.Wait(5000)),
+        ('DestructionsDepth - 21 Move and interact with golem 2', lambda: BT.MoveAndDialog(Vec2f(331.00, 3745.00),0x88)),
+        ('DestructionsDepth - 22 Change Golem Type', lambda: BT.MoveAndDialog(Vec2f(331.00, 3745.00),0x85)),
+        ('DestructionsDepth - 22 Wait mana', lambda: BT.Wait(5000)),
+        ('DestructionsDepth - 23 Move and interact with golem 3', lambda: BT.MoveAndDialog(Vec2f(-369.00, 3750.00),0x88)),
+        *_planner_vanquish_point_steps('DestructionsDepth - 24 Vanquish Route', [(-1781,3491),(-1056,4167),(1150,4138),(2034,3173),(934,1862),(1386,656),(-664,370),]),
+        ('DestructionsDepth - 25 Wait for Map Change', lambda: BT.WaitForMapToChange(map_id=652)),
+        
+
+
     ]
 
 # ---------------------------------------------------------------------------
@@ -3737,6 +3240,7 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
         *_steps_ALittleHelp(),
         *_steps_Jalis(),
         *_steps_HeartofTheShiverspeak(),
+        *_steps_DestructionsDepth()
     ]
 
 
