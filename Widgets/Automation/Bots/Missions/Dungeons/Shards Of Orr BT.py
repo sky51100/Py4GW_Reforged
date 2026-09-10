@@ -2730,13 +2730,21 @@ def _torch_aware_combat_node(
     def _tick(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
         nonlocal combat_tree, drop_tree
 
-        # Keep carrying the torch while travelling.  A martial leader releases
-        # it only once a living enemy reaches the combat trigger radius.
-        if (
+        # Drop the torch as soon as the BT enters combat. With pause_on_combat=True,
+        # movement stops when COMBAT_ACTIVE is set, so waiting only for the player
+        # to enter the close trigger radius can deadlock a martial build at range.
+        combat_active = bool(node.blackboard.get("COMBAT_ACTIVE", False))
+
+        should_drop_torch = (
             _resolve_torch_combat_policy()
             and _is_holding_bundle()
-            and _enemy_in_torch_combat_range(trigger_radius)
-        ):
+            and (
+                combat_active
+                or _enemy_in_torch_combat_range(trigger_radius)
+            )
+        )
+
+        if should_drop_torch:
             if drop_tree is None:
                 drop_tree = DropTorchForCombat(log=True)
 
@@ -2773,7 +2781,7 @@ def TorchAwareVanquish(
     points: Sequence[PathPoint],
     name: str,
     *,
-    clear_area_radius: float = Range.Spellcast.value,
+    clear_area_radius: float = Range.Spirit.value,
     pause_on_combat: bool | None = None,
     flag_heroes_to_waypoint: bool = False,
     move_tolerance: float = 500.0,
