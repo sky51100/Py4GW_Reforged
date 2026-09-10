@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 import os
+import time
 
 import PyImGui
 import PySystem
 
-from Py4GWCoreLib import Agent, GLOBAL_CACHE, ImGui, Player
+from Py4GWCoreLib import Agent, AgentArray, GLOBAL_CACHE, ImGui, Item, Player
 from Py4GWCoreLib.BottingTree import BottingTree
+from Py4GWCoreLib.enums_src.GameData_enums import Range
+from Py4GWCoreLib.enums_src.GameData_enums import Range
 from Py4GWCoreLib.enums_src.Model_enums import ModelID
 from Py4GWCoreLib.native_src.internals.types import Vec2f
 from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
@@ -17,8 +20,9 @@ from Sources.ApoSource.ApoBottingLib import wrappers as BT
 BOT_NAME = "Skills Unlocker BT"
 MODULE_NAME = BOT_NAME
 
+
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-TEXTURE = os.path.join(MODULE_DIR, "skills_unlocker.png")
+TEXTURE = os.path.join(PySystem.Console.get_projects_path(), 'Assets', 'Textures', 'Module_Icons',  "eotn_skill.png")
 ICONS_PATH = os.path.join(MODULE_DIR, "icons")
 MAP_TIMEOUT_MS = 190_000
 MODULE_ICON = "Assets\\Textures\\Module_Icons\\eotn_skill.png"
@@ -60,6 +64,7 @@ initialized = False
 _route_skill_index = 0
 _route_step_index = 0
 _route_previous_skill_index = -1
+_show_route_controls = False
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +445,21 @@ ASURAN_SCAN_PATH_01 = (
     (3360.7, 1463.1),
 )
 
+# Asuran Scan / Facet of Death
+ASURAN_SCAN_FACET_MODEL_ID = 6325
+ASURAN_SCAN_FACET_KNOWN_SPAWN_01 = (3507.0, 1502.0)
+
+# Keep the complete legacy search route and finish on the exact observed spawn.
+ASURAN_SCAN_FACET_PATH_01 = (
+    *ASURAN_SCAN_PATH_01,
+    ASURAN_SCAN_FACET_KNOWN_SPAWN_01,
+)
+
+ASURAN_SCAN_FACET_SPAWN_INDICES = (
+    len(ASURAN_SCAN_FACET_PATH_01) - 1,
+)
+
+
 RADIATION_FIELD_PATH_01 = (
     (-21603.1, 8285.9),
     (-21798.3, 9288.2),
@@ -604,6 +624,29 @@ TECHNOBABBLE_PATH3_03 = (
     (1026.8, -7039.6),
 )
 
+# Technobabble / Facet of Illusions
+TECHNOBABBLE_FACET_MODEL_ID = 6327
+TECHNOBABBLE_FACET_KNOWN_SPAWN_01 = (6200.58, 13964.41)
+
+# One continuous search route.  The known Facet spawn is inserted directly
+# into the first leg so the player gets close enough to force the reveal.
+_TECHNOBABBLE_PATH1_WITH_SPAWN = (
+    *TECHNOBABBLE_PATH1_01[:14],
+    TECHNOBABBLE_FACET_KNOWN_SPAWN_01,
+    *TECHNOBABBLE_PATH1_01[14:],
+)
+
+TECHNOBABBLE_FACET_PATH_01 = (
+    *_TECHNOBABBLE_PATH1_WITH_SPAWN,
+    # Return along the same corridor without duplicating the western endpoint.
+    *TECHNOBABBLE_PATH2_02[1:],
+    *TECHNOBABBLE_PATH3_03,
+)
+
+# Index of the exact known spawn in the unified route.
+TECHNOBABBLE_FACET_SPAWN_INDICES = (14,)
+
+
 PAIN_INVERTER_PATH_01 = (
     (14323.3, 10846.0),
     (12813.3, 10172.5),
@@ -639,6 +682,66 @@ PAIN_INVERTER_PATH_01 = (
     (371.6, -11782.2),
     (-149.9, -10277.5),
 )
+
+# Smooth Criminal: one continuous route visiting all three possible Facet spawns.
+# The spawn indices are zero-based indices into this single path.  Keeping the
+# three spawn coordinates inside the path avoids maintaining duplicate XY lists.
+# Radiation Field / The Cipher of Dwayna
+# Facet of Existence
+RADIATION_FIELD_FACET_MODEL_ID = 6324
+RADIATION_FIELD_FACET_PATH_01 = (
+    *RADIATION_FIELD_PATH_01,
+    (-5226.4, -2772.8),  # old final approach, now part of the same search path
+)
+# Exact intermediate spawn indices are intentionally not guessed. Detection is
+# continuous over the whole route; the final approach gets the legacy reveal wait.
+RADIATION_FIELD_FACET_SPAWN_INDICES = (
+    len(RADIATION_FIELD_FACET_PATH_01) - 1,
+)
+
+
+MENTAL_BLOCK_FACET_MODEL_ID = 6323
+MENTAL_BLOCK_FACET_PATH_01 = (
+    (-9761.0, -8000.0),     # possible Facet spawn 1
+    (7833.0, -8293.0),      # possible Facet spawn 2
+    (11690.0, -6215.0),     # possible Facet spawn 3
+    (15918.0, -2667.0),     # possible Facet spawn 4
+)
+MENTAL_BLOCK_FACET_SPAWN_INDICES = (0, 1, 2, 3)
+
+
+SMOOTH_CRIMINAL_FACET_MODEL_ID = 6328
+SMOOTH_CRIMINAL_FACET_PATH_01 = (
+    (17024.0, -600.0),
+    (18237.0, 6691.0),
+    (15518.0, 8375.0),
+    (13200.0, 15000.0),     # possible Facet spawn 1
+    (19516.0, 4686.0),
+    (12184.0, 370.0),
+    (4802.0, -4990.0),
+    (-8760.0, -3378.0),
+    (-5555.0, -2108.0),
+    (-6678.0, 6477.0),      # possible Facet spawn 2
+    (-8860.0, -3178.0),
+    (-11202.0, 758.0),      # possible Facet spawn 3
+)
+SMOOTH_CRIMINAL_FACET_SPAWN_INDICES = (3, 9, 11)
+
+
+# Pain Inverter / Facet of Spirit
+PAIN_INVERTER_FACET_MODEL_ID = 6326
+PAIN_INVERTER_FACET_KNOWN_SPAWN_01 = (4317.0, 3352.0)
+
+# Keep the legacy route, but explicitly pass through the observed Facet spawn.
+# The spawn is inserted after the nearby (3324, 2520.8) point.
+PAIN_INVERTER_FACET_PATH_01 = (
+    *PAIN_INVERTER_PATH_01[:16],
+    PAIN_INVERTER_FACET_KNOWN_SPAWN_01,
+    *PAIN_INVERTER_PATH_01[16:],
+)
+
+PAIN_INVERTER_FACET_SPAWN_INDICES = (16,)
+
 
 PREVIOUS_SKILLS_PATH_01 = (
     (-21603.1, 8285.9),
@@ -1027,6 +1130,367 @@ def _movement_point_steps(name: str, points: Sequence[PathPoint]) -> list[Planne
     return result
 
 
+def _facet_path_search_and_kill(
+    *,
+    name: str,
+    model_id: int,
+    path: Sequence[PathPoint],
+    spawn_point_indices: Sequence[int],
+    spawn_wait_ms: int = 6_000,
+    kill_timeout_ms: int = 120_000,
+    dead_confirm_ms: int = 2_500,
+) -> BehaviorTree:
+    """Follow a route until the requested Facet appears, then kill it.
+
+    The Facet is searched by *model_id* on every tree tick, including while a
+    VanquishNode waypoint is still running.  Reaching a known spawn point starts a
+    short stationary reveal window because some Facets take a few seconds to
+    appear when the player first reaches their hiding place.
+
+    This node returns SUCCESS only after the matching Facet has actually been
+    observed and Agent.IsDead() has remained true for ``dead_confirm_ms``.
+    Reaching the end of the route without that confirmation returns FAILURE, so
+    the planner can never continue to the following Resign step by mistake.
+    """
+    point_list = list(path)
+    spawn_indices = {int(index) for index in spawn_point_indices}
+
+    state: dict[str, object] = {
+        "point_index": 0,
+        "move_tree": None,
+        "wait_started_ms": 0.0,
+        "facet_agent_id": 0,
+        "facet_seen": False,
+        "facet_seen_alive": False,
+        "kill_started_ms": 0.0,
+        "dead_started_ms": 0.0,
+        "last_target_ms": 0.0,
+        "route_combat_hold": False,
+        "route_clear_started_ms": 0.0,
+    }
+
+    def _reset_state() -> None:
+        move_tree = state.get("move_tree")
+        if isinstance(move_tree, BehaviorTree):
+            try:
+                move_tree.reset()
+            except Exception:
+                pass
+
+        state["point_index"] = 0
+        state["move_tree"] = None
+        state["wait_started_ms"] = 0.0
+        state["facet_agent_id"] = 0
+        state["facet_seen"] = False
+        state["facet_seen_alive"] = False
+        state["kill_started_ms"] = 0.0
+        state["dead_started_ms"] = 0.0
+        state["last_target_ms"] = 0.0
+        state["route_combat_hold"] = False
+        state["route_clear_started_ms"] = 0.0
+
+    def _matching_facet() -> tuple[int, bool] | None:
+        """Return (agent_id, is_dead), preferring a living matching Facet."""
+        dead_match: tuple[int, bool] | None = None
+
+        try:
+            enemy_ids = AgentArray.GetEnemyArray()
+        except Exception:
+            enemy_ids = []
+
+        for raw_agent_id in enemy_ids:
+            try:
+                agent_id = int(raw_agent_id)
+                if int(Agent.GetModelID(agent_id) or 0) != int(model_id):
+                    continue
+
+                is_dead = bool(Agent.IsDead(agent_id))
+                if not is_dead:
+                    return agent_id, False
+
+                dead_match = (agent_id, True)
+            except Exception:
+                continue
+
+        return dead_match
+
+    def _stop_current_move() -> None:
+        move_tree = state.get("move_tree")
+        if isinstance(move_tree, BehaviorTree):
+            try:
+                move_tree.reset()
+            except Exception:
+                pass
+        state["move_tree"] = None
+
+        # Cancel the last click-to-move destination before HeroAI takes over.
+        try:
+            px, py = Player.GetXY()
+            Player.Move(float(px), float(py))
+        except Exception:
+            pass
+
+    def _begin_facet_combat(agent_id: int, now_ms: float) -> None:
+        first_detection = not bool(state["facet_seen"])
+
+        state["facet_seen"] = True
+        state["facet_seen_alive"] = True
+        state["facet_agent_id"] = int(agent_id)
+
+        if float(state["kill_started_ms"]) <= 0.0:
+            state["kill_started_ms"] = now_ms
+
+        _stop_current_move()
+
+        if first_detection:
+            try:
+                fx, fy = Agent.GetXY(agent_id)
+                position_text = f" at ({float(fx):.0f}, {float(fy):.0f})"
+            except Exception:
+                position_text = ""
+
+            PySystem.Console.Log(
+                MODULE_NAME,
+                (
+                    f"{name}: Facet detected "
+                    f"(model_id={model_id}, agent_id={agent_id}){position_text}. "
+                    "Stopping the remaining route and waiting for confirmed death."
+                ),
+                PySystem.Console.MessageType.Info,
+            )
+
+    def _confirm_dead(now_ms: float) -> BehaviorTree.NodeState:
+        if float(state["dead_started_ms"]) <= 0.0:
+            state["dead_started_ms"] = now_ms
+            PySystem.Console.Log(
+                MODULE_NAME,
+                (
+                    f"{name}: Facet model_id={model_id} is dead; "
+                    f"confirming for {dead_confirm_ms} ms before allowing resign."
+                ),
+                PySystem.Console.MessageType.Info,
+            )
+
+        if now_ms - float(state["dead_started_ms"]) < float(dead_confirm_ms):
+            return BehaviorTree.NodeState.RUNNING
+
+        PySystem.Console.Log(
+            MODULE_NAME,
+            f"{name}: Facet death confirmed. Remaining search path skipped.",
+            PySystem.Console.MessageType.Info,
+        )
+        _reset_state()
+        return BehaviorTree.NodeState.SUCCESS
+
+    def _tick(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        now_ms = time.monotonic() * 1000.0
+
+        # ------------------------------------------------------------------
+        # 1) Continuous Facet detection.  This runs even while VanquishNode runs.
+        # ------------------------------------------------------------------
+        match = _matching_facet()
+        if match is not None:
+            agent_id, is_dead = match
+            state["facet_agent_id"] = int(agent_id)
+
+            if is_dead:
+                state["facet_seen"] = True
+                # Seeing the matching corpse is enough to prove that the
+                # objective target died, even if HeroAI killed it between ticks.
+                return _confirm_dead(now_ms)
+
+            state["dead_started_ms"] = 0.0
+            if not bool(state["facet_seen_alive"]):
+                _begin_facet_combat(agent_id, now_ms)
+            else:
+                state["facet_seen"] = True
+
+        # ------------------------------------------------------------------
+        # 2) Once seen alive, NEVER resume the search route.  Keep the Facet
+        #    selected and wait specifically for its death.
+        # ------------------------------------------------------------------
+        if bool(state["facet_seen_alive"]):
+            tracked_id = int(state["facet_agent_id"] or 0)
+
+            if tracked_id > 0:
+                try:
+                    if Agent.IsDead(tracked_id):
+                        return _confirm_dead(now_ms)
+                except Exception:
+                    # Do not interpret a missing/unreadable agent as dead.
+                    # Failing is safer than resigning before proof of death.
+                    pass
+
+                if now_ms - float(state["last_target_ms"]) >= 500.0:
+                    try:
+                        Player.ChangeTarget(tracked_id)
+                    except Exception:
+                        pass
+                    state["last_target_ms"] = now_ms
+
+            if (
+                float(state["kill_started_ms"]) > 0.0
+                and now_ms - float(state["kill_started_ms"]) >= float(kill_timeout_ms)
+            ):
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    (
+                        f"{name}: Facet was detected but its death could not be "
+                        f"confirmed within {kill_timeout_ms} ms. Refusing to resign."
+                    ),
+                    PySystem.Console.MessageType.Error,
+                )
+                _reset_state()
+                return BehaviorTree.NodeState.FAILURE
+
+            return BehaviorTree.NodeState.RUNNING
+
+        # ------------------------------------------------------------------
+        # 3) Stationary reveal window at each possible spawn coordinate.
+        # ------------------------------------------------------------------
+        wait_started_ms = float(state["wait_started_ms"])
+        if wait_started_ms > 0.0:
+            if now_ms - wait_started_ms < float(spawn_wait_ms):
+                return BehaviorTree.NodeState.RUNNING
+
+            state["wait_started_ms"] = 0.0
+            state["point_index"] = int(state["point_index"]) + 1
+
+        # ------------------------------------------------------------------
+        # 4) Route exhausted without seeing the Facet => FAILURE.  The planner
+        #    therefore cannot advance to Resign.
+        # ------------------------------------------------------------------
+        point_index = int(state["point_index"])
+        if point_index >= len(point_list):
+            PySystem.Console.Log(
+                MODULE_NAME,
+                (
+                    f"{name}: completed all {len(point_list)} route points "
+                    f"without confirming Facet model_id={model_id}. "
+                    "Refusing to resign."
+                ),
+                PySystem.Console.MessageType.Error,
+            )
+            _reset_state()
+            return BehaviorTree.NodeState.FAILURE
+
+        # ------------------------------------------------------------------
+        # 5) STRICT route combat hold.
+        #
+        # VanquishNode's underlying first Move pauses on COMBAT_ACTIVE, but that
+        # HeroAI flag can briefly drop while a nearby enemy is still alive.
+        # Add a player-centered enemy gate so the route NEVER keeps advancing
+        # through an active nearby fight.
+        # ------------------------------------------------------------------
+        combat_active = bool(_node.blackboard.get("COMBAT_ACTIVE", False))
+        nearby_enemy = False
+        nearby_enemy_range = float(Range.Spellcast.value)
+
+        try:
+            px, py = Player.GetXY()
+            range_sq = nearby_enemy_range * nearby_enemy_range
+
+            for raw_enemy_id in AgentArray.GetEnemyArray():
+                enemy_id = int(raw_enemy_id)
+                if enemy_id <= 0:
+                    continue
+                if Agent.IsDead(enemy_id):
+                    continue
+
+                ex, ey = Agent.GetXY(enemy_id)
+                dx = float(ex) - float(px)
+                dy = float(ey) - float(py)
+
+                if (dx * dx + dy * dy) <= range_sq:
+                    nearby_enemy = True
+                    break
+        except Exception:
+            nearby_enemy = False
+
+        should_hold_route = combat_active or nearby_enemy
+
+        if should_hold_route:
+            if not bool(state["route_combat_hold"]):
+                # Stop only once when entering the hold. Reissuing Player.Move
+                # every tick would fight against HeroAI's own combat movement.
+                _stop_current_move()
+                state["route_combat_hold"] = True
+
+            state["route_clear_started_ms"] = 0.0
+            return BehaviorTree.NodeState.RUNNING
+
+        if bool(state["route_combat_hold"]):
+            clear_started = float(state["route_clear_started_ms"])
+
+            if clear_started <= 0.0:
+                state["route_clear_started_ms"] = now_ms
+                return BehaviorTree.NodeState.RUNNING
+
+            # Require a stable clear window before recreating VanquishNode and
+            # resuming the exact same waypoint.
+            if now_ms - clear_started < 750.0:
+                return BehaviorTree.NodeState.RUNNING
+
+            state["route_combat_hold"] = False
+            state["route_clear_started_ms"] = 0.0
+            state["move_tree"] = None
+
+        # ------------------------------------------------------------------
+        # 6) Tick one combat-aware VanquishNode waypoint.
+        #
+        #    Do NOT use BT.Move here: Move can resume/continue movement while
+        #    enemies are still present.  VanquishNode wraps MoveAndKill and
+        #    therefore advances through the search route while clearing combat
+        #    around every waypoint.
+        # ------------------------------------------------------------------
+        move_tree = state.get("move_tree")
+        if not isinstance(move_tree, BehaviorTree):
+            point = point_list[point_index]
+            move_tree = BT.VanquishNode(
+                steps=[point],
+                pause_on_combat=True,
+                flag_heroes_to_waypoint=False,
+                name=f"{name} - Facet Search Point {point_index + 1:03d}/{len(point_list):03d}",
+                log=False,
+            )
+            state["move_tree"] = move_tree
+
+        move_result = move_tree.tick()
+
+        if move_result == BehaviorTree.NodeState.FAILURE:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"{name}: movement failed at route point {point_index + 1}/{len(point_list)}.",
+                PySystem.Console.MessageType.Error,
+            )
+            _reset_state()
+            return BehaviorTree.NodeState.FAILURE
+
+        if move_result == BehaviorTree.NodeState.RUNNING:
+            return BehaviorTree.NodeState.RUNNING
+
+        # Waypoint reached.  Known Facet positions get a stationary reveal wait.
+        try:
+            move_tree.reset()
+        except Exception:
+            pass
+        state["move_tree"] = None
+
+        if point_index in spawn_indices:
+            state["wait_started_ms"] = now_ms
+            return BehaviorTree.NodeState.RUNNING
+
+        state["point_index"] = point_index + 1
+        return BehaviorTree.NodeState.RUNNING
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name=f"{name} - Search And Kill Facet {model_id}",
+            action_fn=_tick,
+        )
+    )
+
+
 def _winds_add_heroes_with_builds() -> BehaviorTree:
     # Exact legacy order: leave party, add Gwen/Vekk/Ogden, then load their bars.
     return BT.Sequence(
@@ -1091,7 +1555,7 @@ def _iau_equip_skillbar() -> BehaviorTree:
 
 def _configure_botting_tree(tree: BottingTree) -> None:
     tree.Config.ConfigureUpkeep(
-        looting_enabled=False,
+        looting_enabled=True,
         resurrection_scroll=False,
         auto_inventory_handler_enabled=False,
         enable_party_wipe_recovery=True,
@@ -1110,123 +1574,40 @@ def _configure_botting_tree(tree: BottingTree) -> None:
 # Converted legacy routes
 # ---------------------------------------------------------------------------
 
-def _steps_unlock_previous_skills() -> list[PlannerStep]:
-    steps: list[PlannerStep] = []
-    steps.append(('Smooth Criminal - 001 Travel', lambda: BT.Travel(target_map_id=641, log=True)))
-    steps.append(('Smooth Criminal - 002 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=641, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Smooth Criminal - 003 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837c01, log=True)))
-    steps.append(('Smooth Criminal - 004 Move', lambda: BT.Move(Vec2f(18781, -10477), log=False)))
-    steps.append(('Smooth Criminal - 005 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Alcazia Tangle', timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Smooth Criminal - 006 Move', lambda: BT.Move(Vec2f(17024, -600), log=False)))
-    steps.append(('Smooth Criminal - 007 Move', lambda: BT.Move(Vec2f(18237, 6691), log=False)))
-    steps.append(('Smooth Criminal - 008 Move', lambda: BT.Move(Vec2f(15518, 8375), log=False)))
-    steps.append(('Smooth Criminal - 009 Move', lambda: BT.Move(Vec2f(13200, 15000), log=False)))
-    steps.append(('Smooth Criminal - 010 Wait', lambda: BT.Wait(3000)))
-    steps.append(('Smooth Criminal - 011 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Smooth Criminal - 012 Move', lambda: BT.Move(Vec2f(19516, 4686), log=False)))
-    steps.append(('Smooth Criminal - 013 Move', lambda: BT.Move(Vec2f(12184, 370), log=False)))
-    steps.append(('Smooth Criminal - 014 Move', lambda: BT.Move(Vec2f(4802, -4990), log=False)))
-    steps.append(('Smooth Criminal - 015 Move', lambda: BT.Move(Vec2f(-8760, -3378), log=False)))
-    steps.append(('Smooth Criminal - 016 Move', lambda: BT.Move(Vec2f(-5555, -2108), log=False)))
-    steps.append(('Smooth Criminal - 017 Move', lambda: BT.Move(Vec2f(-6678, 6477), log=False)))
-    steps.append(('Smooth Criminal - 018 Wait', lambda: BT.Wait(3000)))
-    steps.append(('Smooth Criminal - 019 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Smooth Criminal - 020 Move', lambda: BT.Move(Vec2f(-8860, -3178), log=False)))
-    steps.append(('Smooth Criminal - 021 Move', lambda: BT.Move(Vec2f(-11202, 758), log=False)))
-    steps.append(('Smooth Criminal - 022 Wait', lambda: BT.Wait(3000)))
-    steps.append(('Smooth Criminal - 023 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Smooth Criminal - 024 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
-    steps.append(('Smooth Criminal - 025 Wait', lambda: BT.Wait(3000)))
-    steps.append(('Smooth Criminal - 026 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=641, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Smooth Criminal - 027 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837c07, log=True)))
-    steps.append(('Smooth Criminal - 028 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
-    steps.append(('Mental Block - 029 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837701, log=True)))
-    steps.append(('Mental Block - 030 Travel', lambda: BT.Travel(target_map_id=639, log=True)))
-    steps.append(('Mental Block - 031 Move', lambda: BT.Move(Vec2f(-22999, 6530), log=False)))
-    steps.append(('Mental Block - 032 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=566, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Mental Block - 033 Move', lambda: BT.Move(Vec2f(-9761, -8000), log=False)))
-    steps.append(('Mental Block - 034 Move', lambda: BT.Move(Vec2f(7622, -9747), log=False)))
-    steps.append(('Mental Block - 035 Move', lambda: BT.Move(Vec2f(11690, -6215), log=False)))
-    steps.append(('Mental Block - 036 Move', lambda: BT.Move(Vec2f(15918, -2667), log=False)))
-    steps.append(('Mental Block - 037 Wait', lambda: BT.Wait(3000)))
-    steps.append(('Mental Block - 038 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Mental Block - 039 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
-    steps.append(('Mental Block - 040 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=639, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Mental Block - 041 Travel', lambda: BT.Travel(target_map_id=641, log=True)))
-    steps.append(('Mental Block - 042 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837707, log=True)))
-    steps.append(('Mental Block - 043 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
-    steps.append(('Radiation Field - 044 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
-    steps.append(('Radiation Field - 045 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837801, log=True)))
-    steps.append(('Radiation Field - 046 Travel', lambda: BT.Travel(target_map_name='Rata Sum', log=True)))
-    steps.append(('Radiation Field - 047 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(20340, 16899), target_map_name='Riven Earth', timeout_ms=MAP_TIMEOUT_MS, log=True)))
-    steps.extend(_movement_point_steps('Radiation Field - 048 Route', PREVIOUS_SKILLS_PATH_01))
-    steps.append(('Radiation Field - 049 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Radiation Field - 050 Move', lambda: BT.Move(Vec2f(-5226.4, -2772.8), log=False)))
-    steps.append(('Radiation Field - 051 Wait', lambda: BT.Wait(10000)))
-    steps.append(('Radiation Field - 052 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
-    steps.append(('Radiation Field - 053 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Radiation Field - 054 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Rata Sum', timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Radiation Field - 055 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
-    steps.append(('Radiation Field - 056 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837807, log=True)))
-    steps.append(('Radiation Field - 057 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
-    steps.append(('Asuran Scan - 058 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
-    steps.append(('Asuran Scan - 059 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837901, log=True)))
-    steps.append(('Asuran Scan - 060 Travel', lambda: BT.Travel(target_map_name="Gadd's Encampment", log=True)))
-    steps.append(('Asuran Scan - 061 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-9690, -19524), target_map_name='Sparkfly Swamp', timeout_ms=MAP_TIMEOUT_MS, log=True)))
-    steps.extend(_movement_point_steps('Asuran Scan - 062 Route', PREVIOUS_SKILLS_PATH_02))
-    steps.append(('Asuran Scan - 063 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Asuran Scan - 064 Wait', lambda: BT.Wait(10000)))
-    steps.append(('Asuran Scan - 065 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
-    steps.append(('Asuran Scan - 066 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name="Gadd's Encampment", timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Asuran Scan - 067 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
-    steps.append(('Asuran Scan - 068 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837907, log=True)))
-    steps.append(('Asuran Scan - 069 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
-    steps.append(('Technobabble - 070 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
-    steps.append(('Technobabble - 071 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837b01, log=True)))
-    steps.append(('Technobabble - 072 Travel', lambda: BT.Travel(target_map_name='Rata Sum', log=True)))
-    steps.append(('Technobabble - 073 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-6062, -2688), target_map_name='Magus Stones', timeout_ms=MAP_TIMEOUT_MS, log=True)))
-    steps.extend(_movement_point_steps('Technobabble - 074 Route', PREVIOUS_SKILLS_PATH1_03))
-    steps.append(('Technobabble - 075 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.extend(_movement_point_steps('Technobabble - 076 Route', PREVIOUS_SKILLS_PATH2_04))
-    steps.append(('Technobabble - 077 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.extend(_movement_point_steps('Technobabble - 078 Route', PREVIOUS_SKILLS_PATH3_05))
-    steps.append(('Technobabble - 079 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Technobabble - 080 Wait', lambda: BT.Wait(10000)))
-    steps.append(('Technobabble - 081 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
-    steps.append(('Technobabble - 082 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Rata Sum', timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Technobabble - 083 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
-    steps.append(('Technobabble - 084 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837b07, log=True)))
-    steps.append(('Technobabble - 085 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
-    steps.append(('Pain Inverter - 086 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
-    steps.append(('Pain Inverter - 087 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837a01, log=True)))
-    steps.append(('Pain Inverter - 088 Travel', lambda: BT.Travel(target_map_name="Vlox's Falls", log=True)))
-    steps.append(('Pain Inverter - 089 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(15505.38, 12460.59), target_map_name='Arbor Bay', timeout_ms=MAP_TIMEOUT_MS, log=True)))
-    steps.extend(_movement_point_steps('Pain Inverter - 090 Route', PREVIOUS_SKILLS_PATH_06))
-    steps.append(('Pain Inverter - 091 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Pain Inverter - 092 Wait', lambda: BT.Wait(10000)))
-    steps.append(('Pain Inverter - 093 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
-    steps.append(('Pain Inverter - 094 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name="Vlox's Falls", timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Pain Inverter - 095 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
-    steps.append(('Pain Inverter - 096 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837a07, log=True)))
-    steps.append(('Pain Inverter - 097 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
-    return steps
-
-
 def _steps_unlock_air_of_superiority() -> list[PlannerStep]:
     steps: list[PlannerStep] = []
-    steps.extend(_steps_unlock_previous_skills())
     steps.append(('Air of Superiority - 001 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
     steps.append(('Air of Superiority - 002 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837d01, log=True)))
     steps.append(('Air of Superiority - 003 Travel', lambda: BT.Travel(target_map_name='Olafstead', log=True)))
-    steps.append(('Air of Superiority - 004 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(1440, 1147.0), target_map_name='Varajar Fells', timeout_ms=MAP_TIMEOUT_MS, log=True)))
+    steps.append(('Air of Superiority - 004 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-1503, 1201.0), target_map_name='Varajar Fells', timeout_ms=MAP_TIMEOUT_MS, log=True)))
     steps.extend(_movement_point_steps('Air of Superiority - 005 Route', AIR_OF_SUPERIORITY_PATH_01))
-    steps.append(('Air of Superiority - 006 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
+    steps.append(('Air of Superiority - 006 Wait For Clear Enemies In Area', lambda: BT.WaitForClearEnemiesInArea(*AIR_OF_SUPERIORITY_PATH_01[-1], stable_clear_ms=60000)))
     steps.append(('Air of Superiority - 007 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(22648.0, 1078.0), 0x837d07, log=True)))
     steps.append(('Air of Superiority - 008 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
     steps.append(('Air of Superiority - 009 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
     steps.append(('Air of Superiority - 010 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Olafstead', timeout_ms=MAP_TIMEOUT_MS)))
     return steps
 
+def _steps_unlock_mindbender() -> list[PlannerStep]:
+    steps: list[PlannerStep] = []
+    steps.append(('Mindbender - 001 Travel', lambda: BT.Travel(target_map_name="Vlox's Falls", log=True)))
+    steps.append(('Mindbender - 002 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(13999.00, 16113.00), 0x838101, log=True)))
+    steps.append(('Mindbender - 003 Move', lambda: BT.Move(Vec2f(16198.73, 15155.11))))
+    steps.append(('Mindbender - 004 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(15381,12281), target_map_name='Arbor Bay')))
+    steps.append(('Mindbender - 005 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14899.00, 12091.00), 0x838104)))
+    steps.append(('Mindbender - 006 Route', lambda: BT.VanquishNode([(8432, 3986),(5623, 8718),(3850, 9318),(1114, 8111),(-576, 13157),(-2732, 10573),(-4062, 10552),(-3526, 13835),(-7432, 12634),(-10260, 12121),])))
+    steps.append(('Mindbender - 007 Move And Dialog', lambda: BT.TargetAgentByName("Erff")))
+    steps.append(('Mindbender - 008 Move And Dialog', lambda: BT.InteractTarget()))
+    steps.append(('Mindbender - 009 Move And Dialog', lambda: BT.SendDialog(0x838104, log=True)))
+    steps.append(('Mindbender - 009 Wait', lambda: BT.Wait(15000)))
+    steps.append(('Mindbender - 010 Clear Enemies In Area', lambda: BT.ClearEnemiesInArea(Vec2f(-9611.00, 12114.00),log=True)))
+    steps.append(('Mindbender - 011 Wait For Clear Enemies In Area', lambda: BT.WaitForClearEnemiesInArea(-9611.00, 12114.00, stable_clear_ms=180000, radius=Range.Spirit.value, log=True)))
+    steps.append(('Mindbender - 012 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
+    steps.append(('Mindbender - 016 Move', lambda: BT.Move(Vec2f(16198.73, 15155.11))))
+    steps.append(('Mindbender - 014 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(13999.00, 16113.00), 0x838107, log=True)))
+    steps.append(('Mindbender - 015 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
+
+    return steps
 
 def _steps_unlock_asuran_scan() -> list[PlannerStep]:
     steps: list[PlannerStep] = []
@@ -1234,14 +1615,24 @@ def _steps_unlock_asuran_scan() -> list[PlannerStep]:
     steps.append(('Asuran Scan - 002 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837901, log=True)))
     steps.append(('Asuran Scan - 003 Travel', lambda: BT.Travel(target_map_name="Gadd's Encampment", log=True)))
     steps.append(('Asuran Scan - 004 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-9690, -19524), target_map_name='Sparkfly Swamp', timeout_ms=MAP_TIMEOUT_MS, log=True)))
-    steps.extend(_movement_point_steps('Asuran Scan - 005 Route', ASURAN_SCAN_PATH_01))
-    steps.append(('Asuran Scan - 006 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Asuran Scan - 007 Wait', lambda: BT.Wait(10000)))
-    steps.append(('Asuran Scan - 008 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
-    steps.append(('Asuran Scan - 009 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name="Gadd's Encampment", timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Asuran Scan - 010 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
-    steps.append(('Asuran Scan - 011 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837907, log=True)))
-    steps.append(('Asuran Scan - 012 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
+    steps.append((
+        'Asuran Scan - 005 Search And Kill Facet',
+        lambda: _facet_path_search_and_kill(
+            name='Asuran Scan',
+            model_id=ASURAN_SCAN_FACET_MODEL_ID,
+            path=ASURAN_SCAN_FACET_PATH_01,
+            spawn_point_indices=ASURAN_SCAN_FACET_SPAWN_INDICES,
+            spawn_wait_ms=6_000,
+            kill_timeout_ms=120_000,
+            dead_confirm_ms=2_500,
+        ),
+    ))
+    # Resign is unreachable unless Facet of Death death is confirmed.
+    steps.append(('Asuran Scan - 006 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
+    steps.append(('Asuran Scan - 007 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name="Gadd's Encampment", timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('Asuran Scan - 008 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
+    steps.append(('Asuran Scan - 009 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837907, log=True)))
+    steps.append(('Asuran Scan - 010 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
     return steps
 
 
@@ -1254,17 +1645,25 @@ def _steps_unlock_mental_block() -> list[PlannerStep]:
     steps.append(('Mental Block - 005 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=639, timeout_ms=MAP_TIMEOUT_MS)))
     steps.append(('Mental Block - 006 Move', lambda: BT.Move(Vec2f(-22999, 6530), log=False)))
     steps.append(('Mental Block - 007 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=566, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Mental Block - 008 Move', lambda: BT.Move(Vec2f(-9761, -8000), log=False)))
-    steps.append(('Mental Block - 009 Move', lambda: BT.Move(Vec2f(7833, -8293), log=False)))
-    steps.append(('Mental Block - 010 Move', lambda: BT.Move(Vec2f(11690, -6215), log=False)))
-    steps.append(('Mental Block - 011 Move', lambda: BT.Move(Vec2f(15918, -2667), log=False)))
-    steps.append(('Mental Block - 012 Wait', lambda: BT.Wait(3000)))
-    steps.append(('Mental Block - 013 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Mental Block - 014 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
-    steps.append(('Mental Block - 015 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=639, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Mental Block - 016 Travel', lambda: BT.Travel(target_map_id=641, log=True)))
-    steps.append(('Mental Block - 017 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=641, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Mental Block - 018 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837707, log=True)))
+    steps.append((
+        'Mental Block - 008 Search And Kill Facet',
+        lambda: _facet_path_search_and_kill(
+            name='Mental Block',
+            model_id=MENTAL_BLOCK_FACET_MODEL_ID,
+            path=MENTAL_BLOCK_FACET_PATH_01,
+            spawn_point_indices=MENTAL_BLOCK_FACET_SPAWN_INDICES,
+            spawn_wait_ms=6_000,
+            kill_timeout_ms=120_000,
+            dead_confirm_ms=2_500,
+        ),
+    ))
+    # Resign is unreachable unless Facet of Destruction death is confirmed.
+    steps.append(('Mental Block - 009 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
+    steps.append(('Mental Block - 010 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=639, timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('Mental Block - 011 Travel', lambda: BT.Travel(target_map_id=641, log=True)))
+    steps.append(('Mental Block - 012 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=641, timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('Mental Block - 013 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837707, log=True)))
+    steps.append(('Mental Block - 014 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
     return steps
 
 
@@ -1274,14 +1673,24 @@ def _steps_unlock_pain_inverter() -> list[PlannerStep]:
     steps.append(('Pain Inverter - 002 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837a01, log=True)))
     steps.append(('Pain Inverter - 003 Travel', lambda: BT.Travel(target_map_name="Vlox's Falls", log=True)))
     steps.append(('Pain Inverter - 004 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(15505.38, 12460.59), target_map_name='Arbor Bay', timeout_ms=MAP_TIMEOUT_MS, log=True)))
-    steps.extend(_movement_point_steps('Pain Inverter - 005 Route', PAIN_INVERTER_PATH_01))
-    steps.append(('Pain Inverter - 006 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Pain Inverter - 007 Wait', lambda: BT.Wait(10000)))
-    steps.append(('Pain Inverter - 008 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
-    steps.append(('Pain Inverter - 009 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name="Vlox's Falls", timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Pain Inverter - 010 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
-    steps.append(('Pain Inverter - 011 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837a07, log=True)))
-    steps.append(('Pain Inverter - 012 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
+    steps.append((
+        'Pain Inverter - 005 Search And Kill Facet',
+        lambda: _facet_path_search_and_kill(
+            name='Pain Inverter',
+            model_id=PAIN_INVERTER_FACET_MODEL_ID,
+            path=PAIN_INVERTER_FACET_PATH_01,
+            spawn_point_indices=PAIN_INVERTER_FACET_SPAWN_INDICES,
+            spawn_wait_ms=6_000,
+            kill_timeout_ms=120_000,
+            dead_confirm_ms=2_500,
+        ),
+    ))
+    # Resign is unreachable unless Facet of Spirit death is confirmed.
+    steps.append(('Pain Inverter - 006 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
+    steps.append(('Pain Inverter - 007 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name="Vlox's Falls", timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('Pain Inverter - 008 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
+    steps.append(('Pain Inverter - 009 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837a07, log=True)))
+    steps.append(('Pain Inverter - 010 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
     return steps
 
 
@@ -1291,16 +1700,24 @@ def _steps_unlock_radiation_field() -> list[PlannerStep]:
     steps.append(('Radiation Field - 002 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837801, log=True)))
     steps.append(('Radiation Field - 003 Travel', lambda: BT.Travel(target_map_name='Rata Sum', log=True)))
     steps.append(('Radiation Field - 004 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(20340, 16899), target_map_name='Riven Earth', timeout_ms=MAP_TIMEOUT_MS, log=True)))
-    steps.extend(_movement_point_steps('Radiation Field - 005 Route', RADIATION_FIELD_PATH_01))
-    steps.append(('Radiation Field - 006 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Radiation Field - 007 Move', lambda: BT.Move(Vec2f(-5226.4, -2772.8), log=False)))
-    steps.append(('Radiation Field - 008 Wait', lambda: BT.Wait(10000)))
-    steps.append(('Radiation Field - 009 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
-    steps.append(('Radiation Field - 010 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Radiation Field - 011 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Rata Sum', timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Radiation Field - 012 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
-    steps.append(('Radiation Field - 013 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837807, log=True)))
-    steps.append(('Radiation Field - 014 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
+    steps.append((
+        'Radiation Field - 005 Search And Kill Facet',
+        lambda: _facet_path_search_and_kill(
+            name='Radiation Field',
+            model_id=RADIATION_FIELD_FACET_MODEL_ID,
+            path=RADIATION_FIELD_FACET_PATH_01,
+            spawn_point_indices=RADIATION_FIELD_FACET_SPAWN_INDICES,
+            spawn_wait_ms=10_000,
+            kill_timeout_ms=120_000,
+            dead_confirm_ms=2_500,
+        ),
+    ))
+    # Resign is unreachable unless Facet of Existence death is confirmed.
+    steps.append(('Radiation Field - 006 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
+    steps.append(('Radiation Field - 007 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Rata Sum', timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('Radiation Field - 008 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
+    steps.append(('Radiation Field - 009 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837807, log=True)))
+    steps.append(('Radiation Field - 010 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
     return steps
 
 
@@ -1311,30 +1728,25 @@ def _steps_unlock_smooth_criminal() -> list[PlannerStep]:
     steps.append(('Smooth Criminal - 003 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837c01, log=True)))
     steps.append(('Smooth Criminal - 004 Move', lambda: BT.Move(Vec2f(18781, -10477), log=False)))
     steps.append(('Smooth Criminal - 005 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Alcazia Tangle', timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Smooth Criminal - 006 Move', lambda: BT.Move(Vec2f(17024, -600), log=False)))
-    steps.append(('Smooth Criminal - 007 Move', lambda: BT.Move(Vec2f(18237, 6691), log=False)))
-    steps.append(('Smooth Criminal - 008 Move', lambda: BT.Move(Vec2f(15518, 8375), log=False)))
-    steps.append(('Smooth Criminal - 009 Move', lambda: BT.Move(Vec2f(13200, 15000), log=False)))
-    steps.append(('Smooth Criminal - 010 Wait', lambda: BT.Wait(3000)))
-    steps.append(('Smooth Criminal - 011 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Smooth Criminal - 012 Move', lambda: BT.Move(Vec2f(19516, 4686), log=False)))
-    steps.append(('Smooth Criminal - 013 Move', lambda: BT.Move(Vec2f(12184, 370), log=False)))
-    steps.append(('Smooth Criminal - 014 Move', lambda: BT.Move(Vec2f(4802, -4990), log=False)))
-    steps.append(('Smooth Criminal - 015 Move', lambda: BT.Move(Vec2f(-8760, -3378), log=False)))
-    steps.append(('Smooth Criminal - 016 Move', lambda: BT.Move(Vec2f(-5555, -2108), log=False)))
-    steps.append(('Smooth Criminal - 017 Move', lambda: BT.Move(Vec2f(-6678, 6477), log=False)))
-    steps.append(('Smooth Criminal - 018 Wait', lambda: BT.Wait(3000)))
-    steps.append(('Smooth Criminal - 019 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Smooth Criminal - 020 Move', lambda: BT.Move(Vec2f(-8860, -3178), log=False)))
-    steps.append(('Smooth Criminal - 021 Move', lambda: BT.Move(Vec2f(-11202, 758), log=False)))
-    steps.append(('Smooth Criminal - 022 Wait', lambda: BT.Wait(3000)))
-    steps.append(('Smooth Criminal - 023 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Smooth Criminal - 024 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
-    steps.append(('Smooth Criminal - 025 Wait', lambda: BT.Wait(3000)))
-    steps.append(('Smooth Criminal - 026 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=641, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Smooth Criminal - 027 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837c07, log=True)))
+    steps.append((
+        'Smooth Criminal - 006 Search And Kill Facet',
+        lambda: _facet_path_search_and_kill(
+            name='Smooth Criminal',
+            model_id=SMOOTH_CRIMINAL_FACET_MODEL_ID,
+            path=SMOOTH_CRIMINAL_FACET_PATH_01,
+            spawn_point_indices=SMOOTH_CRIMINAL_FACET_SPAWN_INDICES,
+            spawn_wait_ms=6_000,
+            kill_timeout_ms=120_000,
+            dead_confirm_ms=2_500,
+        ),
+    ))
+    # Resign is unreachable unless the helper has positively confirmed Facet death.
+    steps.append(('Smooth Criminal - 007 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
+    steps.append(('Smooth Criminal - 008 Wait', lambda: BT.Wait(3000)))
+    steps.append(('Smooth Criminal - 009 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=641, timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('Smooth Criminal - 010 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837c07, log=True)))
+    steps.append(('Smooth Criminal - 011 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
     return steps
-
 
 def _steps_unlock_technobabble() -> list[PlannerStep]:
     steps: list[PlannerStep] = []
@@ -1342,18 +1754,24 @@ def _steps_unlock_technobabble() -> list[PlannerStep]:
     steps.append(('Technobabble - 002 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837b01, log=True)))
     steps.append(('Technobabble - 003 Travel', lambda: BT.Travel(target_map_name='Rata Sum', log=True)))
     steps.append(('Technobabble - 004 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-6062, -2688), target_map_name='Magus Stones', timeout_ms=MAP_TIMEOUT_MS, log=True)))
-    steps.extend(_movement_point_steps('Technobabble - 005 Route', TECHNOBABBLE_PATH1_01))
-    steps.append(('Technobabble - 006 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.extend(_movement_point_steps('Technobabble - 007 Route', TECHNOBABBLE_PATH2_02))
-    steps.append(('Technobabble - 008 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.extend(_movement_point_steps('Technobabble - 009 Route', TECHNOBABBLE_PATH3_03))
-    steps.append(('Technobabble - 010 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Technobabble - 011 Wait', lambda: BT.Wait(10000)))
-    steps.append(('Technobabble - 012 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
-    steps.append(('Technobabble - 013 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Rata Sum', timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Technobabble - 014 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
-    steps.append(('Technobabble - 015 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837b07, log=True)))
-    steps.append(('Technobabble - 016 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
+    steps.append((
+        'Technobabble - 005 Search And Kill Facet',
+        lambda: _facet_path_search_and_kill(
+            name='Technobabble',
+            model_id=TECHNOBABBLE_FACET_MODEL_ID,
+            path=TECHNOBABBLE_FACET_PATH_01,
+            spawn_point_indices=TECHNOBABBLE_FACET_SPAWN_INDICES,
+            spawn_wait_ms=6_000,
+            kill_timeout_ms=120_000,
+            dead_confirm_ms=2_500,
+        ),
+    ))
+    # Resign is unreachable unless Facet of Illusions death is confirmed.
+    steps.append(('Technobabble - 006 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
+    steps.append(('Technobabble - 007 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Rata Sum', timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('Technobabble - 008 Travel', lambda: BT.Travel(target_map_name='Tarnished Haven', log=True)))
+    steps.append(('Technobabble - 009 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(25203, -10694), 0x837b07, log=True)))
+    steps.append(('Technobabble - 010 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
     return steps
 
 
@@ -1388,6 +1806,7 @@ def _steps_unlock_ebon_battle_standard_of_honor() -> list[PlannerStep]:
     steps.append(('Ebon Battle Standard of Honor - 014 Move', lambda: BT.Move(Vec2f(-21902, 12807), log=False)))
     steps.append(('Ebon Battle Standard of Honor - 015 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=649, timeout_ms=MAP_TIMEOUT_MS)))
     steps.append(('Ebon Battle Standard of Honor - 016 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-21141.81, 12378.68), 0x836007, log=True)))
+    steps.append(('Ebon Battle Standard of Honor - 017 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
     return steps
 
 
@@ -1425,71 +1844,72 @@ def _steps_unlock_winds() -> list[PlannerStep]:
 def _steps_unlock_i_am_unstoppable() -> list[PlannerStep]:
     steps: list[PlannerStep] = []
     steps.append(('IAU:TAKE_ANYTHING_YOU_CAN_DO', lambda: BT.Succeeder(name='IAU:TAKE_ANYTHING_YOU_CAN_DO')))
-    steps.append(('I Am Unstoppable! - 002 Travel', lambda: BT.Travel(target_map_name='Sifhalla', log=True)))
-    steps.append(('I Am Unstoppable! - 003 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=643, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('I Am Unstoppable! - 004 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14380, 23874), 0x833e01, log=True)))
+    steps.append(('I Am Unstoppable! - 001 Travel', lambda: BT.Travel(target_map_name='Sifhalla', log=True)))
+    steps.append(('I Am Unstoppable! - 002 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=643, timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('I Am Unstoppable! - 003 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14380, 23874), 0x833e01, log=True)))
     steps.append(('IAU:HUNT_AVARR_AND_WHITEOUT', lambda: BT.Succeeder(name='IAU:HUNT_AVARR_AND_WHITEOUT')))
-    steps.append(('I Am Unstoppable! - 006 Travel', lambda: BT.Travel(target_map_name='Sifhalla', log=True)))
-    steps.append(('I Am Unstoppable! - 007 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=643, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('I Am Unstoppable! - 008 Move', lambda: BT.Move(Vec2f(14682, 22900), log=False)))
-    steps.append(('I Am Unstoppable! - 009 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(17000, 22872), target_map_id=546, timeout_ms=MAP_TIMEOUT_MS, log=True)))
-    steps.append(('I Am Unstoppable! - 010 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=546, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('I Am Unstoppable! - 011 Move', lambda: BT.Move(Vec2f(-9431, -20124), log=False)))
-    steps.append(('I Am Unstoppable! - 012 Move', lambda: BT.Move(Vec2f(-8441, -13685), log=False)))
-    steps.append(('I Am Unstoppable! - 013 Move', lambda: BT.Move(Vec2f(-9743, -6744), log=False)))
-    steps.append(('I Am Unstoppable! - 014 Move', lambda: BT.Move(Vec2f(-10672, 4815), log=False)))
-    steps.append(('I Am Unstoppable! - 015 Move', lambda: BT.Move(Vec2f(-8464, 17239), log=False)))
-    steps.append(('I Am Unstoppable! - 016 Move', lambda: BT.Move(Vec2f(-11700, 24101), log=False)))
-    steps.append(('I Am Unstoppable! - 017 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('I Am Unstoppable! - 018 Move', lambda: BT.Move(Vec2f(-8464, 17239), log=False)))
-    steps.append(('I Am Unstoppable! - 019 Move', lambda: BT.Move(Vec2f(-638, 17801), log=False)))
-    steps.append(('I Am Unstoppable! - 020 Move', lambda: BT.Move(Vec2f(-933, 15368), log=False)))
-    steps.append(('I Am Unstoppable! - 021 Wait', lambda: BT.Wait(6000)))
-    steps.append(('I Am Unstoppable! - 022 Move', lambda: BT.Move(Vec2f(-1339, 22089), log=False)))
-    steps.append(('I Am Unstoppable! - 023 Wait', lambda: BT.Wait(5000)))
+    steps.append(('I Am Unstoppable! - 004 Travel', lambda: BT.Travel(target_map_name='Sifhalla', log=True)))
+    steps.append(('I Am Unstoppable! - 005 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=643, timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('I Am Unstoppable! - 006 Move', lambda: BT.Move(Vec2f(14682, 22900), log=False)))
+    steps.append(('I Am Unstoppable! - 007 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(17000, 22872), target_map_id=546, timeout_ms=MAP_TIMEOUT_MS, log=True)))
+    steps.append(('I Am Unstoppable! - 008 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=546, timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('I Am Unstoppable! - 009 Move', lambda: BT.Move(Vec2f(-9431, -20124), log=False)))
+    steps.append(('I Am Unstoppable! - 010 Move', lambda: BT.Move(Vec2f(-8441, -13685), log=False)))
+    steps.append(('I Am Unstoppable! - 011 Move', lambda: BT.Move(Vec2f(-9743, -6744), log=False)))
+    steps.append(('I Am Unstoppable! - 012 Move', lambda: BT.Move(Vec2f(-10672, 4815), log=False)))
+    steps.append(('I Am Unstoppable! - 013 Move', lambda: BT.Move(Vec2f(-8464, 17239), log=False)))
+    steps.append(('I Am Unstoppable! - 014 Move', lambda: BT.Move(Vec2f(-11700, 24101), log=False)))
+    steps.append(('I Am Unstoppable! - 015 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
+    steps.append(('I Am Unstoppable! - 016 Move', lambda: BT.Move(Vec2f(-8464, 17239), log=False)))
+    steps.append(('I Am Unstoppable! - 017 Move', lambda: BT.Move(Vec2f(-638, 17801), log=False)))
+    steps.append(('I Am Unstoppable! - 018 Move', lambda: BT.Move(Vec2f(-933, 15368), log=False)))
+    steps.append(('I Am Unstoppable! - 019 Wait', lambda: BT.Wait(6000)))
+    steps.append(('I Am Unstoppable! - 020 Move', lambda: BT.Move(Vec2f(-1339, 22089), log=False)))
+    steps.append(('I Am Unstoppable! - 021 Wait', lambda: BT.Wait(5000)))
     steps.append(('IAU:FRAGMENT_OF_ANTIQUITIES', lambda: BT.Succeeder(name='IAU:FRAGMENT_OF_ANTIQUITIES')))
-    steps.append(('I Am Unstoppable! - 025 Travel', lambda: BT.Travel(target_map_name='Sifhalla', log=True)))
-    steps.append(('I Am Unstoppable! - 026 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=643, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Fragment of Antiquities - 027 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(8832, 23870), target_map_id=513, timeout_ms=MAP_TIMEOUT_MS, log=True)))
-    steps.append(('Fragment of Antiquities - 028 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=513, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.extend(_movement_point_steps('Fragment of Antiquities - 029 Route', DRAKKAR_TO_REMLOK_ROUTE_XY[:-2]))
-    steps.append(('Fragment of Antiquities - 030 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-10926, 24732), 0x832901, log=True)))
-    steps.append(('Fragment of Antiquities - 031 Move', lambda: BT.Move(Vec2f(-11293.05, 24868.94), log=False)))
-    steps.append(('Fragment of Antiquities - 032 Move', lambda: BT.Move(Vec2f(-11603.0, 24975.0), log=False)))
-    steps.append(('Fragment of Antiquities - 033 Move', lambda: BT.Move(Vec2f(-11763.68, 25412.23), log=False)))
-    steps.append(('Fragment of Antiquities - 034 Move', lambda: BT.Move(Vec2f(-11904.67, 25896.55), log=False)))
-    steps.append(('Fragment of Antiquities - 035 Move', lambda: BT.Move(Vec2f(-12009.97, 26331.78), log=False)))
-    steps.append(('Fragment of Antiquities - 036 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-12138, 26829), target_map_id=628, timeout_ms=MAP_TIMEOUT_MS, log=True)))
-    steps.append(('Fragment of Antiquities - 037 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=628, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.extend(_movement_point_steps('Fragment of Antiquities - 038 Route', SEPULCHRE_PROOF_OF_STRENGTH_ROUTE_XY))
-    steps.append(('Fragment of Antiquities - 039 Wait', lambda: BT.Wait(1500)))
-    steps.extend(_movement_point_steps('Fragment of Antiquities - 040 Route', SEPULCHRE_LEVEL1_FRAGMENT_ROUTE_XY))
-    steps.append(('Fragment of Antiquities - 041 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
+    steps.append(('I Am Unstoppable! - 022 Travel', lambda: BT.Travel(target_map_name='Sifhalla', log=True)))
+    steps.append(('I Am Unstoppable! - 023 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=643, timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('Fragment of Antiquities - 024 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(8832, 23870), target_map_id=513, timeout_ms=MAP_TIMEOUT_MS, log=True)))
+    steps.append(('Fragment of Antiquities - 025 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=513, timeout_ms=MAP_TIMEOUT_MS)))
+    steps.extend(_movement_point_steps('Fragment of Antiquities - 026 Route', DRAKKAR_TO_REMLOK_ROUTE_XY[:-2]))
+    steps.append(('Fragment of Antiquities - 027 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-10926, 24732), 0x832901, log=True)))
+    steps.append(('Fragment of Antiquities - 028 Move', lambda: BT.Move(Vec2f(-11293.05, 24868.94), log=False)))
+    steps.append(('Fragment of Antiquities - 029 Move', lambda: BT.Move(Vec2f(-11603.0, 24975.0), log=False)))
+    steps.append(('Fragment of Antiquities - 030 Move', lambda: BT.Move(Vec2f(-11763.68, 25412.23), log=False)))
+    steps.append(('Fragment of Antiquities - 031 Move', lambda: BT.Move(Vec2f(-11904.67, 25896.55), log=False)))
+    steps.append(('Fragment of Antiquities - 032 Move', lambda: BT.Move(Vec2f(-12009.97, 26331.78), log=False)))
+    steps.append(('Fragment of Antiquities - 033 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-12138, 26829), target_map_id=628, timeout_ms=MAP_TIMEOUT_MS, log=True)))
+    steps.append(('Fragment of Antiquities - 034 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=628, timeout_ms=MAP_TIMEOUT_MS)))
+    steps.extend(_movement_point_steps('Fragment of Antiquities - 035 Route', SEPULCHRE_PROOF_OF_STRENGTH_ROUTE_XY))
+    steps.append(('Fragment of Antiquities - 036 Wait', lambda: BT.Wait(1500)))
+    steps.extend(_movement_point_steps('Fragment of Antiquities - 037 Route', SEPULCHRE_LEVEL1_FRAGMENT_ROUTE_XY))
+    steps.append(('Fragment of Antiquities - 038 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
     steps.append(('IAU:CLAIM_ANYTHING_YOU_CAN_DO', lambda: BT.Succeeder(name='IAU:CLAIM_ANYTHING_YOU_CAN_DO')))
-    steps.append(('Fragment of Antiquities - 043 Travel', lambda: BT.Travel(target_map_name='Sifhalla', log=True)))
-    steps.append(('Fragment of Antiquities - 044 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=643, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Fragment of Antiquities - 045 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14380, 23968), 0x833e07, log=True)))
+    steps.append(('Fragment of Antiquities - 039 Travel', lambda: BT.Travel(target_map_name='Sifhalla', log=True)))
+    steps.append(('Fragment of Antiquities - 040 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=643, timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('Fragment of Antiquities - 041 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14380, 23968), 0x833e07, log=True)))
     steps.append(('IAU:COLD_AS_ICE', lambda: BT.Succeeder(name='IAU:COLD_AS_ICE')))
-    steps.append(('Fragment of Antiquities - 047 Travel', lambda: BT.Travel(target_map_name='Sifhalla', log=True)))
-    steps.append(('Fragment of Antiquities - 048 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=643, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Fragment of Antiquities - 049 Spawn Bonus Items', lambda: BT.SpawnBonusItems(log=True)))
-    steps.append(('Fragment of Antiquities - 050 Equip Item', lambda: BT.EquipItemByModelID(ModelID.Bonus_Nevermore_Flatbow.value, log=True)))
-    steps.append(('Fragment of Antiquities - 051 Equip Item', lambda: BT.EquipItemByModelID(6515, log=True)))
-    steps.append(('Fragment of Antiquities - 052 Equip Skill Bar', lambda: _iau_equip_skillbar()))
-    steps.append(('Fragment of Antiquities - 053 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14380, 23968), 0x834401, log=True)))
-    steps.append(('Fragment of Antiquities - 054 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14380, 23968), 0x85, log=True)))
-    steps.append(('Fragment of Antiquities - 055 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=690, timeout_ms=MAP_TIMEOUT_MS)))
-    steps.append(('Fragment of Antiquities - 056 Wait', lambda: BT.Wait(5000)))
-    steps.append(('Fragment of Antiquities - 057 Move', lambda: BT.Move(Vec2f(14553, 23043), log=False)))
-    steps.append(('Fragment of Antiquities - 058 Wait', lambda: BT.Wait(2000)))
-    steps.append(('Fragment of Antiquities - 059 Use Skill', lambda: BT.CastSkillID(skill_id=114, log=True)))
-    steps.append(('Fragment of Antiquities - 060 Wait Until On Combat', lambda: BT.WaitUntilOnCombat(timeout_ms=120_000)))
-    steps.append(('Fragment of Antiquities - 061 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
-    steps.append(('Fragment of Antiquities - 062 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
-    steps.append(('Fragment of Antiquities - 063 Wait', lambda: BT.Wait(20000)))
-    steps.append(('Fragment of Antiquities - 064 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=643, timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('Fragment of Antiquities - 042 Travel', lambda: BT.Travel(target_map_name='Sifhalla', log=True)))
+    steps.append(('Fragment of Antiquities - 043 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=643, timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('Fragment of Antiquities - 044 Spawn Bonus Items', lambda: BT.SpawnBonusItems(log=True)))
+    steps.append(('Fragment of Antiquities - 045 Equip Item', lambda: BT.EquipItemByModelID(ModelID.Bonus_Nevermore_Flatbow.value, log=True)))
+    steps.append(('Fragment of Antiquities - 046 Equip Item', lambda: BT.EquipItemByModelID(6515, log=True)))
+    steps.append(('Fragment of Antiquities - 047 Equip Skill Bar', lambda: _iau_equip_skillbar()))
+    steps.append(('Fragment of Antiquities - 048 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14380, 23968), 0x834401, log=True)))
+    steps.append(('Fragment of Antiquities - 049 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14380, 23968), 0x85, log=True)))
+    steps.append(('Fragment of Antiquities - 050 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=690, timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('Fragment of Antiquities - 051 Wait', lambda: BT.Wait(5000)))
+    steps.append(('Fragment of Antiquities - 052 Move', lambda: BT.Move(Vec2f(14553, 23043), log=False)))
+    steps.append(('Fragment of Antiquities - 053 Wait', lambda: BT.Wait(2000)))
+    steps.append(('Fragment of Antiquities - 054 Use Skill', lambda: BT.CastSkillID(skill_id=114, log=True)))
+    steps.append(('Fragment of Antiquities - 055 Wait Until On Combat', lambda: BT.WaitUntilOnCombat(timeout_ms=120_000)))
+    steps.append(('Fragment of Antiquities - 056 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)))
+    steps.append(('Fragment of Antiquities - 057 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
+    steps.append(('Fragment of Antiquities - 058 Wait', lambda: BT.Wait(20000)))
+    steps.append(('Fragment of Antiquities - 059 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=643, timeout_ms=MAP_TIMEOUT_MS)))
     steps.append(('IAU:CLAIM_FINAL_REWARD', lambda: BT.Succeeder(name='IAU:CLAIM_FINAL_REWARD')))
-    steps.append(('Fragment of Antiquities - 066 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14380, 23968), 0x834407, log=True)))
+    steps.append(('Fragment of Antiquities - 060 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14380, 23968), 0x834407, log=True)))
+    steps.append(('I Am Unstoppable! - 061 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
     return steps
 
 
@@ -1544,6 +1964,7 @@ def _steps_unlock_feel_no_pain() -> list[PlannerStep]:
     steps.append(('Feel No Pain - 019 Move And Interact Gadget', lambda: BT.MoveAndInteractWithGadget(pos=Vec2f(12727.0, -6612.0), log=True)))
     steps.append(('Feel No Pain - 020 Move And Interact Gadget', lambda: BT.MoveAndInteractWithGadget(pos=Vec2f(12701.0, -6523.0), log=True)))
     steps.append(('Feel No Pain - 021 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(12602.0, -6210.0), 0x835207, log=True)))
+    steps.append(('Feel No Pain - 022 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
     return steps
 
 
@@ -1561,8 +1982,445 @@ def _steps_unlock_dwarven_stability() -> list[PlannerStep]:
     steps.append(('Dwarven Stability - 010 Wait', lambda: BT.Wait(3000)))
     steps.append(('Dwarven Stability - 011 Wait For Map Change', lambda: BT.WaitForMapToChange(map_id=643, timeout_ms=MAP_TIMEOUT_MS)))
     steps.append(('Dwarven Stability - 012 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(12009, 24726), 0x837e07, log=True)))
+    steps.append(('Dwarven Stability - 013 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
     return steps
 
+
+def _steps_unlock_great_dwarf_weapon() -> list[PlannerStep]:
+    steps: list[PlannerStep] = []
+    steps.append(('Great Dwarf Weapon - 001 Travel', lambda: BT.Travel(target_map_id=652, log=True)))
+    steps.append(('Great Dwarf Weapon - 002 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-25,4723), target_map_id=625, timeout_ms=MAP_TIMEOUT_MS, log=True)))
+    steps.append(('Great Dwarf Weapon - 003 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-3416.00, 17460.00), 0x838401, log=True)))
+    steps.append(('Great Dwarf Weapon - 004 Move And Dialog', lambda: BT.SendDialog(0x84)))
+    steps.append(('Great Dwarf Weapon - 005 Wait For Map Load', lambda: BT.WaitForMapLoad(717)))
+    steps.append(('Great Dwarf Weapon - 006 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-3416.00, 17460.00), 0x838404, log=True)))
+    steps.append(('Great Dwarf Weapon - 007 Move', lambda: BT.Move(Vec2f(-2297.21, 15809.95), log=False)))
+    steps.append(('Great Dwarf Weapon - 008 Clear Area', lambda: BT.ClearEnemiesInArea(Vec2f(-2297.21, 15809.95),radius=Range.Compass.value, log=True)))
+    steps.append(('Great Dwarf Weapon - 009 Wait for total cleanup', lambda: BT.WaitForClearEnemiesInArea(-2297.21, 15809.95, radius=Range.Compass.value, stable_clear_ms=120_000)))
+    steps.append(('Great Dwarf Weapon - 010 Wait for map change', lambda: BT.WaitForMapToChange(map_id=625)))
+    steps.append(('Great Dwarf Weapon - 011 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-3416.00, 17460.00), 0x838407, log=True)))
+    steps.append(('Great Dwarf Weapon - 012 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
+    return steps
+
+def _steps_unlock_by_urals_hammer() -> list[PlannerStep]:
+    steps: list[PlannerStep] = []
+    steps.append(('Great Dwarf Weapon - 001 Travel', lambda: BT.Travel(target_map_id=652, log=True)))
+    steps.append(('Great Dwarf Weapon - 002 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-25,4723), target_map_id=625, timeout_ms=MAP_TIMEOUT_MS, log=True)))
+    steps.append(('Great Dwarf Weapon - 003 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-3416.00, 17460.00), 0x838401, log=True)))
+    steps.append(('Great Dwarf Weapon - 004 Move And Dialog', lambda: BT.SendDialog(0x84)))
+    steps.append(('Great Dwarf Weapon - 005 Wait For Map Load', lambda: BT.WaitForMapLoad(717)))
+    steps.append(('Great Dwarf Weapon - 006 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-3416.00, 17460.00), 0x838404, log=True)))
+    steps.append(('Great Dwarf Weapon - 007 Move', lambda: BT.Move(Vec2f(-2297.21, 15809.95), log=False)))
+    steps.append(('Great Dwarf Weapon - 008 Clear Area', lambda: BT.ClearEnemiesInArea(Vec2f(-2297.21, 15809.95),radius=Range.Compass.value, log=True)))
+    steps.append(('Great Dwarf Weapon - 009 Wait for total cleanup', lambda: BT.WaitForClearEnemiesInArea(-2297.21, 15809.95, radius=Range.Compass.value, stable_clear_ms=120_000)))
+    steps.append(('Great Dwarf Weapon - 010 Wait for map change', lambda: BT.WaitForMapToChange(map_id=625)))
+    steps.append(('Great Dwarf Weapon - 011 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-3416.00, 17460.00), 0x838407, log=True)))
+    steps.append(('Great Dwarf Weapon - 012 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
+    return steps
+
+
+def _steps_unlock_great_dwarf_armor() -> list[PlannerStep]:
+    steps: list[PlannerStep] = []
+    steps.append(('Great Dwarf Armor - 001 Travel', lambda: BT.Travel(target_map_id=652, log=True)))
+    steps.append(('Great Dwarf Armor - 002 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-25,4723), target_map_id=625, timeout_ms=MAP_TIMEOUT_MS, log=True)))
+    steps.append(('Great Dwarf Armor - 003 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-3416.00, 17460.00), 0x834501, log=True)))
+    steps.append(('Great Dwarf Armor - 004 Travel', lambda: BT.Travel(643)))
+    steps.append(('Great Dwarf Armor - 005 Exit', lambda : BT.MoveAndExitMap(Vec2f(9656,23869),target_map_id=513 )))
+    steps.append(('Great Dwarf Armor - 006 Vanquish', lambda : BT.VanquishNode([(3809,22487),(2807,17322),(234,15756),(-2925,13265),(-6376,8698),(-8987,8005),(-9265,5937),(-9522,4043),(-8518,2346),(-11257,1443),(-12605,4127),(-12674,428),])))
+    steps.append(('Great Dwarf Armor - 007 Travel', lambda: BT.Travel(target_map_id=652, log=True)))
+    steps.append(('Great Dwarf Armor - 008 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-25,4723), target_map_id=625, timeout_ms=MAP_TIMEOUT_MS, log=True)))
+    steps.append(('Great Dwarf Armor - 009 Move And Dialog', lambda: BT.MoveAndAutoDialog(Vec2f(-3416.00, 17460.00),0, log=True)))
+
+    steps.append(('Great Dwarf Armor - 010 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
+    return steps
+
+
+ALKAR_DESTROYER_POSITION = (-14690.0, 17456.0)
+
+
+def _use_alkars_concoction() -> BehaviorTree:
+    # Confirmed from runtime log after a successful manual jump.
+    ALKAR_CONCOCTION_MODEL_ID = 25739
+
+    state = {
+        "started_ms": 0.0,
+        "last_log_ms": 0.0,
+    }
+
+    def _find_concoction_by_model_id() -> int:
+        try:
+            item_id = int(
+                GLOBAL_CACHE.Inventory.GetFirstModelID(ALKAR_CONCOCTION_MODEL_ID) or 0
+            )
+            if item_id > 0:
+                return item_id
+        except Exception:
+            pass
+
+        # Fallback: scan carried bags directly, still without relying on item names.
+        try:
+            bag_list = GLOBAL_CACHE.ItemArray.CreateBagList(1, 2, 3, 4)
+            item_array = GLOBAL_CACHE.ItemArray.GetItemArray(bag_list)
+            for raw_item_id in item_array:
+                item_id = int(raw_item_id)
+                try:
+                    if int(GLOBAL_CACHE.Item.GetModelID(item_id) or 0) == ALKAR_CONCOCTION_MODEL_ID:
+                        return item_id
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        return 0
+
+    def _use(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        import time
+
+        now_ms = time.monotonic() * 1000.0
+        if state["started_ms"] <= 0.0:
+            state["started_ms"] = now_ms
+
+        item_id = _find_concoction_by_model_id()
+
+        if item_id <= 0:
+            if now_ms - state["last_log_ms"] >= 2000.0:
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    f"Alkar: waiting for concoction model_id={ALKAR_CONCOCTION_MODEL_ID}",
+                    PySystem.Console.MessageType.Warning,
+                )
+                state["last_log_ms"] = now_ms
+
+            if now_ms - state["started_ms"] >= 10000.0:
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    f"Alkar: concoction model_id={ALKAR_CONCOCTION_MODEL_ID} not found after 10s",
+                    PySystem.Console.MessageType.Error,
+                )
+                state["started_ms"] = 0.0
+                state["last_log_ms"] = 0.0
+                return BehaviorTree.NodeState.FAILURE
+
+            return BehaviorTree.NodeState.RUNNING
+
+        try:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"Alkar: using concoction item_id={item_id}, model_id={ALKAR_CONCOCTION_MODEL_ID}",
+                PySystem.Console.MessageType.Info,
+            )
+
+            GLOBAL_CACHE.Inventory.UseItem(item_id)
+
+            state["started_ms"] = 0.0
+            state["last_log_ms"] = 0.0
+            return BehaviorTree.NodeState.SUCCESS
+
+        except Exception as exc:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"Alkar: failed to use concoction: {exc}",
+                PySystem.Console.MessageType.Error,
+            )
+            state["started_ms"] = 0.0
+            state["last_log_ms"] = 0.0
+            return BehaviorTree.NodeState.FAILURE
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Alkar - Use Concoction",
+            action_fn=_use,
+            aftercast_ms=1500,
+        )
+    )
+
+def _clear_target() -> BehaviorTree:
+    def _tick(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        Player.ChangeTarget(0)
+        return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Alkar - Clear Target",
+            action_fn=_tick,
+            aftercast_ms=250,
+        )
+    )
+
+
+def _move_to_nearest_destroyer(
+    stop_distance: float = 150.0,
+    timeout_ms: int = 15_000,
+) -> BehaviorTree:
+    """Follow the nearest living enemy without ever targeting it.
+
+    In Glint's Challenge at this point of the quest the hostile agents are
+    Destroyers, so the nearest living enemy is the desired acid target.
+    """
+    state = {
+        "started_ms": 0.0,
+        "last_move_ms": 0.0,
+        "last_enemy_id": 0,
+    }
+
+    def _reset() -> None:
+        state["started_ms"] = 0.0
+        state["last_move_ms"] = 0.0
+        state["last_enemy_id"] = 0
+
+    def _tick(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        now_ms = time.monotonic() * 1000.0
+        if state["started_ms"] <= 0.0:
+            state["started_ms"] = now_ms
+
+        # HeroAI is disabled here, but keep the player explicitly untargeted.
+        if int(Player.GetTargetID() or 0) != 0:
+            Player.ChangeTarget(0)
+
+        px, py = Player.GetXY()
+        living_enemies: list[int] = []
+
+        for raw_agent_id in AgentArray.GetEnemyArray():
+            agent_id = int(raw_agent_id)
+            try:
+                if Agent.IsLiving(agent_id) and not Agent.IsDead(agent_id):
+                    living_enemies.append(agent_id)
+            except Exception:
+                continue
+
+        if not living_enemies:
+            if now_ms - state["started_ms"] >= float(timeout_ms):
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    "Alkar: no living Destroyer found near the approach area.",
+                    PySystem.Console.MessageType.Error,
+                )
+                _reset()
+                return BehaviorTree.NodeState.FAILURE
+            return BehaviorTree.NodeState.RUNNING
+
+        def _distance_sq(agent_id: int) -> float:
+            ex, ey = Agent.GetXY(agent_id)
+            dx = float(ex) - float(px)
+            dy = float(ey) - float(py)
+            return dx * dx + dy * dy
+
+        enemy_id = min(living_enemies, key=_distance_sq)
+        ex, ey = Agent.GetXY(enemy_id)
+        dx = float(ex) - float(px)
+        dy = float(ey) - float(py)
+        distance_sq = dx * dx + dy * dy
+
+        if distance_sq <= float(stop_distance) * float(stop_distance):
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"Alkar: reached nearest Destroyer agent_id={enemy_id} within {stop_distance:.0f} units.",
+                PySystem.Console.MessageType.Info,
+            )
+            Player.ChangeTarget(0)
+            _reset()
+            return BehaviorTree.NodeState.SUCCESS
+
+        # Refresh the destination while the Destroyer moves, without interacting
+        # with or selecting it.
+        if (
+            enemy_id != int(state["last_enemy_id"])
+            or now_ms - float(state["last_move_ms"]) >= 250.0
+        ):
+            Player.Move(float(ex), float(ey))
+            state["last_move_ms"] = now_ms
+            state["last_enemy_id"] = enemy_id
+
+        if now_ms - state["started_ms"] >= float(timeout_ms):
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"Alkar: timed out moving toward nearest Destroyer agent_id={enemy_id}.",
+                PySystem.Console.MessageType.Error,
+            )
+            Player.ChangeTarget(0)
+            _reset()
+            return BehaviorTree.NodeState.FAILURE
+
+        return BehaviorTree.NodeState.RUNNING
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Alkar - Move To Nearest Destroyer",
+            action_fn=_tick,
+            aftercast_ms=0,
+        )
+    )
+
+
+def _steps_unlock_alkar_alchemical_acid() -> list[PlannerStep]:
+    steps: list[PlannerStep] = []
+    steps.append(('Alkar - 001 Travel', lambda: BT.Travel(target_map_id=652, log=True)))
+    steps.append(('Alkar - 002 Take Quest', lambda: BT.MoveAndDialog(Vec2f(-5.00, -911.00), 0x835C01, log=True)))
+    steps.append(('Alkar - 003 Enter Mission', lambda: BT.MoveAndDialog(Vec2f(2480.00, 3586.00), 0x86, log=True)))
+    steps.append(('Alkar - 004 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=37, timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('Alkar - 005 Disable HeroAI', lambda: BottingTree.DisableHeroAITree(reset_runtime=True)))
+    steps.append(('Alkar - 006 Wait HeroAI Off', lambda: BT.Wait(500)))
+    steps.append(('Alkar - 007 Clear Target', lambda: _clear_target()))
+    steps.append(('Alkar - 008 Wait For Destroyers', lambda: BT.Wait(50000)))
+    steps.append(('Alkar - 009 Clear Target Before Move', lambda: _clear_target()))
+    steps.append(('Alkar - 010 Move Near Destroyers', lambda: BT.Move(Vec2f(-2718.10, -88.09), pause_on_combat=False, log=True)))
+    steps.append(('Alkar - 011 Move To Nearest Destroyer', lambda: _move_to_nearest_destroyer(stop_distance=150.0, timeout_ms=15_000)))
+    steps.append(('Alkar - 012 Use Concoction', lambda: _use_alkars_concoction()))
+    steps.append(('Alkar - 013 Wait For Quest Update', lambda: BT.Wait(2000)))
+    steps.append(('Alkar - 014 Enable HeroAI', lambda: BottingTree.EnableHeroAITree(reset_runtime=True)))
+    steps.append(('Alkar - 015 Wait For Return', lambda: BT.WaitForMapToChange(map_id=652, timeout_ms=MAP_TIMEOUT_MS)))
+    steps.append(('Alkar - 016 Reward', lambda: BT.MoveAndDialog(Vec2f(-5.00, -911.00), 0x835C07, log=True)))
+    steps.append(('Alkar - 017 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
+    return steps
+
+
+DESTROYER_CORE_MODEL_ID = 27033
+DESTROYER_CORES_REQUIRED = 3
+
+
+def _inventory_model_quantity(model_id: int) -> int:
+    """Return the total carried quantity of a model across bags 1-4."""
+    total = 0
+
+    try:
+        bags = GLOBAL_CACHE.ItemArray.CreateBagList(1, 2, 3, 4)
+        item_array = GLOBAL_CACHE.ItemArray.GetItemArray(bags)
+    except Exception:
+        return 0
+
+    for raw_item_id in item_array:
+        item_id = int(raw_item_id)
+
+        try:
+            if int(GLOBAL_CACHE.Item.GetModelID(item_id) or 0) != int(model_id):
+                continue
+
+            quantity = int(Item.Properties.GetQuantity(item_id) or 0)
+            total += max(0, quantity)
+        except Exception:
+            continue
+
+    return total
+
+
+def _lod_has_required_destroyer_cores(
+    required: int = DESTROYER_CORES_REQUIRED,
+) -> BehaviorTree:
+    """SUCCESS when the player carries at least the required Destroyer Cores."""
+
+    def _check() -> BehaviorTree.NodeState:
+        quantity = _inventory_model_quantity(DESTROYER_CORE_MODEL_ID)
+
+        PySystem.Console.Log(
+            MODULE_NAME,
+            f"Light of Deldrimor: Destroyer Cores {quantity}/{required}.",
+            PySystem.Console.MessageType.Info,
+        )
+
+        return (
+            BehaviorTree.NodeState.SUCCESS
+            if quantity >= int(required)
+            else BehaviorTree.NodeState.FAILURE
+        )
+
+    return BehaviorTree(
+        BehaviorTree.ConditionNode(
+            name=f"LoD - Have {required} Destroyer Cores",
+            condition_fn=_check,
+        )
+    )
+
+
+def _lod_farm_one_destroyer_core_run() -> BehaviorTree:
+    """
+    Run one mission cycle.
+
+    The final Failer is intentional: after returning to map 652 it forces the
+    surrounding RepeaterUntilSuccessNode to restart from the inventory check.
+    """
+    return BT.Sequence(
+        name="LoD - Farm One Destroyer Core Run",
+        children=[
+            BT.MoveAndDialog(
+                Vec2f(2480.00, 3586.00),
+                0x86,
+                log=True,
+            ),
+            BT.WaitForMapLoad(
+                map_id=37,
+                timeout_ms=MAP_TIMEOUT_MS,
+            ),
+            BT.Move(
+                Vec2f(-4531.36, 160.18),
+                log=True,
+            ),
+            BT.WaitForClearEnemiesInArea(
+                -4531.36,
+                160.18,
+                stable_clear_ms=60000,
+            ),
+            BT.WaitForMapToChange(
+                map_id=652,
+                timeout_ms=MAP_TIMEOUT_MS,
+            ),
+            BT.Wait(1000),
+
+            # One run is complete, but the overall job is not considered
+            # successful until the next inventory check sees 3+ cores.
+            BT.Failer(name="LoD - Recheck Destroyer Cores"),
+        ],
+    )
+
+
+def _lod_collect_destroyer_cores_until_ready() -> BehaviorTree:
+    """
+    Check inventory first.
+
+    3+ cores -> SUCCESS immediately.
+    <3 cores -> run mission once -> FAILURE -> repeater checks inventory again.
+    """
+    check_or_farm = BehaviorTree(
+        BehaviorTree.SelectorNode(
+            name="LoD - Check Cores Or Farm",
+            children=[
+                _lod_has_required_destroyer_cores().root,
+                _lod_farm_one_destroyer_core_run().root,
+            ],
+        )
+    )
+
+    return BehaviorTree(
+        BehaviorTree.RepeaterUntilSuccessNode(
+            name="LoD - Farm Until 3 Destroyer Cores",
+            child=check_or_farm.root,
+            timeout_ms=0,
+        )
+    )
+
+
+def _steps_unlock_light_of_deldrimor() -> list[PlannerStep]:
+    steps: list[PlannerStep] = []
+
+    steps.append(('LoD - 001 Travel', lambda: BT.Travel(target_map_id=652, log=True)))
+    steps.append(('LoD - 002 Take Quest', lambda: BT.MoveAndDialog(Vec2f(-5.00, -911.00), 0x835B01, log=True)))
+    steps.append(('LoD - 003 Add Destroyer Core To LootFilter', lambda: BT.AddModelToLootWhitelist(DESTROYER_CORE_MODEL_ID)))
+    steps.append(('LoD - 004 Collect 3 Destroyer Cores', lambda: _lod_collect_destroyer_cores_until_ready()))
+    steps.append(('LoD - 005 Reward', lambda: BT.MoveAndDialog(Vec2f(-5.00, -911.00), 0x835B07, log=True)))
+
+    steps.append(('LoD - 006 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
+    return steps
+
+def steps_unlock_breath_of_the_great_dwarf() -> list[PlannerStep]:
+    steps: list[PlannerStep] = []
+
+    steps.append(('LoD - 001 Travel', lambda: BT.Travel(target_map_id=652, log=True)))
+    steps.append(('LoD - 002 Take Quest', lambda: BT.MoveAndDialog(Vec2f(-5.00, -911.00), 0x835B01, log=True)))
+    steps.append(('LoD - 003 Add Destroyer Core To LootFilter', lambda: BT.AddModelToLootWhitelist(DESTROYER_CORE_MODEL_ID)))
+    steps.append(('LoD - 004 Collect 3 Destroyer Cores', lambda: _lod_collect_destroyer_cores_until_ready()))
+    steps.append(('LoD - 005 Reward', lambda: BT.MoveAndDialog(Vec2f(-5.00, -911.00), 0x835B07, log=True)))
+
+    steps.append(('LoD - 006 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
+    return steps
 
 # ---------------------------------------------------------------------------
 # Skill registry / UI
@@ -1847,7 +2705,88 @@ ROUTE_BUILDERS: dict[str, Callable[[], list[PlannerStep]]] = {
     'you_move_like_a_dwarf': _steps_unlock_you_move_like_a_dwarf,
     'feel_no_pain': _steps_unlock_feel_no_pain,
     'dwarven_stability': _steps_unlock_dwarven_stability,
+    'great_dwarf_weapon': _steps_unlock_great_dwarf_weapon,
+    'alkars_alchemical_acid': _steps_unlock_alkar_alchemical_acid,
+    'great_dwarf_armor': _steps_unlock_great_dwarf_armor,
+    'light_of_deldrimor': _steps_unlock_light_of_deldrimor,
+    'breath_of_the_great_dwarf' : steps_unlock_breath_of_the_great_dwarf,
+    'by_urals_hammer' : _steps_unlock_by_urals_hammer,
+    'mindbender' :_steps_unlock_mindbender
 }
+
+# ---------------------------------------------------------------------------
+# Skill dependency graph
+# ---------------------------------------------------------------------------
+
+# Only dependencies whose prerequisite routes are already implemented are
+# listed here. Missing learned prerequisites are automatically prepended.
+#
+# Verified quest chains:
+#   Asura:
+#     Smooth Criminal -> the four secondary Ciphers
+#     four secondary Ciphers -> Pain Inverter -> Air of Superiority
+#   Vanguard:
+#     Winds -> Ebon Vanguard Assassin Support
+#   Norn:
+#     You Move Like a Dwarf! -> Anything You Can Do -> I Am Unstoppable!
+#     (the IAU route already handles Anything You Can Do itself)
+#   Deldrimor:
+#     Great Dwarf Weapon / By Ural's Hammer! -> Great Dwarf Armor
+SKILL_PREREQUISITES: dict[str, tuple[str, ...]] = {
+    "Mental_Block": ("smooth_criminal",),
+    "radiation_field": ("smooth_criminal",),
+    "asuran_scan": ("smooth_criminal",),
+    "technobabble": ("smooth_criminal",),
+
+    "pain_inverter": (
+        "Mental_Block",
+        "radiation_field",
+        "asuran_scan",
+        "technobabble",
+    ),
+    "air_of_superiority": ("pain_inverter",),
+
+    "ebon_vanguard_assassin_support": ("winds",),
+
+    "i_am_unstoppable": ("you_move_like_a_dwarf",),
+
+    "great_dwarf_armor": ("great_dwarf_weapon",),
+
+    # The Destroyer Challenge is only available after Destructive Research.
+    "alkars_alchemical_acid": ("light_of_deldrimor",),
+}
+
+
+# Requirements which are real quest prerequisites but do not yet have a
+# complete automated route in ROUTE_BUILDERS.
+#
+# Destructive Research grants BOTH Light of Deldrimor and Breath of the Great
+# Dwarf. Having either skill learned proves that prerequisite quest was
+# completed on this character.
+SKILL_EXTERNAL_REQUIREMENTS: dict[str, dict[str, object]] = {}
+
+
+# Canonical names used by Skill.GetID(). Explicit aliases avoid punctuation
+# differences between UI labels and Py4GW skill identifiers.
+SKILL_API_NAMES: dict[str, str] = {
+    "air_of_superiority": "Air_of_Superiority",
+    "asuran_scan": "Asuran_Scan",
+    "Mental_Block": "Mental_Block",
+    "pain_inverter": "Pain_Inverter",
+    "radiation_field": "Radiation_Field",
+    "smooth_criminal": "Smooth_Criminal",
+    "technobabble": "Technobabble",
+    "winds": "Winds",
+    "ebon_vanguard_assassin_support": "Ebon_Vanguard_Assassin_Support",
+    "you_move_like_a_dwarf": "You_Move_Like_a_Dwarf",
+    "i_am_unstoppable": "I_Am_Unstoppable",
+    "great_dwarf_weapon": "Great_Dwarf_Weapon",
+    "great_dwarf_armor": "Great_Dwarf_Armor",
+    "light_of_deldrimor": "Light_of_Deldrimor",
+    "breath_of_the_great_dwarf": "Breath_of_the_Great_Dwarf",
+    "alkars_alchemical_acid": "Alkars_Alchemical_Acid",
+}
+
 
 def _skill_entry_by_key(key: str):
     for entry in RAW_SKILLS:
@@ -1856,7 +2795,141 @@ def _skill_entry_by_key(key: str):
     return None
 
 
-def _route_steps_for_key(key: str) -> list[PlannerStep]:
+def _skill_label(key: str) -> str:
+    entry = _skill_entry_by_key(key)
+    return str(entry[1]) if entry is not None else str(key)
+
+
+def _skill_id_for_key(key: str) -> int:
+    """Resolve a UI skill key to a Py4GW skill id."""
+    candidates: list[str] = []
+
+    explicit = SKILL_API_NAMES.get(key)
+    if explicit:
+        candidates.append(explicit)
+
+    candidates.append(str(key))
+
+    entry = _skill_entry_by_key(key)
+    if entry is not None:
+        label = str(entry[1])
+        candidates.append(label)
+
+        normalized = (
+            label
+            .replace('"', "")
+            .replace("'", "")
+            .replace("!", "")
+            .replace("-", "_")
+            .replace(" ", "_")
+        )
+        candidates.append(normalized)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate = str(candidate).strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+
+        try:
+            skill_id = int(GLOBAL_CACHE.Skill.GetID(candidate) or 0)
+        except Exception:
+            skill_id = 0
+
+        if skill_id > 0:
+            return skill_id
+
+    return 0
+
+
+def _skill_is_learned(key: str) -> bool:
+    """Character-level check; account-wide unlocks do NOT satisfy prerequisites."""
+    skill_id = _skill_id_for_key(key)
+    if skill_id <= 0:
+        return False
+
+    try:
+        return bool(GLOBAL_CACHE.SkillBar.IsSkillLearnt(skill_id))
+    except Exception:
+        return False
+
+
+def _external_requirement_block_reason(key: str) -> str | None:
+    requirement = SKILL_EXTERNAL_REQUIREMENTS.get(key)
+    if requirement is None:
+        return None
+
+    any_of = tuple(requirement.get("any_of", ()))
+    if any(_skill_is_learned(str(required_key)) for required_key in any_of):
+        return None
+
+    return str(requirement.get("message", "A prerequisite quest is still missing."))
+
+
+def _skill_block_reason(key: str, _visited: set[str] | None = None) -> str | None:
+    """
+    Return a reason only when a required prerequisite cannot currently be
+    automated. Automated missing prerequisite skills do NOT block the button.
+    """
+    visited = set() if _visited is None else set(_visited)
+    if key in visited:
+        return f"Dependency loop detected for {_skill_label(key)}."
+    visited.add(key)
+
+    external_reason = _external_requirement_block_reason(key)
+    if external_reason:
+        return external_reason
+
+    for prerequisite in SKILL_PREREQUISITES.get(key, ()):
+        if _skill_is_learned(prerequisite):
+            continue
+
+        if prerequisite not in ROUTE_BUILDERS:
+            return (
+                f"Requires {_skill_label(prerequisite)}, "
+                "but that prerequisite route is not automated yet."
+            )
+
+        nested_reason = _skill_block_reason(prerequisite, visited)
+        if nested_reason:
+            return nested_reason
+
+    return None
+
+
+def _missing_automated_prerequisite_keys(key: str) -> list[str]:
+    """Return missing automated prerequisites in actual execution order."""
+    result: list[str] = []
+    scheduled: set[str] = set()
+    visiting: set[str] = set()
+
+    def _visit(current_key: str) -> None:
+        if current_key in visiting:
+            return
+
+        visiting.add(current_key)
+        try:
+            for prerequisite in SKILL_PREREQUISITES.get(current_key, ()):
+                if _skill_is_learned(prerequisite):
+                    continue
+                if prerequisite not in ROUTE_BUILDERS:
+                    continue
+
+                _visit(prerequisite)
+
+                if prerequisite not in scheduled and not _skill_is_learned(prerequisite):
+                    result.append(prerequisite)
+                    scheduled.add(prerequisite)
+        finally:
+            visiting.discard(current_key)
+
+    _visit(key)
+    return result
+
+
+def _base_route_steps_for_key(key: str) -> list[PlannerStep]:
+    """Return only the route belonging to key, with no automatic prerequisites."""
     builder = ROUTE_BUILDERS.get(key)
     if builder is not None:
         return builder()
@@ -1872,8 +2945,28 @@ def _route_steps_for_key(key: str) -> list[PlannerStep]:
     )]
 
 
+def _planned_route_keys(key: str) -> list[str]:
+    """
+    Build the complete prerequisite chain for a normal skill-button start.
+
+    Already learned prerequisite skills are skipped. The requested skill itself
+    is always appended so the button keeps its original behavior.
+    """
+    prerequisites = _missing_automated_prerequisite_keys(key)
+    return [*prerequisites, key]
+
+
+def _planned_route_steps_for_key(key: str) -> list[PlannerStep]:
+    steps: list[PlannerStep] = []
+    for route_key in _planned_route_keys(key):
+        steps.extend(_base_route_steps_for_key(route_key))
+    return steps
+
+
 def _route_checkpoints_for_key(key: str) -> list[tuple[str, str | None]]:
-    steps = _route_steps_for_key(key)
+    # Route Controls are intentionally the raw selected-skill route only.
+    # A manual checkpoint jump remains a debugging/advanced override.
+    steps = _base_route_steps_for_key(key)
     result: list[tuple[str, str | None]] = [("0. Start entire route", None)]
     for index, (step_name, _factory) in enumerate(steps, start=1):
         display_name = CHECKPOINT_LABEL_OVERRIDES.get(step_name, step_name)
@@ -1883,13 +2976,46 @@ def _route_checkpoints_for_key(key: str) -> list[tuple[str, str | None]]:
 
 def _start_route(key: str, start_from: str | None = None) -> None:
     tree = ensure_botting_tree()
-    steps = _route_steps_for_key(key)
+
+    # Normal starts enforce real prerequisite availability.
+    # Explicit checkpoint jumps remain an advanced/manual override.
+    if start_from is None:
+        blocked_reason = _skill_block_reason(key)
+        if blocked_reason:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"{_skill_label(key)} locked: {blocked_reason}",
+                PySystem.Console.MessageType.Warning,
+            )
+            return
+        steps = _planned_route_steps_for_key(key)
+    else:
+        steps = _base_route_steps_for_key(key)
+
     if not steps:
         return
+
     if tree.IsStarted():
         tree.Stop()
-    entry = _skill_entry_by_key(key)
-    label = entry[1] if entry is not None else key
+
+    label = _skill_label(key)
+    prerequisite_keys = (
+        _missing_automated_prerequisite_keys(key)
+        if start_from is None
+        else []
+    )
+
+    if prerequisite_keys:
+        chain = " -> ".join(
+            [_skill_label(prerequisite) for prerequisite in prerequisite_keys]
+            + [label]
+        )
+        PySystem.Console.Log(
+            MODULE_NAME,
+            f"Auto prerequisite chain: {chain}",
+            PySystem.Console.MessageType.Info,
+        )
+
     tree.SetCurrentNamedPlannerSteps(
         steps,
         start_from=start_from,
@@ -1900,39 +3026,148 @@ def _start_route(key: str, start_from: str | None = None) -> None:
     )
 
 
+def _push_unlocked_skill_style() -> None:
+    """Give learned skills a persistent blue frame/background around the icon."""
+
+    PyImGui.push_style_color(
+        PyImGui.ImGuiCol.Button,
+        (0.05, 0.65, 0.85, 0.88),
+    )
+
+    PyImGui.push_style_color(
+        PyImGui.ImGuiCol.ButtonHovered,
+        (0.10, 0.80, 1.00, 0.98),
+    )
+
+    PyImGui.push_style_color(
+        PyImGui.ImGuiCol.ButtonActive,
+        (0.03, 0.52, 0.72, 1.00),
+    )
+
+
+def _is_item_hovered_including_disabled() -> bool:
+    """Return hover state even for items inside begin_disabled()."""
+    try:
+        hovered_flags = getattr(PyImGui, "HoveredFlags", None)
+        allow_when_disabled = (
+            getattr(hovered_flags, "AllowWhenDisabled", None)
+            if hovered_flags is not None
+            else None
+        )
+        if allow_when_disabled is not None:
+            return bool(PyImGui.is_item_hovered(allow_when_disabled))
+    except Exception:
+        pass
+
+    # Current Dear ImGui value for ImGuiHoveredFlags_AllowWhenDisabled.
+    # Kept behind a try so older bindings cannot break the UI.
+    try:
+        return bool(PyImGui.is_item_hovered(1024))
+    except Exception:
+        pass
+
+    try:
+        return bool(PyImGui.is_item_hovered())
+    except Exception:
+        return False
+
+
 def _draw_skill_grid(faction: str) -> None:
     entries = [entry for entry in RAW_SKILLS if entry[2] == faction]
     if not entries:
         PyImGui.text("No Skill")
         return
 
-    icon_size = 48
-    cols = 4
+    icon_size = 42
+    cols = 5
     c = 0
+
     for key, label, _fac, fn_name, desc in entries:
         icon_path = _skill_icon_path(key)
         has_icon = icon_path is not None
         implemented = key in ROUTE_BUILDERS
 
+        # Character-level learned state.
+        learned = _skill_is_learned(key)
+
+        # 1) Not implemented at all -> always greyed/disabled.
+        # 2) Implemented but blocked by a non-automated prerequisite -> greyed/disabled.
+        missing_route_reason = (
+            "No unlock function exists for this skill yet."
+            if not implemented
+            else None
+        )
+
+        blocked_reason = (
+            _skill_block_reason(key)
+            if implemented and not learned
+            else None
+        )
+
+        lock_reason = missing_route_reason or blocked_reason
+        locked = bool(lock_reason)
+
+        # Learned = green button/frame around the existing skill icon.
+        if learned:
+            _push_unlocked_skill_style()
+
+        # Locked = standard ImGui disabled/greyed appearance.
+        if locked:
+            PyImGui.begin_disabled(True)
+
         if icon_path is not None:
-            clicked = ImGui.ImageButton(f"##{key}", icon_path, icon_size, icon_size)
+            clicked = ImGui.ImageButton(
+                f"##{key}",
+                icon_path,
+                icon_size,
+                icon_size,
+            )
         else:
             button_label = label if implemented else f"{label} [TODO]"
             clicked = PyImGui.button(button_label, 260, 40)
 
-        if clicked:
+        if locked:
+            PyImGui.end_disabled()
+
+        if learned:
+            PyImGui.pop_style_color(3)
+
+        if clicked and not locked:
             _start_route(key)
 
-        if PyImGui.is_item_hovered():
+        if _is_item_hovered_including_disabled():
             PyImGui.begin_tooltip()
             PyImGui.text(label)
+
+            if learned:
+                PyImGui.push_style_color(
+                    PyImGui.ImGuiCol.Text,
+                    (0.35, 1.00, 0.45, 1.00),
+                )
+                PyImGui.text("Unlocked on this character")
+                PyImGui.pop_style_color(1)
+
             PyImGui.separator()
             PyImGui.text_wrapped(fn_name)
             PyImGui.separator()
             PyImGui.text_wrapped(desc)
-            if not implemented:
+
+            if locked:
                 PyImGui.separator()
-                PyImGui.text_wrapped("No active route exists for this skill in the legacy source.")
+                PyImGui.text("Prerequisite:" if blocked_reason else "Status:")
+                PyImGui.text_wrapped(str(lock_reason))
+            elif not learned:
+                missing_prerequisites = _missing_automated_prerequisite_keys(key)
+                if missing_prerequisites:
+                    PyImGui.separator()
+                    chain = " -> ".join(
+                        [_skill_label(prerequisite) for prerequisite in missing_prerequisites]
+                        + [label]
+                    )
+                    PyImGui.text_wrapped(
+                        f"Automatic prerequisite chain: {chain}"
+                    )
+
             PyImGui.end_tooltip()
 
         if has_icon:
@@ -1940,49 +3175,53 @@ def _draw_skill_grid(faction: str) -> None:
             if c % cols != 0:
                 PyImGui.same_line(0.0, -1.0)
 
-
 def draw_portal_ui() -> None:
-    global _route_skill_index, _route_step_index, _route_previous_skill_index
+    global _route_skill_index, _route_step_index, _route_previous_skill_index, _show_route_controls
 
     if PyImGui.button("Stop current route##SU_BT_Stop"):
         ensure_botting_tree().Stop()
 
-    current_step = str(ensure_botting_tree().GetBlackboardValue("current_step_name", "") or "")
-    if current_step:
-        PyImGui.text_wrapped(f"Current step: {current_step}")
+    PyImGui.same_line(0.0, -1.0)
+    toggle_label = "Hide Route Controls" if _show_route_controls else "Show Route Controls"
+    if PyImGui.button(f"{toggle_label}##SU_BT_ToggleRouteControls"):
+        _show_route_controls = not _show_route_controls
 
-    PyImGui.separator()
-    PyImGui.text("Route Controls:")
+    if _show_route_controls:
+        current_step = str(ensure_botting_tree().GetBlackboardValue("current_step_name", "") or "")
+        if current_step:
+            PyImGui.text_wrapped(f"Current step: {current_step}")
 
-    route_entries = [entry for entry in RAW_SKILLS if entry[0] in ROUTE_BUILDERS]
-    if route_entries:
-        route_labels = [f"[{entry[2]}] {entry[1]}" for entry in route_entries]
-        _route_skill_index = max(0, min(_route_skill_index, len(route_entries) - 1))
-        _route_skill_index = PyImGui.combo("Route##SU_BT_Route", _route_skill_index, route_labels)
-        if _route_skill_index != _route_previous_skill_index:
-            _route_step_index = 0
-            _route_previous_skill_index = _route_skill_index
+        PyImGui.separator()
+        PyImGui.text("Route Controls:")
 
-        key = route_entries[_route_skill_index][0]
-        checkpoints = _route_checkpoints_for_key(key)
-        checkpoint_labels = [label for label, _step_name in checkpoints]
-        _route_step_index = max(0, min(_route_step_index, len(checkpoints) - 1))
-        _route_step_index = PyImGui.combo(
-            "Checkpoint##SU_BT_Checkpoint",
-            _route_step_index,
-            checkpoint_labels,
-        )
-        if PyImGui.button("Start / jump to checkpoint##SU_BT_JumpCheckpoint"):
-            _label, checkpoint_name = checkpoints[_route_step_index]
-            _start_route(key, start_from=checkpoint_name)
-        if _route_step_index > 0:
-            PyImGui.text_wrapped(
-                "Jumping ahead assumes all earlier quest objectives are already complete."
+        route_entries = [entry for entry in RAW_SKILLS if entry[0] in ROUTE_BUILDERS]
+        if route_entries:
+            route_labels = [f"[{entry[2]}] {entry[1]}" for entry in route_entries]
+            _route_skill_index = max(0, min(_route_skill_index, len(route_entries) - 1))
+            _route_skill_index = PyImGui.combo("Route##SU_BT_Route", _route_skill_index, route_labels)
+            if _route_skill_index != _route_previous_skill_index:
+                _route_step_index = 0
+                _route_previous_skill_index = _route_skill_index
+
+            key = route_entries[_route_skill_index][0]
+            checkpoints = _route_checkpoints_for_key(key)
+            checkpoint_labels = [label for label, _step_name in checkpoints]
+            _route_step_index = max(0, min(_route_step_index, len(checkpoints) - 1))
+            _route_step_index = PyImGui.combo(
+                "Checkpoint##SU_BT_Checkpoint",
+                _route_step_index,
+                checkpoint_labels,
             )
+            if PyImGui.button("Start / jump to checkpoint##SU_BT_JumpCheckpoint"):
+                _label, checkpoint_name = checkpoints[_route_step_index]
+                _start_route(key, start_from=checkpoint_name)
+            if _route_step_index > 0:
+                PyImGui.text_wrapped(
+                    "Jumping ahead assumes all earlier quest objectives are already complete."
+                )
 
-    PyImGui.separator()
-    PyImGui.text("Select Skill:")
-    PyImGui.separator()
+    if _show_route_controls:
+        PyImGui.separator()
 
     if PyImGui.begin_tab_bar("SU_BT_Factions"):
         for faction in FACTIONS:
@@ -1993,17 +3232,64 @@ def draw_portal_ui() -> None:
 
 
 # ---------------------------------------------------------------------------
-# BottingTree lifecycle
+# BottingTree lifecycle / compact UI
 # ---------------------------------------------------------------------------
 
 
-def _draw_compact_main_child(
-    _main_child_dimensions: tuple[int, int],
-    _icon_path: str,
-    _iconwidth: int,
-) -> None:
-    """Draw only the Skills Unlocker controls in the BottingTree Main tab."""
-    draw_portal_ui()
+def _install_compact_ui(tree: BottingTree) -> None:
+    """Use BottingTree's native window lifecycle with a smaller tab set."""
+    from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
+
+    ui = tree.UI
+
+    def _draw_compact_managed_window() -> None:
+        if not ui._ensure_window_paths():
+            return
+
+        p_open = (
+            ui._floating_button.visible
+            if ui._floating_button is not None
+            else Settings(
+                ui._main_ini_name,
+                "account",
+            ).get_bool(
+                "Configuration",
+                "show_main_window",
+                True,
+            )
+        )
+
+        expanded, open_ = ImGui.begin_with_close(
+            tree.bot_name,
+            p_open,
+            PyImGui.WindowFlags(PyImGui.WindowFlags.AlwaysAutoResize),
+        )
+
+        if ui._floating_button is not None:
+            ui._floating_button.sync_begin_with_close(open_)
+
+        if expanded:
+            if PyImGui.begin_tab_bar(tree.bot_name + "_compact_tabs"):
+                if PyImGui.begin_tab_item("Main"):
+                    draw_portal_ui()
+                    PyImGui.end_tab_item()
+
+                if PyImGui.begin_tab_item("Settings"):
+                    ui._draw_settings_child()
+                    PyImGui.end_tab_item()
+
+                if PyImGui.begin_tab_item("Debug"):
+                    ui.draw_debug_window()
+                    PyImGui.end_tab_item()
+
+                PyImGui.end_tab_bar()
+
+        ImGui.end()
+
+    # draw_window() will still handle the floating button, saved visibility,
+    # and DrawMovePathIfEnabled(). Only the contents of the managed window
+    # are replaced for this script.
+    ui._draw_managed_window = _draw_compact_managed_window
 
 
 def ensure_botting_tree() -> BottingTree:
@@ -2016,17 +3302,13 @@ def ensure_botting_tree() -> BottingTree:
             auto_start=False,
             pause_on_combat=True,
             multi_account=True,
-            auto_loot=False,
+            auto_loot=True,
             auto_resurrection_scroll=False,
             isolation_enabled=False,
             configure_fn=_configure_botting_tree,
         )
 
-        # BottingTree currently has no public option to hide its standard Main
-        # status block. Override that draw callback only for this script so the
-        # skill selector is visible immediately, while Navigation/Settings/Help/
-        # Debug remain provided by the normal BottingTree window.
-        botting_tree.UI._draw_main_child = _draw_compact_main_child
+        _install_compact_ui(botting_tree)
 
     return botting_tree
 
@@ -2036,10 +3318,14 @@ def main() -> None:
     tree = ensure_botting_tree()
     if not initialized:
         initialized = True
+
     tree.tick()
+
+    # Keep the native BottingTree draw lifecycle. The managed-window renderer
+    # itself has been replaced by _install_compact_ui().
     tree.UI.draw_window(
         icon_path=TEXTURE,
-        main_child_dimensions=(360, 430),
+        main_child_dimensions=(300, 260),
     )
 
 
