@@ -1600,7 +1600,7 @@ def _steps_unlock_mindbender() -> list[PlannerStep]:
     steps.append(('Mindbender - 008 Move And Dialog', lambda: BT.InteractTarget()))
     steps.append(('Mindbender - 009 Move And Dialog', lambda: BT.SendDialog(0x838104, log=True)))
     steps.append(('Mindbender - 010 Wait', lambda: BT.Wait(40000)))
-    steps.append(('Mindbender - 011 Wait For Clear Enemies In Area', lambda: BT.WaitForClearEnemiesInArea(-9611.00, 12114.00, stable_clear_ms=180000, radius=3500, log=True)))
+    steps.append(('Mindbender - 011 Wait For Clear Enemies In Area', lambda: BT.WaitForClearEnemiesInArea(-9611.00, 12114.00, stable_clear_ms=360000, radius=3500, keep_player_near_center=True)))
     steps.append(('Mindbender - 012 Resign Party', lambda: BT.Resign(multi_account=True, log=True)))
     steps.append(('Mindbender - 016 Move', lambda: BT.Move(Vec2f(16198.73, 15155.11))))
     steps.append(('Mindbender - 014 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(13999.00, 16113.00), 0x838107, log=True)))
