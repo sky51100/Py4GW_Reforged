@@ -7,7 +7,7 @@ import time
 import PyImGui
 import PySystem
 
-from Py4GWCoreLib import Agent, AgentArray, GLOBAL_CACHE, ImGui, Item, Map, Player
+from Py4GWCoreLib import Agent, AgentArray, Dialog, GLOBAL_CACHE, ImGui, Item, Map, Player
 from Py4GWCoreLib.BottingTree import BottingTree
 from Py4GWCoreLib.enums_src.GameData_enums import Range
 from Py4GWCoreLib.enums_src.GameData_enums import Range
@@ -1602,7 +1602,7 @@ FONK_SELECTION_POS = Vec2f(-167.00, -9.00)
 DUNE_SELECTION_POS = Vec2f(3333.00, 368.00)
 GRULHAMMER_SELECTION_POS = Vec2f(-167.00, -9.00)
 VOLUMANDUS_LAUNCH_POS = Vec2f(4185.00, 44.00)
-HOFF_SELECTION_POS = Vec2f(4185.00, 44.00)
+HOFF_SELECTOR_NAME = "Wokk"
 
 YULMA_POS = Vec2f(19231.00, 19669.00)
 PLURGG_POS = Vec2f(16382.00, 17753.00)
@@ -1730,9 +1730,9 @@ ROUND_DIALOGS_BY_QUEST_ID: dict[int, tuple[int, int, int]] = {
         ROUND_KAPPA,
     ),
     HOFF_QUEST_ID: (
-        ROUND_FIRE_ELEMENTAL,
         ROUND_ICE_ELEMENTAL,
         ROUND_EARTH_ELEMENTAL,
+        ROUND_FIRE_ELEMENTAL,
     ),
 }
 
@@ -1792,8 +1792,6 @@ def _selection_pos_for_quest(quest_id: int) -> Vec2f:
         return GRULHAMMER_SELECTION_POS
     if quest_id == VOLUMANDUS_QUEST_ID:
         return VOLUMANDUS_LAUNCH_POS
-    if quest_id == HOFF_QUEST_ID:
-        return HOFF_SELECTION_POS
     return POLYMOCK_SELECTION_POS
 
 # =============================================================================
@@ -2116,16 +2114,23 @@ def _tick_round_selection_state_machine(now: float) -> bool:
         return False
 
     if _round_phase == "find_npc":
+        quest_id = int(_round_quest_id or 0)
+
         try:
-            selector_pos = _selection_pos_for_quest(int(_round_quest_id or 0))
-            npc_id = int(
-                RoutinesAgents.GetNearestNPCXY(
-                    selector_pos.x,
-                    selector_pos.y,
-                    350.0,
+            if quest_id == HOFF_QUEST_ID:
+                # Hoff's arena layout varies between generated instances.
+                # Resolve Wokk by name instead of using a fixed selector XY.
+                npc_id = int(Agent.GetAgentIDByName(HOFF_SELECTOR_NAME) or 0)
+            else:
+                selector_pos = _selection_pos_for_quest(quest_id)
+                npc_id = int(
+                    RoutinesAgents.GetNearestNPCXY(
+                        selector_pos.x,
+                        selector_pos.y,
+                        350.0,
+                    )
+                    or 0
                 )
-                or 0
-            )
         except Exception as exc:
             npc_id = 0
             if now - _round_last_wait_log >= 1.0:
@@ -2138,14 +2143,20 @@ def _tick_round_selection_state_machine(now: float) -> bool:
         if npc_id <= 0:
             if now - _round_last_wait_log >= 1.0:
                 _round_last_wait_log = now
-                _trace_log(
-                    MODULE_NAME,
-                    (
-                        f"[ROUND] Selector NPC not available yet near "
-                        f"({_selection_pos_for_quest(int(_round_quest_id or 0)).x:.0f}, "
-                        f"{_selection_pos_for_quest(int(_round_quest_id or 0)).y:.0f}); waiting..."
-                    ),
-                )
+                if quest_id == HOFF_QUEST_ID:
+                    _trace_log(
+                        MODULE_NAME,
+                        f"[ROUND] Selector NPC '{HOFF_SELECTOR_NAME}' not available yet; waiting...",
+                    )
+                else:
+                    selector_pos = _selection_pos_for_quest(quest_id)
+                    _trace_log(
+                        MODULE_NAME,
+                        (
+                            f"[ROUND] Selector NPC not available yet near "
+                            f"({selector_pos.x:.0f}, {selector_pos.y:.0f}); waiting..."
+                        ),
+                    )
             return True
 
         _round_npc_id = npc_id
@@ -2721,6 +2732,7 @@ def _select_pieces(
     match_piece_dialogs: tuple[int, int, int],
     first_round_piece_dialog: int,
     selection_pos: Vec2f = POLYMOCK_SELECTION_POS,
+    selector_name: str | None = None,
 ) -> BehaviorTree:
     """
     Polymock flow:
@@ -2728,7 +2740,53 @@ def _select_pieces(
       2) xx86: choose which of those pieces starts the current round.
       3) 0x87: start the first round.
       Later rounds are handled automatically by _tick_polymock_round_manager().
+
+    Master Hoff can place Wokk at different coordinates depending on the
+    generated arena instance. For Hoff, every selection action is therefore
+    explicit: target Wokk -> interact -> MATCH 1 -> MATCH 2 -> MATCH 3 ->
+    first ROUND piece -> retarget Wokk -> 0x87.
     """
+    if selector_name:
+        return BT.Sequence(
+            name=f"{label} - Select Match Pieces + First Round Piece",
+            children=[
+                # Open Wokk's selector dialog without consuming MATCH #1.
+                BT.TargetAgentByName(
+                    agent_name=selector_name,
+                    log=BT_FLOW_LOGS,
+                ),
+                BT.Wait(1_000),
+                BT.InteractTarget(log=BT_FLOW_LOGS),
+                BT.Wait(1_000),
+
+                # Select the three Polymock pieces one by one.
+                BT.SendDialog(match_piece_dialogs[0], log=BT_FLOW_LOGS),
+                BT.Wait(1_000),
+                BT.SendDialog(match_piece_dialogs[1], log=BT_FLOW_LOGS),
+                BT.Wait(1_000),
+                BT.SendDialog(match_piece_dialogs[2], log=BT_FLOW_LOGS),
+                BT.Wait(1_000),
+
+                # Choose the piece that will actually be used for round 1.
+                BT.SendDialog(first_round_piece_dialog, log=BT_FLOW_LOGS),
+
+                # Important: give the selected active Polymock time to load
+                # BEFORE sending the final 0x87 start dialog.
+                BT.Wait(5_000),
+
+                # Hoff/Wokk quirk observed in live testing: retarget Wokk before
+                # sending the final 0x87 launch dialog.
+                BT.TargetAgentByName(
+                    agent_name=selector_name,
+                    log=BT_FLOW_LOGS,
+                ),
+                BT.Wait(1_000),
+                BT.SendDialog(START_MATCH_DIALOG, log=BT_FLOW_LOGS),
+                BT.Wait(1_600),
+            ],
+        )
+
+    # All other Polymock opponents keep the already validated coordinate flow.
     return BT.Sequence(
         name=f"{label} - Select Match Pieces + First Round Piece",
         children=[
@@ -2741,15 +2799,13 @@ def _select_pieces(
             BT.SendDialog(match_piece_dialogs[1], log=BT_FLOW_LOGS),
             BT.Wait(600),
             BT.SendDialog(match_piece_dialogs[2], log=BT_FLOW_LOGS),
-            BT.Wait(600),
+            BT.Wait(5_000),
 
-            # The missing step from the previous versions:
-            # choose the piece that will actually be used for round 1.
             BT.SendDialog(first_round_piece_dialog, log=BT_FLOW_LOGS),
-            BT.Wait(600),
+            BT.Wait(1_000),
 
             BT.SendDialog(START_MATCH_DIALOG, log=BT_FLOW_LOGS),
-            BT.Wait(1_500),
+            BT.Wait(1_600),
         ],
     )
 
@@ -3138,7 +3194,7 @@ def _steps_dune() -> list[PlannerStep]:
     steps = _steps_late_opponent(DUNE_TEARDRINKER_QUEST_ID)
     steps.append(
         (
-            "Dune Teardrinker - 008 Register Aloe Seed Reward",
+            "Dune Teardrinker - 009 Register Aloe Seed Reward",
             lambda: BT.MoveAndDialog(
                 POLYMOCK_REGISTER_POS,
                 REGISTER_ALOE_SEED,
@@ -3153,7 +3209,7 @@ def _steps_grulhammer() -> list[PlannerStep]:
     steps = _steps_late_opponent(GRULHAMMER_QUEST_ID)
     steps.append(
         (
-            "Grulhammer - 008 Register Fire Elemental Reward",
+            "Grulhammer - 009 Register Fire Elemental Reward",
             lambda: BT.MoveAndDialog(
                 POLYMOCK_REGISTER_POS,
                 REGISTER_FIRE_ELEMENTAL,
@@ -3168,7 +3224,7 @@ def _steps_volumandus() -> list[PlannerStep]:
     steps = _steps_late_opponent(VOLUMANDUS_QUEST_ID)
     steps.append(
         (
-            "Volumandus - 008 Register Ice Elemental Reward",
+            "Volumandus - 009 Register Ice Elemental Reward",
             lambda: BT.MoveAndDialog(
                 POLYMOCK_REGISTER_POS,
                 REGISTER_ICE_ELEMENTAL,
@@ -3206,8 +3262,9 @@ def _hoff_one_attempt_from_rata() -> BehaviorTree:
     """
     One complete Master Hoff match from Rata Sum.
 
-    Hoff dialog 0x84 teleports into the Polymock instance.
-    Arena selector/combat NPC is at (4185,44).
+    Hoff dialog 0x84 teleports into a Polymock instance.
+    The generated arena layout can vary, so the selector NPC is resolved
+    by name ("Wokk") instead of by a fixed coordinate.
     """
     return BT.Sequence(
         name="Master Hoff - One Full Match Attempt",
@@ -3225,12 +3282,12 @@ def _hoff_one_attempt_from_rata() -> BehaviorTree:
             _select_pieces(
                 "Master Hoff",
                 (
-                    MATCH_FIRE_ELEMENTAL,
                     MATCH_ICE_ELEMENTAL,
                     MATCH_EARTH_ELEMENTAL,
+                    MATCH_FIRE_ELEMENTAL,
                 ),
-                ROUND_FIRE_ELEMENTAL,
-                selection_pos=HOFF_SELECTION_POS,
+                ROUND_ICE_ELEMENTAL,
+                selector_name=HOFF_SELECTOR_NAME,
             ),
 
             # No match timeout; GW returns us to Rata Sum.
@@ -3486,34 +3543,488 @@ def _steps_fonk() -> list[PlannerStep]:
         ),
     ]
 
+
+# ---------------------------------------------------------------------------
+# Runtime Polymock progression resolver
+# ---------------------------------------------------------------------------
+
+POLYMOCK_CHAIN_QUEST_IDS: tuple[int, ...] = (
+    YULMA_QUEST_ID,
+    PLURGG_QUEST_ID,
+    BLARP_QUEST_ID,
+    FONK_QUEST_ID,
+    DUNE_TEARDRINKER_QUEST_ID,
+    GRULHAMMER_QUEST_ID,
+    VOLUMANDUS_QUEST_ID,
+    HOFF_QUEST_ID,
+)
+
+POLYMOCK_CHAIN_LABELS: dict[int, str] = {
+    YULMA_QUEST_ID: "Yulma",
+    PLURGG_QUEST_ID: "Plurgg",
+    BLARP_QUEST_ID: "Blarp",
+    FONK_QUEST_ID: "Fonk",
+    DUNE_TEARDRINKER_QUEST_ID: "Dune Teardrinker",
+    GRULHAMMER_QUEST_ID: "Grulhammer Silverfist",
+    VOLUMANDUS_QUEST_ID: "Necromancer Volumandus",
+    HOFF_QUEST_ID: "Master Hoff",
+}
+
+POLYMOCK_ACCEPT_DIALOG_TO_QUEST_ID: dict[int, int] = {
+    YULMA_ACCEPT_DIALOG: YULMA_QUEST_ID,
+    PLURGG_ACCEPT_DIALOG: PLURGG_QUEST_ID,
+    BLARP_ACCEPT_DIALOG: BLARP_QUEST_ID,
+    FONK_ACCEPT_DIALOG: FONK_QUEST_ID,
+    DUNE_TEARDRINKER_ACCEPT_DIALOG: DUNE_TEARDRINKER_QUEST_ID,
+    GRULHAMMER_ACCEPT_DIALOG: GRULHAMMER_QUEST_ID,
+    VOLUMANDUS_ACCEPT_DIALOG: VOLUMANDUS_QUEST_ID,
+    HOFF_ACCEPT_DIALOG: HOFF_QUEST_ID,
+}
+
+
+def _polymock_chain_index(quest_id: int) -> int:
+    try:
+        return POLYMOCK_CHAIN_QUEST_IDS.index(int(quest_id))
+    except ValueError:
+        return -1
+
+
+def _polymock_full_steps_for_quest(quest_id: int) -> list[PlannerStep]:
+    quest_id = int(quest_id)
+    if quest_id == YULMA_QUEST_ID:
+        return _steps_yulma(include_reward=True)
+    if quest_id == PLURGG_QUEST_ID:
+        return _steps_plurgg(include_reward=True)
+    if quest_id == BLARP_QUEST_ID:
+        return _steps_blarp()
+    if quest_id == FONK_QUEST_ID:
+        return _steps_fonk()
+    if quest_id == DUNE_TEARDRINKER_QUEST_ID:
+        return _steps_dune()
+    if quest_id == GRULHAMMER_QUEST_ID:
+        return _steps_grulhammer()
+    if quest_id == VOLUMANDUS_QUEST_ID:
+        return _steps_volumandus()
+    if quest_id == HOFF_QUEST_ID:
+        return _steps_hoff()
+    return []
+
+
+def _polymock_reward_only_steps(quest_id: int) -> list[PlannerStep]:
+    """Finish a Polymock quest that is already complete but not yet rewarded."""
+    quest_id = int(quest_id)
+
+    if quest_id == YULMA_QUEST_ID:
+        return [
+            ("Yulma Resume - Settle", lambda: BT.Wait(POST_LOAD_WAIT_MS)),
+            (
+                "Yulma Resume - Claim Reward",
+                lambda: BT.MoveAndDialog(
+                    POLYMOCK_HOFF_POS,
+                    YULMA_REWARD_DIALOG,
+                    log=BT_FLOW_LOGS,
+                ),
+            ),
+            (
+                "Yulma Resume - Register Fire Imp Reward",
+                lambda: BT.MoveAndDialog(
+                    POLYMOCK_REGISTER_POS,
+                    REGISTER_FIRE_IMP,
+                    log=BT_FLOW_LOGS,
+                ),
+            ),
+        ]
+
+    if quest_id == PLURGG_QUEST_ID:
+        return [
+            ("Plurgg Resume - Settle", lambda: BT.Wait(POST_LOAD_WAIT_MS)),
+            (
+                "Plurgg Resume - Claim Reward",
+                lambda: BT.MoveAndDialog(
+                    POLYMOCK_HOFF_POS,
+                    PLURGG_REWARD_DIALOG,
+                    log=BT_FLOW_LOGS,
+                ),
+            ),
+            (
+                "Plurgg Resume - Register Kappa Reward",
+                lambda: BT.MoveAndDialog(
+                    POLYMOCK_REGISTER_POS,
+                    REGISTER_KAPPA,
+                    log=BT_FLOW_LOGS,
+                ),
+            ),
+        ]
+
+    if quest_id == BLARP_QUEST_ID:
+        return [
+            ("Blarp Resume - Settle", lambda: BT.Wait(POST_LOAD_WAIT_MS)),
+            (
+                "Blarp Resume - Claim Reward",
+                lambda: BT.MoveAndDialog(
+                    POLYMOCK_HOFF_POS,
+                    BLARP_REWARD_DIALOG,
+                    log=BT_FLOW_LOGS,
+                ),
+            ),
+            (
+                "Blarp Resume - Register Ice Imp Reward",
+                lambda: BT.MoveAndDialog(
+                    POLYMOCK_REGISTER_POS,
+                    REGISTER_ICE_IMP,
+                    log=BT_FLOW_LOGS,
+                ),
+            ),
+        ]
+
+    if quest_id == FONK_QUEST_ID:
+        return [
+            ("Fonk Resume - Settle", lambda: BT.Wait(POST_LOAD_WAIT_MS)),
+            (
+                "Fonk Resume - Claim Reward",
+                lambda: BT.MoveAndDialog(
+                    POLYMOCK_HOFF_POS,
+                    FONK_REWARD_DIALOG,
+                    log=BT_FLOW_LOGS,
+                ),
+            ),
+            (
+                "Fonk Resume - Register Earth Elemental Reward",
+                lambda: BT.MoveAndDialog(
+                    POLYMOCK_REGISTER_POS,
+                    REGISTER_EARTH_ELEMENTAL,
+                    log=BT_FLOW_LOGS,
+                ),
+            ),
+        ]
+
+    if quest_id == DUNE_TEARDRINKER_QUEST_ID:
+        return [
+            ("Dune Resume - Settle", lambda: BT.Wait(POST_LOAD_WAIT_MS)),
+            (
+                "Dune Resume - Claim Reward",
+                lambda: BT.MoveAndDialog(
+                    POLYMOCK_HOFF_POS,
+                    DUNE_TEARDRINKER_REWARD_DIALOG,
+                    log=BT_FLOW_LOGS,
+                ),
+            ),
+            ("Dune Resume - Close Reward Window", lambda: BT.CancelSkillRewardWindow()),
+            (
+                "Dune Resume - Register Aloe Seed Reward",
+                lambda: BT.MoveAndDialog(
+                    POLYMOCK_REGISTER_POS,
+                    REGISTER_ALOE_SEED,
+                    log=BT_FLOW_LOGS,
+                ),
+            ),
+        ]
+
+    if quest_id == GRULHAMMER_QUEST_ID:
+        return [
+            ("Grulhammer Resume - Settle", lambda: BT.Wait(POST_LOAD_WAIT_MS)),
+            (
+                "Grulhammer Resume - Claim Reward",
+                lambda: BT.MoveAndDialog(
+                    POLYMOCK_HOFF_POS,
+                    GRULHAMMER_REWARD_DIALOG,
+                    log=BT_FLOW_LOGS,
+                ),
+            ),
+            ("Grulhammer Resume - Close Reward Window", lambda: BT.CancelSkillRewardWindow()),
+            (
+                "Grulhammer Resume - Register Fire Elemental Reward",
+                lambda: BT.MoveAndDialog(
+                    POLYMOCK_REGISTER_POS,
+                    REGISTER_FIRE_ELEMENTAL,
+                    log=BT_FLOW_LOGS,
+                ),
+            ),
+        ]
+
+    if quest_id == VOLUMANDUS_QUEST_ID:
+        return [
+            ("Volumandus Resume - Settle", lambda: BT.Wait(POST_LOAD_WAIT_MS)),
+            (
+                "Volumandus Resume - Claim Reward",
+                lambda: BT.MoveAndDialog(
+                    POLYMOCK_HOFF_POS,
+                    VOLUMANDUS_REWARD_DIALOG,
+                    log=BT_FLOW_LOGS,
+                ),
+            ),
+            ("Volumandus Resume - Close Reward Window", lambda: BT.CancelSkillRewardWindow()),
+            (
+                "Volumandus Resume - Register Ice Elemental Reward",
+                lambda: BT.MoveAndDialog(
+                    POLYMOCK_REGISTER_POS,
+                    REGISTER_ICE_ELEMENTAL,
+                    log=BT_FLOW_LOGS,
+                ),
+            ),
+        ]
+
+    if quest_id == HOFF_QUEST_ID:
+        return [
+            ("Master Hoff Resume - Settle", lambda: BT.Wait(POST_LOAD_WAIT_MS)),
+            (
+                "Master Hoff Resume - Claim Final Reward",
+                lambda: BT.MoveAndDialog(
+                    POLYMOCK_HOFF_POS,
+                    HOFF_REWARD_DIALOG,
+                    log=BT_FLOW_LOGS,
+                ),
+            ),
+        ]
+
+    return []
+
+
+def _planner_steps_to_tree(name: str, steps: list[PlannerStep]) -> BehaviorTree:
+    children: list[BehaviorTree] = []
+    for _step_name, factory in steps:
+        children.append(factory())
+    if not children:
+        return BT.Succeeder(name=f"{name} - Nothing To Do")
+    return BT.Sequence(name=name, children=children)
+
+
+def _polymock_build_chain_from(
+    start_quest_id: int,
+    target_quest_id: int,
+    *,
+    start_is_complete: bool,
+) -> BehaviorTree:
+    start_index = _polymock_chain_index(start_quest_id)
+    target_index = _polymock_chain_index(target_quest_id)
+
+    if start_index < 0 or target_index < 0:
+        return BT.Failer(name="Polymock Resolver - Invalid Quest Id")
+
+    if start_index > target_index:
+        return BT.Sequence(
+            name="Polymock Resolver - Progress Already Past Target",
+            children=[
+                BT.LogMessage(
+                    message=(
+                        f"Polymock progression is already past "
+                        f"{POLYMOCK_CHAIN_LABELS[target_quest_id]}; nothing to run."
+                    ),
+                    module_name=MODULE_NAME,
+                ),
+                BT.Succeeder("Polymock Target Already Passed"),
+            ],
+        )
+
+    steps: list[PlannerStep] = []
+    if start_is_complete:
+        steps.extend(_polymock_reward_only_steps(start_quest_id))
+    else:
+        # Re-sending an already-active quest's accept dialog is harmless: the
+        # low-level SendDialog returns immediately even when the option is no
+        # longer visible. This lets the same validated quest flow handle both
+        # newly offered and already-active quests. Yulma also re-sends the
+        # starter-piece registration dialogs, which is safe and covers the
+        # edge case where the quest was accepted but setup was interrupted.
+        steps.extend(_polymock_full_steps_for_quest(start_quest_id))
+
+    for quest_id in POLYMOCK_CHAIN_QUEST_IDS[start_index + 1 : target_index + 1]:
+        steps.extend(_polymock_full_steps_for_quest(quest_id))
+
+    label = POLYMOCK_CHAIN_LABELS[start_quest_id]
+    target_label = POLYMOCK_CHAIN_LABELS[target_quest_id]
+    return _planner_steps_to_tree(
+        f"Polymock Resume {label} -> {target_label}",
+        steps,
+    )
+
+
+def _polymock_quest_log_state() -> tuple[int | None, bool]:
+    """Return (quest_id, is_complete) for the earliest Polymock quest in the log."""
+    try:
+        raw_ids = GLOBAL_CACHE.Quest.GetQuestLogIds() or []
+        log_ids = {int(value) for value in raw_ids}
+    except Exception:
+        log_ids = set()
+
+    for quest_id in POLYMOCK_CHAIN_QUEST_IDS:
+        if quest_id not in log_ids:
+            continue
+
+        try:
+            completed = bool(GLOBAL_CACHE.Quest.IsQuestCompleted(quest_id))
+        except Exception:
+            try:
+                quest = GLOBAL_CACHE.Quest.GetQuestData(quest_id)
+                completed = bool(quest and quest.is_completed)
+            except Exception:
+                completed = False
+
+        return int(quest_id), bool(completed)
+
+    return None, False
+
+
+def _wait_for_hoff_polymock_offer(resolved: dict[str, int | None]) -> BehaviorTree:
+    state_data = {"started": 0.0, "last_seen": ()}
+
+    def _tick(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        now = time.monotonic()
+        if state_data["started"] <= 0.0:
+            state_data["started"] = now
+
+        try:
+            buttons = Dialog.get_active_dialog_buttons() or []
+        except Exception:
+            buttons = []
+
+        visible_ids = tuple(
+            int(getattr(button, "dialog_id", 0) or 0)
+            for button in buttons
+            if int(getattr(button, "dialog_id", 0) or 0) > 0
+        )
+        state_data["last_seen"] = visible_ids
+
+        offered = [
+            POLYMOCK_ACCEPT_DIALOG_TO_QUEST_ID[dialog_id]
+            for dialog_id in visible_ids
+            if dialog_id in POLYMOCK_ACCEPT_DIALOG_TO_QUEST_ID
+        ]
+        if offered:
+            offered.sort(key=_polymock_chain_index)
+            quest_id = int(offered[0])
+            resolved["quest_id"] = quest_id
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    "Polymock resolver: Hoff currently offers "
+                    f"{POLYMOCK_CHAIN_LABELS[quest_id]} "
+                    f"(quest {quest_id})."
+                ),
+            )
+            return BehaviorTree.NodeState.SUCCESS
+
+        if now - float(state_data["started"]) >= 6.0:
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    "Polymock resolver: no known Polymock quest offer found at Hoff. "
+                    f"Visible dialog ids={visible_ids}."
+                ),
+                PySystem.Console.MessageType.Error,
+            )
+            return BehaviorTree.NodeState.FAILURE
+
+        return BehaviorTree.NodeState.RUNNING
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Polymock Resolver - Wait For Hoff Offer",
+            action_fn=_tick,
+            aftercast_ms=0,
+        )
+    )
+
+
+def _polymock_resolve_from_hoff_dialog(target_quest_id: int) -> BehaviorTree:
+    resolved: dict[str, int | None] = {"quest_id": None}
+
+    def _build_resolved_chain(_node: BehaviorTree.Node) -> BehaviorTree:
+        quest_id = resolved.get("quest_id")
+        if quest_id is None:
+            return BT.Failer(name="Polymock Resolver - Hoff Offer Missing")
+        return _polymock_build_chain_from(
+            int(quest_id),
+            int(target_quest_id),
+            start_is_complete=False,
+        )
+
+    return BT.Sequence(
+        name="Polymock Resolver - Read Hoff Progress",
+        children=[
+            BT.MoveAndInteract(
+                POLYMOCK_HOFF_POS,
+                log=BT_FLOW_LOGS,
+            ),
+            BT.Wait(500),
+            _wait_for_hoff_polymock_offer(resolved),
+            BT.Subtree(
+                name="Polymock Resolver - Build Offered Chain",
+                subtree_fn=_build_resolved_chain,
+            ),
+        ],
+    )
+
+
+def _polymock_resume_to_target(target_quest_id: int) -> BehaviorTree:
+    target_quest_id = int(target_quest_id)
+
+    def _build(_node: BehaviorTree.Node) -> BehaviorTree:
+        quest_id, completed = _polymock_quest_log_state()
+
+        if quest_id is not None:
+            ConsoleLog(
+                MODULE_NAME,
+                (
+                    "Polymock resolver: quest log resume point = "
+                    f"{POLYMOCK_CHAIN_LABELS[quest_id]} "
+                    f"({'complete/reward pending' if completed else 'active'})."
+                ),
+            )
+            return _polymock_build_chain_from(
+                quest_id,
+                target_quest_id,
+                start_is_complete=completed,
+            )
+
+        ConsoleLog(
+            MODULE_NAME,
+            "Polymock resolver: no Polymock quest in journal; checking Hoff's current offer.",
+        )
+        return _polymock_resolve_from_hoff_dialog(target_quest_id)
+
+    return BT.Subtree(
+        name=f"Resolve Polymock Progress To {POLYMOCK_CHAIN_LABELS[target_quest_id]}",
+        subtree_fn=_build,
+    )
+
+
+def _steps_polymock_resume_target(target_quest_id: int) -> list[PlannerStep]:
+    target_label = POLYMOCK_CHAIN_LABELS[int(target_quest_id)]
+    return [
+        (
+            f"Polymock Resume - 001 Travel Rata Sum for {target_label}",
+            lambda: BT.Travel(target_map_name="Rata Sum", log=BT_FLOW_LOGS),
+        ),
+        (
+            f"Polymock Resume - 002 Resolve Progression to {target_label}",
+            lambda: _polymock_resume_to_target(int(target_quest_id)),
+        ),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Asura summon skills unlocked through the validated Polymock progression
 # ---------------------------------------------------------------------------
 
 def _steps_unlock_summon_naga_shaman() -> list[PlannerStep]:
-    """Yulma -> Plurgg -> Blarp -> Fonk -> Dune Teardrinker."""
-    return [
-        *_steps_yulma(include_reward=True),
-        *_steps_plurgg(include_reward=True),
-        *_steps_blarp(),
-        *_steps_fonk(),
-        *_steps_dune(),
-    ]
+    """Resume current Polymock progress and continue through Dune Teardrinker."""
+    return _steps_polymock_resume_target(DUNE_TEARDRINKER_QUEST_ID)
 
 
 def _steps_unlock_summon_ruby_djinn() -> list[PlannerStep]:
-    """Grulhammer Silverfist; earlier Polymock progression is a skill prerequisite."""
-    return _steps_grulhammer()
+    """Resume current Polymock progress and continue through Grulhammer Silverfist."""
+    return _steps_polymock_resume_target(GRULHAMMER_QUEST_ID)
 
 
 def _steps_unlock_summon_ice_imp() -> list[PlannerStep]:
-    """Necromancer Volumandus; earlier Polymock progression is a skill prerequisite."""
-    return _steps_volumandus()
+    """Resume current Polymock progress and continue through Necromancer Volumandus."""
+    return _steps_polymock_resume_target(VOLUMANDUS_QUEST_ID)
 
 
 def _steps_unlock_summon_mursaat() -> list[PlannerStep]:
-    """Master Hoff; earlier Polymock progression is a skill prerequisite."""
-    return _steps_hoff()
+    """Resume current Polymock progress and continue through Master Hoff."""
+    return _steps_polymock_resume_target(HOFF_QUEST_ID)
 
 # ---------------------------------------------------------------------------
 # Converted legacy routes
@@ -4765,12 +5276,6 @@ SKILL_PREREQUISITES: dict[str, tuple[str, ...]] = {
         "technobabble",
     ),
     "air_of_superiority": ("pain_inverter",),
-
-    # Polymock skill chain. Each reward route registers its newly earned piece
-    # immediately before the next opponent can need it.
-    "summon_ruby_djinn": ("summon_naga_shaman",),
-    "summon_ice_imp": ("summon_ruby_djinn",),
-    "summon_mursaat": ("summon_ice_imp",),
 
     "ebon_vanguard_assassin_support": ("winds",),
 
