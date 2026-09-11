@@ -7,14 +7,19 @@ import time
 import PyImGui
 import PySystem
 
-from Py4GWCoreLib import Agent, AgentArray, GLOBAL_CACHE, ImGui, Item, Player
+from Py4GWCoreLib import Agent, AgentArray, GLOBAL_CACHE, ImGui, Item, Map, Player
 from Py4GWCoreLib.BottingTree import BottingTree
 from Py4GWCoreLib.enums_src.GameData_enums import Range
 from Py4GWCoreLib.enums_src.GameData_enums import Range
 from Py4GWCoreLib.enums_src.Model_enums import ModelID
 from Py4GWCoreLib.native_src.internals.types import Vec2f
 from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
+from Py4GWCoreLib.Py4GWcorelib import ConsoleLog
+from Py4GWCoreLib.Routines import Routines
+from Py4GWCoreLib.routines_src.Agents import Agents as RoutinesAgents
 from Sources.ApoSource.ApoBottingLib import wrappers as BT
+from Sources.frenkeyLib.Polymock import combat, state
+from Sources.frenkeyLib.Polymock.data import PolymockPieces, Polymock_Quests
 
 
 BOT_NAME = "Skills Unlocker BT"
@@ -1570,6 +1575,1944 @@ def _configure_botting_tree(tree: BottingTree) -> None:
     tree.pause_on_combat = True
 
 
+
+# ---------------------------------------------------------------------------
+# Polymock runtime used by the four Asura summon skill unlocks
+# ---------------------------------------------------------------------------
+
+# Quiet mode: keep errors / real failures, suppress flow/debug spam.
+POLYMOCK_VERBOSE_LOGS = False
+BT_FLOW_LOGS = False
+
+def _trace_log(module_name: str, message: str, *args, **kwargs) -> None:
+    if POLYMOCK_VERBOSE_LOGS:
+        ConsoleLog(module_name, message, *args, **kwargs)
+
+
+POLYMOCK_MAP_TIMEOUT_MS = 45_000
+POST_LOAD_WAIT_MS = 1_000
+
+RATA_SUM_MAP_ID = 640
+POLYMOCK_ARENA_MAP_IDS = (686, 687, 688)
+
+POLYMOCK_HOFF_POS = Vec2f(15933.00, 19115.00)
+POLYMOCK_REGISTER_POS = Vec2f(15506.00, 18910.00)
+POLYMOCK_SELECTION_POS = Vec2f(4185.00, 44.00)
+FONK_SELECTION_POS = Vec2f(-167.00, -9.00)
+DUNE_SELECTION_POS = Vec2f(3333.00, 368.00)
+GRULHAMMER_SELECTION_POS = Vec2f(-167.00, -9.00)
+VOLUMANDUS_LAUNCH_POS = Vec2f(4185.00, 44.00)
+HOFF_SELECTION_POS = Vec2f(4185.00, 44.00)
+
+YULMA_POS = Vec2f(19231.00, 19669.00)
+PLURGG_POS = Vec2f(16382.00, 17753.00)
+BLARP_POS = Vec2f(-8940.00, -21799.00)
+FONK_POS = Vec2f(19789.00, -3760.00)
+DUNE_TEARDRINKER_POS = Vec2f(-13317.00, 15435.00)
+GRULHAMMER_POS = Vec2f(-22492.00, 13722.00)
+VOLUMANDUS_POS = Vec2f(23229.00, -12794.00)
+
+DUNE_OUTPOST_NAME = "Doomlore Shrine"   # Sanctuaire de la Legende funeste
+GRULHAMMER_OUTPOST_NAME = "Umbral Grotto"   # Grotte obscure
+VOLUMANDUS_OUTPOST_NAME = "Tarnished Haven"   # Havre terni
+
+# Quest IDs from Sources/frenkeyLib/Polymock/data.py
+YULMA_QUEST_ID = 882
+PLURGG_QUEST_ID = 875
+BLARP_QUEST_ID = 881
+FONK_QUEST_ID = 876
+DUNE_TEARDRINKER_QUEST_ID = 877
+GRULHAMMER_QUEST_ID = 878
+VOLUMANDUS_QUEST_ID = 879
+HOFF_QUEST_ID = 880
+
+# Quest accept / reward dialogs supplied during testing.
+YULMA_ACCEPT_DIALOG = 0x837201
+YULMA_REWARD_DIALOG = 0x837207
+
+PLURGG_ACCEPT_DIALOG = 0x836B01
+PLURGG_REWARD_DIALOG = 0x836B07
+
+BLARP_ACCEPT_DIALOG = 0x837101
+BLARP_REWARD_DIALOG = 0x837107
+
+FONK_ACCEPT_DIALOG = 0x836C01
+DUNE_TEARDRINKER_ACCEPT_DIALOG = 0x836D01
+GRULHAMMER_ACCEPT_DIALOG = 0x836E01
+VOLUMANDUS_ACCEPT_DIALOG = 0x836F01
+HOFF_ACCEPT_DIALOG = 0x837001
+HOFF_START_DIALOG = 0x84
+HOFF_REWARD_DIALOG = 0x837007
+FONK_REWARD_DIALOG = 0x836C07
+DUNE_TEARDRINKER_REWARD_DIALOG = 0x836D07
+GRULHAMMER_REWARD_DIALOG = 0x836E07
+VOLUMANDUS_REWARD_DIALOG = 0x836F07
+
+# Registration dialogs.
+REGISTER_STARTER_1 = 0x185
+REGISTER_STARTER_2 = 0x385
+REGISTER_STARTER_3 = 0x485
+REGISTER_FIRE_IMP = 0x85
+REGISTER_KAPPA = 0x985
+REGISTER_ICE_IMP = 0x285
+REGISTER_EARTH_ELEMENTAL = 0x685
+REGISTER_FIRE_ELEMENTAL = 0x785
+REGISTER_ICE_ELEMENTAL = 0x885
+REGISTER_ALOE_SEED = 0x585
+
+# Polymock dialogs.
+#
+# xx85 = select one of the THREE pieces registered for the whole match.
+# xx86 = select the ACTIVE piece for the current round.
+MATCH_FIRE_IMP = 0x2285
+MATCH_FIRE_ELEMENTAL = 0x2185
+MATCH_ICE_IMP = 0x2785
+MATCH_ICE_ELEMENTAL = 0x2685
+MATCH_EARTH_ELEMENTAL = 0x2085
+MATCH_GARGOYLE = 0x2485
+MATCH_KAPPA = 0x2885
+MATCH_MERGOYLE = 0x2A85
+MATCH_NAGA_SHAMAN = 0x2D85
+MATCH_SKALE = 0x2E85
+MATCH_STONE_RAIN = 0x2F85
+
+ROUND_FIRE_IMP = 0x2286
+ROUND_FIRE_ELEMENTAL = 0x2186
+ROUND_ICE_IMP = 0x2786
+ROUND_ICE_ELEMENTAL = 0x2686
+ROUND_EARTH_ELEMENTAL = 0x2086
+ROUND_ALOE_SEED = 0x1E86
+ROUND_GARGOYLE = 0x2486
+ROUND_KAPPA = 0x2886
+ROUND_MERGOYLE = 0x2A86
+ROUND_NAGA_SHAMAN = 0x2D86
+ROUND_SKALE = 0x2E86
+ROUND_STONE_RAIN = 0x2F86
+
+START_MATCH_DIALOG = 0x87
+
+# Round order used after one of OUR pieces dies.
+# The first entry is also the piece used for round 1.
+ROUND_DIALOGS_BY_QUEST_ID: dict[int, tuple[int, int, int]] = {
+    YULMA_QUEST_ID: (
+        ROUND_GARGOYLE,
+        ROUND_MERGOYLE,
+        ROUND_SKALE,
+    ),
+    PLURGG_QUEST_ID: (
+        ROUND_SKALE,
+        ROUND_FIRE_IMP,
+        ROUND_GARGOYLE,
+    ),
+    BLARP_QUEST_ID: (
+        ROUND_KAPPA,
+        ROUND_FIRE_IMP,
+        ROUND_SKALE,
+    ),
+    FONK_QUEST_ID: (
+        ROUND_GARGOYLE,
+        ROUND_KAPPA,
+        ROUND_FIRE_IMP,
+    ),
+    DUNE_TEARDRINKER_QUEST_ID: (
+        ROUND_EARTH_ELEMENTAL,
+        ROUND_FIRE_IMP,
+        ROUND_KAPPA,
+    ),
+    GRULHAMMER_QUEST_ID: (
+        ROUND_KAPPA,
+        ROUND_EARTH_ELEMENTAL,
+        ROUND_ICE_IMP,
+    ),
+    VOLUMANDUS_QUEST_ID: (
+        ROUND_EARTH_ELEMENTAL,
+        ROUND_FIRE_ELEMENTAL,
+        ROUND_KAPPA,
+    ),
+    HOFF_QUEST_ID: (
+        ROUND_FIRE_ELEMENTAL,
+        ROUND_ICE_ELEMENTAL,
+        ROUND_EARTH_ELEMENTAL,
+    ),
+}
+
+LAST_THREE_OPPONENT_DATA = {
+    DUNE_TEARDRINKER_QUEST_ID: {
+        "label": "Dune Teardrinker",
+        "outpost": DUNE_OUTPOST_NAME,
+        "opponent_pos": DUNE_TEARDRINKER_POS,
+        "accept_dialog": DUNE_TEARDRINKER_ACCEPT_DIALOG,
+        "reward_dialog": DUNE_TEARDRINKER_REWARD_DIALOG,
+        "selector_pos": DUNE_SELECTION_POS,
+        "match_dialogs": (
+            MATCH_EARTH_ELEMENTAL,
+            MATCH_FIRE_IMP,
+            MATCH_KAPPA,
+        ),
+        "first_round_dialog": ROUND_EARTH_ELEMENTAL,
+    },
+    GRULHAMMER_QUEST_ID: {
+        "label": "Grulhammer",
+        "outpost": GRULHAMMER_OUTPOST_NAME,
+        "opponent_pos": GRULHAMMER_POS,
+        "accept_dialog": GRULHAMMER_ACCEPT_DIALOG,
+        "reward_dialog": GRULHAMMER_REWARD_DIALOG,
+        "selector_pos": GRULHAMMER_SELECTION_POS,
+        "match_dialogs": (
+            MATCH_KAPPA,
+            MATCH_EARTH_ELEMENTAL,
+            MATCH_ICE_IMP,
+        ),
+        "first_round_dialog": ROUND_KAPPA,
+    },
+    VOLUMANDUS_QUEST_ID: {
+        "label": "Volumandus",
+        "outpost": VOLUMANDUS_OUTPOST_NAME,
+        "opponent_pos": VOLUMANDUS_POS,
+        "accept_dialog": VOLUMANDUS_ACCEPT_DIALOG,
+        "reward_dialog": VOLUMANDUS_REWARD_DIALOG,
+        "selector_pos": VOLUMANDUS_LAUNCH_POS,
+        "match_dialogs": (
+            MATCH_EARTH_ELEMENTAL,
+            MATCH_FIRE_ELEMENTAL,
+            MATCH_KAPPA,
+        ),
+        "first_round_dialog": ROUND_EARTH_ELEMENTAL,
+    },
+}
+
+
+def _selection_pos_for_quest(quest_id: int) -> Vec2f:
+    quest_id = int(quest_id)
+    if quest_id == FONK_QUEST_ID:
+        return FONK_SELECTION_POS
+    if quest_id == DUNE_TEARDRINKER_QUEST_ID:
+        return DUNE_SELECTION_POS
+    if quest_id == GRULHAMMER_QUEST_ID:
+        return GRULHAMMER_SELECTION_POS
+    if quest_id == VOLUMANDUS_QUEST_ID:
+        return VOLUMANDUS_LAUNCH_POS
+    if quest_id == HOFF_QUEST_ID:
+        return HOFF_SELECTION_POS
+    return POLYMOCK_SELECTION_POS
+
+# =============================================================================
+# Polymock combat patch
+# =============================================================================
+
+widget_state = state.WidgetState()
+widget_state.debug = False
+
+combat_handler = combat.Combat()
+combat_handler.state.debug = False
+
+_last_piece_signature: tuple[int, int, int] | None = None
+_last_combat_tick = 0.0
+_last_diag_tick = 0.0
+
+# Explicit quest context set by each Polymock attempt. WidgetState arena
+# auto-detection is not reliable enough to drive combat on its own.
+_polymock_forced_quest_id: int | None = None
+_polymock_runtime_active = False
+_polymock_saved_pause_on_combat: bool | None = None
+
+# Round manager runtime.
+_round_quest_id: int | None = None
+_round_next_piece_index = 1  # index 0 is the piece selected for round 1
+_round_had_active_piece = False
+_round_piece_was_dead = False
+_round_missing_bar_since: float | None = None
+_round_pending_dialog: int | None = None
+
+# Direct between-round state machine.
+_round_phase = "idle"
+_round_phase_started = 0.0
+_round_npc_id = 0
+_round_retry_count = 0
+_round_last_wait_log = 0.0
+
+
+def _current_piece_signature() -> tuple[int, int, int]:
+    result: list[int] = []
+    for slot in (1, 2, 3):
+        try:
+            skill = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
+            result.append(int(skill.id.id) if skill and skill.id.id > 0 else 0)
+        except Exception:
+            result.append(0)
+    return tuple(result)  # type: ignore[return-value]
+
+
+
+def _current_full_bar_signature() -> tuple[int, ...]:
+    result: list[int] = []
+    for slot in range(1, 9):
+        try:
+            skill = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
+            result.append(int(skill.id.id) if skill and skill.id.id > 0 else 0)
+        except Exception:
+            result.append(0)
+    return tuple(result)
+
+
+def _polymock_common_ids() -> tuple[int, int, int, int, int]:
+    return (
+        int(GLOBAL_CACHE.Skill.GetID("Polymock_Power_Drain")),
+        int(GLOBAL_CACHE.Skill.GetID("Polymock_Block")),
+        int(GLOBAL_CACHE.Skill.GetID("Polymock_Glyph_of_Concentration")),
+        int(GLOBAL_CACHE.Skill.GetID("Polymock_Ether_Signet")),
+        int(GLOBAL_CACHE.Skill.GetID("Polymock_Glyph_of_Power")),
+    )
+
+
+def _is_polymock_bar_active() -> bool:
+    """
+    TRUE only for an actual transformed Polymock bar.
+
+    The previous diagnostic considered any non-empty slots 1-3 to be Polymock,
+    which incorrectly treated the player's normal profession bar as a piece.
+    """
+    if int(Map.GetMapID() or 0) not in POLYMOCK_ARENA_MAP_IDS:
+        return False
+
+    bar = _current_full_bar_signature()
+    common = _polymock_common_ids()
+
+    if not all(common):
+        return False
+
+    # Real Polymock bars have the five common skills in slots 4..8.
+    if tuple(bar[3:8]) != common:
+        return False
+
+    # And at least one piece-specific damage skill in slots 1..3.
+    return any(bar[0:3])
+
+
+def _get_polymock_quest_by_id(quest_id: int):
+    for quest_entry in Polymock_Quests:
+        if int(quest_entry.value.quest_id) == int(quest_id):
+            return quest_entry.value
+    return None
+
+
+def _inject_forced_quest_if_needed() -> None:
+    """Keep combat.py pinned to the quest explicitly launched by the planner."""
+    forced_id = int(_polymock_forced_quest_id or 0)
+    if forced_id <= 0:
+        return
+
+    current_id = int(getattr(getattr(widget_state, "quest", None), "quest_id", 0) or 0)
+    if current_id == forced_id:
+        return
+
+    forced_quest = _get_polymock_quest_by_id(forced_id)
+    if forced_quest is not None:
+        widget_state.quest = forced_quest
+
+
+def _skill_debug(slot: int) -> str:
+    try:
+        skill = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
+        if not skill or skill.id.id <= 0:
+            return f"{slot}:EMPTY"
+
+        sid = int(skill.id.id)
+        name = GLOBAL_CACHE.Skill.GetName(sid) or str(sid)
+        recharge_raw = int(getattr(skill, "recharge", 0) or 0)
+        ready = recharge_raw == 0
+
+        try:
+            energy_cost = float(
+                Routines.Checks.Skills.GetEnergyCostWithEffects(
+                    sid,
+                    int(Player.GetAgentID() or 0),
+                )
+            )
+        except Exception:
+            try:
+                energy_cost = float(GLOBAL_CACHE.Skill.Data.GetEnergyCost(sid))
+            except Exception:
+                energy_cost = -1.0
+
+        return (
+            f"{slot}:{name}"
+            f"[id={sid},ready={ready},recharge={recharge_raw},e={energy_cost:g}]"
+        )
+    except Exception as exc:
+        return f"{slot}:ERR({type(exc).__name__})"
+
+
+def _diagnostic_tick() -> None:
+    global _last_diag_tick
+
+    now = time.monotonic()
+    if now - _last_diag_tick < 1.0:
+        return
+    _last_diag_tick = now
+
+    map_id = int(Map.GetMapID() or 0)
+    if map_id not in POLYMOCK_ARENA_MAP_IDS:
+        return
+
+    player_id = int(Player.GetAgentID() or 0)
+
+    try:
+        hp_frac = float(Agent.GetHealth(player_id)) if player_id > 0 else -1.0
+    except Exception:
+        hp_frac = -1.0
+
+    try:
+        max_hp = float(Agent.GetMaxHealth(player_id)) if player_id > 0 else 0.0
+    except Exception:
+        max_hp = 0.0
+
+    try:
+        energy_frac = float(Agent.GetEnergy(player_id)) if player_id > 0 else -1.0
+        max_energy = float(Agent.GetMaxEnergy(player_id)) if player_id > 0 else 0.0
+        energy = energy_frac * max_energy
+    except Exception:
+        max_energy = 0.0
+        energy = -1.0
+
+    quest = getattr(widget_state, "quest", None)
+    quest_id = int(getattr(quest, "quest_id", 0) or 0)
+
+    target_id = int(getattr(combat_handler, "target_id", 0) or 0)
+    try:
+        target_hp_frac = float(Agent.GetHealth(target_id)) if target_id > 0 else -1.0
+    except Exception:
+        target_hp_frac = -1.0
+
+    try:
+        target_cast = int(Agent.GetCastingSkillID(target_id)) if target_id > 0 else 0
+    except Exception:
+        target_cast = 0
+
+    _trace_log(
+        MODULE_NAME,
+        (
+            "[DIAG] "
+            f"map={map_id} quest={quest_id} forced={_polymock_forced_quest_id} "
+            f"hp={hp_frac:.3f}/{max_hp:.0f} energy={energy:.1f}/{max_energy:.0f} "
+            f"piece={_current_piece_signature()} polymock={_is_polymock_bar_active()} "
+            f"target={target_id} thp={target_hp_frac:.3f} cast={target_cast} "
+            f"round_phase={_round_phase} next_idx={_round_next_piece_index} "
+            f"pending={_round_pending_dialog}"
+        ),
+    )
+
+    _trace_log(
+        MODULE_NAME,
+        "[DIAG BAR] " + " | ".join(_skill_debug(slot) for slot in range(1, 9)),
+    )
+
+
+
+def _has_effect(skill_name: str) -> bool:
+    try:
+        skill_id = int(GLOBAL_CACHE.Skill.GetID(skill_name))
+        if skill_id <= 0 or combat_handler.player_id <= 0:
+            return False
+        return bool(
+            GLOBAL_CACHE.Effects.BuffExists(combat_handler.player_id, skill_id)
+            or GLOBAL_CACHE.Effects.EffectExists(combat_handler.player_id, skill_id)
+        )
+    except Exception:
+        return False
+
+
+def _reset_round_manager() -> None:
+    global _round_quest_id
+    global _round_next_piece_index
+    global _round_had_active_piece
+    global _round_piece_was_dead
+    global _round_missing_bar_since
+    global _round_pending_dialog
+    global _round_phase
+    global _round_phase_started
+    global _round_npc_id
+    global _round_retry_count
+    global _round_last_wait_log
+
+    _round_quest_id = None
+    _round_next_piece_index = 1
+    _round_had_active_piece = False
+    _round_piece_was_dead = False
+    _round_missing_bar_since = None
+    _round_pending_dialog = None
+
+    _round_phase = "idle"
+    _round_phase_started = 0.0
+    _round_npc_id = 0
+    _round_retry_count = 0
+    _round_last_wait_log = 0.0
+
+
+def _start_next_round_piece_selection(dialog_id: int) -> None:
+    global _round_pending_dialog
+    global _round_phase
+    global _round_phase_started
+    global _round_npc_id
+    global _round_retry_count
+
+    _round_pending_dialog = int(dialog_id)
+    _round_phase = "find_npc"
+    _round_phase_started = time.monotonic()
+    _round_npc_id = 0
+    _round_retry_count = 0
+
+    _trace_log(
+        MODULE_NAME,
+        (
+            f"[ROUND] Need next piece: 0x{dialog_id:X}. "
+            "Waiting for selector NPC."
+        ),
+    )
+
+
+def _tick_round_selection_state_machine(now: float) -> bool:
+    """
+    Return True while a between-round selection is in progress.
+
+    This deliberately avoids a nested MoveAndDialog BehaviorTree.  The live log
+    showed that nested tree stalling after movement.  Here every action is sent
+    directly and logged.
+    """
+    global _round_phase
+    global _round_phase_started
+    global _round_npc_id
+    global _round_pending_dialog
+    global _round_retry_count
+    global _round_last_wait_log
+    global _round_next_piece_index
+    global _round_piece_was_dead
+    global _round_missing_bar_since
+
+    if _round_pending_dialog is None:
+        return False
+
+    # IMPORTANT:
+    # Selecting xx86 transforms the player immediately, BEFORE the round is
+    # actually started.  Do NOT treat the new Polymock bar as success yet.
+    # We must always continue through wait_start and send 0x87 first.
+    if _round_phase == "wait_transform" and _is_polymock_bar_active():
+        _trace_log(
+            MODULE_NAME,
+            (
+                f"[ROUND] New Polymock bar confirmed after 0x87 "
+                f"(piece dialog 0x{_round_pending_dialog:X}); round ready."
+            ),
+        )
+        _round_next_piece_index += 1
+        _round_pending_dialog = None
+        _round_phase = "idle"
+        _round_phase_started = 0.0
+        _round_npc_id = 0
+        _round_retry_count = 0
+        _round_piece_was_dead = False
+        _round_missing_bar_since = None
+        combat_handler.opener_used = False
+        return False
+
+    if _round_phase == "find_npc":
+        try:
+            selector_pos = _selection_pos_for_quest(int(_round_quest_id or 0))
+            npc_id = int(
+                RoutinesAgents.GetNearestNPCXY(
+                    selector_pos.x,
+                    selector_pos.y,
+                    350.0,
+                )
+                or 0
+            )
+        except Exception as exc:
+            npc_id = 0
+            if now - _round_last_wait_log >= 1.0:
+                _round_last_wait_log = now
+                _trace_log(
+                    MODULE_NAME,
+                    f"[ROUND] NPC lookup exception: {type(exc).__name__}: {exc}",
+                )
+
+        if npc_id <= 0:
+            if now - _round_last_wait_log >= 1.0:
+                _round_last_wait_log = now
+                _trace_log(
+                    MODULE_NAME,
+                    (
+                        f"[ROUND] Selector NPC not available yet near "
+                        f"({_selection_pos_for_quest(int(_round_quest_id or 0)).x:.0f}, "
+                        f"{_selection_pos_for_quest(int(_round_quest_id or 0)).y:.0f}); waiting..."
+                    ),
+                )
+            return True
+
+        _round_npc_id = npc_id
+        Player.ChangeTarget(npc_id)
+        _round_phase = "wait_target"
+        _round_phase_started = now
+        _trace_log(
+            MODULE_NAME,
+            f"[ROUND] Selector NPC found: agent {npc_id}; targeting.",
+        )
+        return True
+
+    if _round_phase == "wait_target":
+        if Player.GetTargetID() != _round_npc_id:
+            if now - _round_phase_started >= 0.25:
+                Player.ChangeTarget(_round_npc_id)
+                _round_phase_started = now
+            return True
+
+        Player.Interact(_round_npc_id, False)
+        _round_phase = "wait_piece_dialog"
+        _round_phase_started = now
+        _trace_log(
+            MODULE_NAME,
+            f"[ROUND] Interacted with selector NPC {_round_npc_id}.",
+        )
+        return True
+
+    if _round_phase == "wait_piece_dialog":
+        if now - _round_phase_started < 0.45:
+            return True
+
+        Player.SendDialog(_round_pending_dialog)
+        _round_phase = "wait_start"
+        _round_phase_started = now
+        _trace_log(
+            MODULE_NAME,
+            f"[ROUND] Sent piece dialog 0x{_round_pending_dialog:X}.",
+        )
+        return True
+
+    if _round_phase == "wait_start":
+        if now - _round_phase_started < 0.55:
+            return True
+
+        Player.SendDialog(START_MATCH_DIALOG)
+        _round_phase = "wait_transform"
+        _round_phase_started = now
+        _trace_log(
+            MODULE_NAME,
+            "[ROUND] Sent 0x87; waiting for new transformation.",
+        )
+        return True
+
+    if _round_phase == "wait_transform":
+        # Success is checked near the top of this function, but ONLY in this
+        # phase, which guarantees 0x87 has already been sent.
+        if now - _round_phase_started < 3.0:
+            return True
+
+        _round_retry_count += 1
+        _trace_log(
+            MODULE_NAME,
+            (
+                f"[ROUND] No transformation after 3s; retry "
+                f"#{_round_retry_count} from NPC interaction."
+            ),
+        )
+
+        # Retry from scratch; do not consume the next roster index until
+        # a real Polymock bar appears.
+        _round_phase = "find_npc"
+        _round_phase_started = now
+        _round_npc_id = 0
+        return True
+
+    # Defensive recovery.
+    _round_phase = "find_npc"
+    _round_phase_started = now
+    return True
+
+
+def _tick_polymock_round_manager() -> bool:
+    """
+    Return True only when Combat.Fight() is allowed to control skills.
+
+    The round manager remains dormant until a REAL Polymock bar (slots 4..8
+    equal the common Polymock skills) has appeared at least once.
+    """
+    global _round_quest_id
+    global _round_next_piece_index
+    global _round_had_active_piece
+    global _round_piece_was_dead
+    global _round_missing_bar_since
+
+    current_map_id = int(Map.GetMapID() or 0)
+    if current_map_id not in POLYMOCK_ARENA_MAP_IDS:
+        _reset_round_manager()
+        return False
+
+    quest = getattr(widget_state, "quest", None)
+    quest_id = int(getattr(quest, "quest_id", 0) or 0)
+    if quest_id not in ROUND_DIALOGS_BY_QUEST_ID:
+        return False
+
+    if _round_quest_id != quest_id:
+        _round_quest_id = quest_id
+        _round_next_piece_index = 1
+        _round_had_active_piece = False
+        _round_piece_was_dead = False
+        _round_missing_bar_since = None
+        _trace_log(
+            MODULE_NAME,
+            f"[ROUND] New match state for quest={quest_id}.",
+        )
+
+    now = time.monotonic()
+
+    # A between-round selector sequence has absolute priority over combat.
+    if _round_pending_dialog is not None:
+        _tick_round_selection_state_machine(now)
+        return False
+
+    active_bar = _is_polymock_bar_active()
+
+    # Do not start death tracking from the normal character bar.
+    if not _round_had_active_piece:
+        if active_bar:
+            _round_had_active_piece = True
+            _round_piece_was_dead = False
+            _round_missing_bar_since = None
+            combat_handler.opener_used = False
+            _trace_log(
+                MODULE_NAME,
+                (
+                    "[ROUND] First REAL Polymock piece detected; "
+                    "round tracking armed."
+                ),
+            )
+            return True
+
+        return False
+
+    if active_bar:
+        _round_piece_was_dead = False
+        _round_missing_bar_since = None
+        return True
+
+    # Real Polymock bar has disappeared after a round was active.
+    if _round_missing_bar_since is None:
+        _round_missing_bar_since = now
+        _trace_log(
+            MODULE_NAME,
+            "[ROUND] Polymock bar disappeared; confirming piece loss...",
+        )
+        return False
+
+    if now - _round_missing_bar_since < 0.35:
+        return False
+
+    if not _round_piece_was_dead:
+        _round_piece_was_dead = True
+        combat_handler.opener_used = False
+        _trace_log(
+            MODULE_NAME,
+            "[ROUND] Our active Polymock piece is lost.",
+        )
+
+    round_dialogs = ROUND_DIALOGS_BY_QUEST_ID[quest_id]
+
+    if _round_next_piece_index >= len(round_dialogs):
+        # All three player pieces are gone.  GW will return us to the outpost.
+        _trace_log(
+            MODULE_NAME,
+            "[ROUND] No player pieces remaining; waiting for match return.",
+        )
+        return False
+
+    next_dialog = int(round_dialogs[_round_next_piece_index])
+    _start_next_round_piece_selection(next_dialog)
+    return False
+
+
+
+def _damage_skill_meta(skill_id: int):
+    """Resolve the current damage skill from ANY known Polymock piece."""
+    for piece in PolymockPieces:
+        for _slot, skill in piece.value.damage_skills.items():
+            if int(skill.skill_id) == int(skill_id):
+                return skill
+    return None
+
+
+def _patched_use_polymock_damage_skills(self) -> bool:
+    """
+    Diagnostic combat policy.
+
+    Damage:
+      3 -> 2 -> 1 whenever actually ready/affordable.
+
+    Utility:
+      4/5 remain reactive in Combat.Fight().
+      5 is NOT spammed proactively (prevents wasting energy).
+      6 is used only before a damage skill flagged for Concentration,
+        and only if there is enough energy for glyph + attack.
+      7 remains the original emergency Ether Signet at ~0 Energy.
+      8 remains a low-HP Glyph of Power.
+    """
+    # Damage can still run generically even if quest auto-detection fails.
+    # Reactive slots 4/5 use quest metadata when available.
+    if self.remove_block:
+        candidate_slots = [1]
+    else:
+        candidate_slots = [3, 2, 1]
+
+    # Low HP utility. Don't cast if doing so would leave no usable attack.
+    if (
+        self.player_hp_percent <= 50.0
+        and self.IsSkillReady(8)
+        and not _has_effect("Polymock_Glyph_of_Power")
+    ):
+        # Keep at least a little energy headroom where possible.
+        if self.player_energy >= 5.0:
+            _trace_log(
+                MODULE_NAME,
+                f"[COMBAT] HP={self.player_hp_percent:.1f}% -> using slot 8.",
+            )
+            if self.UseSkill(8, self.player_id):
+                return True
+
+    for skill_slot in candidate_slots:
+        skill = self.skills.get(skill_slot)
+        if not skill:
+            continue
+
+        sid = int(skill.id.id)
+        meta = _damage_skill_meta(sid)
+
+        if not self.IsSkillReady(skill_slot):
+            continue
+
+        should_use_concentration = bool(
+            meta is not None
+            and getattr(meta, "use_glyph_of_concentration", False)
+        )
+
+        if should_use_concentration and not _has_effect("Polymock_Glyph_of_Concentration"):
+            try:
+                attack_cost = float(
+                    Routines.Checks.Skills.GetEnergyCostWithEffects(
+                        sid,
+                        self.player_id,
+                    )
+                )
+                glyph_id = int(
+                    GLOBAL_CACHE.Skill.GetID("Polymock_Glyph_of_Concentration")
+                )
+                glyph_cost = float(
+                    Routines.Checks.Skills.GetEnergyCostWithEffects(
+                        glyph_id,
+                        self.player_id,
+                    )
+                )
+            except Exception:
+                attack_cost = 0.0
+                glyph_cost = 0.0
+
+            if (
+                self.IsSkillReady(6)
+                and self.player_energy >= (attack_cost + glyph_cost)
+            ):
+                _trace_log(
+                    MODULE_NAME,
+                    (
+                        f"[COMBAT] slot {skill_slot} wants Concentration; "
+                        f"energy={self.player_energy:.1f}, need={attack_cost + glyph_cost:.1f} -> slot 6."
+                    ),
+                )
+                if self.UseSkill(6, self.player_id):
+                    return True
+
+        _trace_log(
+            MODULE_NAME,
+            (
+                f"[COMBAT] using damage slot {skill_slot}: "
+                f"{GLOBAL_CACHE.Skill.GetName(sid)} "
+                f"(energy={self.player_energy:.1f})"
+            ),
+        )
+        self.opener_used = True
+
+        if self.UseSkill(skill_slot, self.target_id):
+            return True
+
+    return False
+
+
+def _patched_block_skill(self, skill_id: int = 0) -> bool:
+    """
+    Polymock Block is a self-protection enchantment.
+    The original module sends slot 5 using target_id (the opponent).
+    """
+    slot = 5
+    if not self.IsSkillReady(slot):
+        return False
+
+    if skill_id:
+        self.state.Log(
+            f"Trying to block {GLOBAL_CACHE.Skill.GetName(skill_id)}."
+        )
+
+    return bool(self.UseSkill(slot, self.player_id))
+
+
+# Patch only this script process; repo files are not modified.
+combat_handler.UsePolymock_Damage_Skills = (
+    _patched_use_polymock_damage_skills.__get__(combat_handler, type(combat_handler))
+)
+combat_handler.BlockSkill = (
+    _patched_block_skill.__get__(combat_handler, type(combat_handler))
+)
+
+
+
+
+def _set_polymock_runtime(quest_id: int | None, active: bool) -> None:
+    """Scope custom Polymock combat without changing the Skill Unlocker's global HeroAI policy."""
+    global _polymock_runtime_active
+    global _polymock_forced_quest_id
+    global _polymock_saved_pause_on_combat
+    global _last_piece_signature
+
+    tree = ensure_botting_tree()
+
+    if active:
+        requested_id = int(quest_id or 0)
+        if requested_id <= 0:
+            raise ValueError("Polymock runtime requires a valid quest id")
+
+        if not _polymock_runtime_active:
+            _polymock_saved_pause_on_combat = bool(tree.pause_on_combat)
+
+        _polymock_runtime_active = True
+        _polymock_forced_quest_id = requested_id
+        _last_piece_signature = None
+        _reset_round_manager()
+
+        # Pin the state immediately; WidgetState.update() is re-pinned every tick too.
+        widget_state.quest = _get_polymock_quest_by_id(requested_id)
+
+        # Frenkey combat.py is the only skill controller inside Polymock.
+        tree.pause_on_combat = False
+        tree.SetHeadlessHeroAIEnabled(False, reset_runtime=False)
+        return
+
+    _polymock_runtime_active = False
+    _polymock_forced_quest_id = None
+    _last_piece_signature = None
+    _reset_round_manager()
+    widget_state.quest = None
+
+    tree.SetHeadlessHeroAIEnabled(True, reset_runtime=False)
+    if _polymock_saved_pause_on_combat is not None:
+        tree.pause_on_combat = bool(_polymock_saved_pause_on_combat)
+    _polymock_saved_pause_on_combat = None
+
+
+def _polymock_prepare_tree(quest_id: int, label: str) -> BehaviorTree:
+    return _immediate_action(
+        f"{label} - Prepare Polymock Runtime",
+        lambda: _set_polymock_runtime(int(quest_id), True),
+    )
+
+
+def _polymock_restore_tree(label: str) -> BehaviorTree:
+    return _immediate_action(
+        f"{label} - Restore HeroAI",
+        lambda: _set_polymock_runtime(None, False),
+    )
+
+
+def _restore_polymock_runtime_if_idle(tree: BottingTree) -> None:
+    """Safety net for Stop/failure while HeroAI is temporarily disabled."""
+    if _polymock_runtime_active and not tree.IsStarted():
+        _set_polymock_runtime(None, False)
+
+
+def _try_clear_volumandus_diversion() -> bool:
+    """
+    Volumandus / Skeletal Mage:
+    if Polymock Diversion is on the player, deliberately use Ether Signet
+    (slot 7) to consume/remove it, as recommended by the walkthrough.
+    """
+    quest = getattr(widget_state, "quest", None)
+    quest_id = int(getattr(quest, "quest_id", 0) or 0)
+    if quest_id != VOLUMANDUS_QUEST_ID:
+        return False
+
+    try:
+        diversion_id = int(GLOBAL_CACHE.Skill.GetID("Polymock_Diversion"))
+    except Exception:
+        diversion_id = 0
+
+    if diversion_id <= 0:
+        return False
+
+    try:
+        has_diversion = bool(
+            GLOBAL_CACHE.Effects.HasEffect(
+                int(Player.GetAgentID() or 0),
+                diversion_id,
+            )
+        )
+    except Exception:
+        has_diversion = False
+
+    if not has_diversion:
+        return False
+
+    try:
+        ready = bool(combat_handler.IsSkillReady(7))
+    except Exception:
+        ready = False
+
+    if not ready:
+        return False
+
+    _trace_log(
+        MODULE_NAME,
+        "[Volumandus] Diversion detected -> consuming it with Ether Signet (slot 7).",
+    )
+    try:
+        return bool(combat_handler.UseSkill(7, int(Player.GetAgentID() or 0)))
+    except Exception:
+        return False
+
+
+def _tick_polymock_combat() -> None:
+    """
+    Run the round manager and frenkey Polymock combat engine in parallel with
+    the planner while it waits for the match to return to the outpost.
+    """
+    global _last_piece_signature, _last_combat_tick
+
+    if not _polymock_runtime_active:
+        return
+
+    try:
+        widget_state.update()
+    except Exception as exc:
+        _trace_log(
+            MODULE_NAME,
+            f"[DIAG] widget_state.update failed: {type(exc).__name__}: {exc}",
+        )
+        return
+
+    _inject_forced_quest_if_needed()
+
+    current_map_id = int(Map.GetMapID() or 0)
+    if current_map_id not in POLYMOCK_ARENA_MAP_IDS:
+        _last_piece_signature = None
+        _reset_round_manager()
+        return
+
+    if POLYMOCK_VERBOSE_LOGS:
+        _diagnostic_tick()
+
+    now = time.monotonic()
+    if now - _last_combat_tick < 0.20:
+        return
+    _last_combat_tick = now
+
+    can_fight = _tick_polymock_round_manager()
+
+    signature = _current_piece_signature()
+    if (
+        can_fight
+        and _last_piece_signature is not None
+        and signature != _last_piece_signature
+        and any(signature)
+    ):
+        combat_handler.opener_used = False
+        _trace_log(
+            MODULE_NAME,
+            f"New Polymock piece detected: {signature}; opener reset.",
+        )
+
+    _last_piece_signature = signature
+
+    if not can_fight:
+        return
+
+    # Volumandus-specific anti-Diversion handling gets priority for this tick.
+    if _try_clear_volumandus_diversion():
+        return
+
+    try:
+        combat_handler.Fight()
+    except Exception as exc:
+        ConsoleLog(
+            MODULE_NAME,
+            f"Combat exception: {type(exc).__name__}: {exc}",
+        )
+
+
+# =============================================================================
+# Small BT helpers
+# =============================================================================
+
+def _wait_for_any_map(
+    map_ids: tuple[int, ...],
+    *,
+    timeout_ms: int,
+    name: str,
+) -> BehaviorTree:
+    started_at: list[float | None] = [None]
+
+    def _tick(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        if started_at[0] is None:
+            started_at[0] = time.monotonic()
+
+        if int(Map.GetMapID() or 0) in map_ids:
+            return BehaviorTree.NodeState.SUCCESS
+
+        elapsed_ms = (time.monotonic() - float(started_at[0])) * 1000.0
+        if elapsed_ms >= timeout_ms:
+            ConsoleLog(
+                MODULE_NAME,
+                f"{name}: timeout waiting for maps {map_ids}; current={Map.GetMapID()}",
+            )
+            return BehaviorTree.NodeState.FAILURE
+
+        return BehaviorTree.NodeState.RUNNING
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name=name,
+            action_fn=_tick,
+            aftercast_ms=0,
+        )
+    )
+
+
+def _require_quest_completed(quest_id: int, label: str) -> BehaviorTree:
+    def _check(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        try:
+            quest = GLOBAL_CACHE.Quest.GetQuestData(quest_id)
+            completed = bool(quest and quest.is_completed)
+        except Exception:
+            completed = False
+
+        if completed:
+            _trace_log(MODULE_NAME, f"{label}: quest completed.")
+            return BehaviorTree.NodeState.SUCCESS
+
+        ConsoleLog(
+            MODULE_NAME,
+            f"{label}: returned from Polymock but quest is NOT completed (match lost?).",
+        )
+        return BehaviorTree.NodeState.FAILURE
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name=f"Check {label} Completed",
+            action_fn=_check,
+            aftercast_ms=0,
+        )
+    )
+
+
+def _select_pieces(
+    label: str,
+    match_piece_dialogs: tuple[int, int, int],
+    first_round_piece_dialog: int,
+    selection_pos: Vec2f = POLYMOCK_SELECTION_POS,
+) -> BehaviorTree:
+    """
+    Polymock flow:
+      1) xx85: choose the three pieces for the whole match.
+      2) xx86: choose which of those pieces starts the current round.
+      3) 0x87: start the first round.
+      Later rounds are handled automatically by _tick_polymock_round_manager().
+    """
+    return BT.Sequence(
+        name=f"{label} - Select Match Pieces + First Round Piece",
+        children=[
+            BT.MoveAndDialog(
+                selection_pos,
+                match_piece_dialogs[0],
+                log=BT_FLOW_LOGS,
+            ),
+            BT.Wait(600),
+            BT.SendDialog(match_piece_dialogs[1], log=BT_FLOW_LOGS),
+            BT.Wait(600),
+            BT.SendDialog(match_piece_dialogs[2], log=BT_FLOW_LOGS),
+            BT.Wait(600),
+
+            # The missing step from the previous versions:
+            # choose the piece that will actually be used for round 1.
+            BT.SendDialog(first_round_piece_dialog, log=BT_FLOW_LOGS),
+            BT.Wait(600),
+
+            BT.SendDialog(START_MATCH_DIALOG, log=BT_FLOW_LOGS),
+            BT.Wait(1_500),
+        ],
+    )
+
+
+def _wait_for_arena(label: str) -> BehaviorTree:
+    return _wait_for_any_map(
+        POLYMOCK_ARENA_MAP_IDS,
+        timeout_ms=POLYMOCK_MAP_TIMEOUT_MS,
+        name=f"{label} - Wait For Polymock Arena",
+    )
+
+
+
+def _quest_completed_condition(quest_id: int, label: str) -> BehaviorTree:
+    """SUCCESS only when the given quest is currently completed."""
+    def _check() -> bool:
+        try:
+            quest = GLOBAL_CACHE.Quest.GetQuestData(quest_id)
+            completed = bool(quest and quest.is_completed)
+        except Exception:
+            completed = False
+
+        if completed:
+            _trace_log(MODULE_NAME, f"{label}: quest is completed.")
+        return completed
+
+    return BehaviorTree(
+        BehaviorTree.ConditionNode(
+            name=f"{label} - Quest Completed?",
+            condition_fn=_check,
+        )
+    )
+
+
+_blarp_attempt_counter = 0
+
+
+def _blarp_attempt_log() -> BehaviorTree:
+    def _log_attempt(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        global _blarp_attempt_counter
+        _blarp_attempt_counter += 1
+        _trace_log(
+            MODULE_NAME,
+            f"[BlarpRetry] Starting attempt #{_blarp_attempt_counter}.",
+        )
+        return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Blarp - Log Attempt",
+            action_fn=_log_attempt,
+            aftercast_ms=0,
+        )
+    )
+
+
+def _blarp_one_attempt_from_gadd() -> BehaviorTree:
+    """
+    Play exactly one complete Blarp match from Gadd's Encampment.
+
+    SUCCESS  -> Blarp quest completed after returning to Gadd.
+    FAILURE  -> match lost; surrounding repeater starts another attempt.
+    """
+    return BT.Sequence(
+        name="Blarp - One Full Match Attempt",
+        children=[
+            _blarp_attempt_log(),
+            _polymock_prepare_tree(BLARP_QUEST_ID, "Blarp"),
+
+            # Re-enter the challenge from Gadd after either the first arrival
+            # or a previous complete match loss.
+            BT.MoveAndDialog(
+                BLARP_POS,
+                0x85,
+                log=BT_FLOW_LOGS,
+            ),
+            _wait_for_arena("Blarp"),
+
+            # Re-select the complete roster on EVERY retry.
+            _select_pieces(
+                "Blarp",
+                (MATCH_KAPPA, MATCH_FIRE_IMP, MATCH_SKALE),
+                ROUND_KAPPA,
+            ),
+
+            # combat.py + RoundManager run globally while this node waits. No timeout: wait until GW returns to the outpost.
+            BT.WaitForMapLoad(
+                map_name="Gadd's Encampment",
+                timeout_ms=0,
+            ),
+            _polymock_restore_tree("Blarp"),
+            BT.Wait(1_000),
+
+            # Winning the complete match marks the quest complete.
+            # A loss returns FAILURE here, causing a brand-new attempt.
+            _require_quest_completed(
+                BLARP_QUEST_ID,
+                "Blarp",
+            ),
+        ],
+    )
+
+
+def _blarp_win_until_completed() -> BehaviorTree:
+    """
+    At Gadd's Encampment:
+      already complete -> SUCCESS immediately
+      not complete     -> play one match
+          win  -> SUCCESS
+          loss -> FAILURE -> repeat from Blarp NPC
+
+    timeout_ms=0 intentionally means retry indefinitely until success.
+    """
+    check_or_attempt = BehaviorTree(
+        BehaviorTree.SelectorNode(
+            name="Blarp - Completed Or Fight Again",
+            children=[
+                _quest_completed_condition(
+                    BLARP_QUEST_ID,
+                    "Blarp",
+                ).root,
+                _blarp_one_attempt_from_gadd().root,
+            ],
+        )
+    )
+
+    return BehaviorTree(
+        BehaviorTree.RepeaterUntilSuccessNode(
+            name="Blarp - Retry Until Victory",
+            child=check_or_attempt.root,
+            timeout_ms=0,
+        )
+    )
+
+
+
+_fonk_attempt_counter = 0
+
+
+def _fonk_attempt_log() -> BehaviorTree:
+    def _log_attempt(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        global _fonk_attempt_counter
+        _fonk_attempt_counter += 1
+        _trace_log(
+            MODULE_NAME,
+            f"[FonkRetry] Starting attempt #{_fonk_attempt_counter}.",
+        )
+        return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Fonk - Log Attempt",
+            action_fn=_log_attempt,
+            aftercast_ms=0,
+        )
+    )
+
+
+def _fonk_one_attempt_from_gunnar() -> BehaviorTree:
+    """
+    Play one full Fonk match from Gunnar's Hold.
+
+    Roster from the repo counter_pieces:
+      Gargoyle -> Kappa -> Fire Imp
+    """
+    return BT.Sequence(
+        name="Fonk - One Full Match Attempt",
+        children=[
+            _fonk_attempt_log(),
+            _polymock_prepare_tree(FONK_QUEST_ID, "Fonk"),
+
+            BT.MoveAndDialog(
+                FONK_POS,
+                0x85,
+                log=BT_FLOW_LOGS,
+            ),
+            _wait_for_arena("Fonk"),
+
+            _select_pieces(
+                "Fonk",
+                (MATCH_GARGOYLE, MATCH_KAPPA, MATCH_FIRE_IMP),
+                ROUND_GARGOYLE,
+                selection_pos=FONK_SELECTION_POS,
+            ),
+
+            # No match timeout. Wait until GW returns us to Gunnar's Hold.
+            BT.WaitForMapLoad(
+                map_name="Gunnar's Hold",
+                timeout_ms=0,
+            ),
+            _polymock_restore_tree("Fonk"),
+            BT.Wait(1_000),
+
+            _require_quest_completed(
+                FONK_QUEST_ID,
+                "Fonk",
+            ),
+        ],
+    )
+
+
+def _fonk_win_until_completed() -> BehaviorTree:
+    check_or_attempt = BehaviorTree(
+        BehaviorTree.SelectorNode(
+            name="Fonk - Completed Or Fight Again",
+            children=[
+                _quest_completed_condition(
+                    FONK_QUEST_ID,
+                    "Fonk",
+                ).root,
+                _fonk_one_attempt_from_gunnar().root,
+            ],
+        )
+    )
+
+    return BehaviorTree(
+        BehaviorTree.RepeaterUntilSuccessNode(
+            name="Fonk - Retry Until Victory",
+            child=check_or_attempt.root,
+            timeout_ms=0,
+        )
+    )
+
+
+
+_late_attempt_counters: dict[int, int] = {
+    DUNE_TEARDRINKER_QUEST_ID: 0,
+    GRULHAMMER_QUEST_ID: 0,
+    VOLUMANDUS_QUEST_ID: 0,
+}
+
+
+def _late_attempt_log(quest_id: int) -> BehaviorTree:
+    data = LAST_THREE_OPPONENT_DATA[int(quest_id)]
+    label = str(data["label"])
+
+    def _log_attempt(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        _late_attempt_counters[int(quest_id)] = (
+            int(_late_attempt_counters.get(int(quest_id), 0)) + 1
+        )
+        _trace_log(
+            MODULE_NAME,
+            f"[{label}Retry] Starting attempt #{_late_attempt_counters[int(quest_id)]}.",
+        )
+        return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name=f"{label} - Log Attempt",
+            action_fn=_log_attempt,
+            aftercast_ms=0,
+        )
+    )
+
+
+def _late_one_attempt(quest_id: int) -> BehaviorTree:
+    """
+    One complete Polymock attempt from the opponent's outpost.
+
+    The NPC at opponent_pos gets 0x85 to enter the arena.
+    The arena NPC at selector_pos receives xx85 x3, xx86, then 0x87.
+    A loss returns to the outpost and produces FAILURE so the repeater retries.
+    """
+    data = LAST_THREE_OPPONENT_DATA[int(quest_id)]
+    label = str(data["label"])
+    outpost = str(data["outpost"])
+    opponent_pos = data["opponent_pos"]
+    selector_pos = data["selector_pos"]
+    match_dialogs = data["match_dialogs"]
+    first_round_dialog = int(data["first_round_dialog"])
+
+    return BT.Sequence(
+        name=f"{label} - One Full Match Attempt",
+        children=[
+            _late_attempt_log(int(quest_id)),
+            _polymock_prepare_tree(int(quest_id), label),
+
+            BT.MoveAndDialog(
+                opponent_pos,
+                0x85,
+                log=BT_FLOW_LOGS,
+            ),
+            _wait_for_arena(label),
+
+            _select_pieces(
+                label,
+                match_dialogs,
+                first_round_dialog,
+                selection_pos=selector_pos,
+            ),
+
+            # No overall match timeout.
+            BT.WaitForMapLoad(
+                map_name=outpost,
+                timeout_ms=0,
+            ),
+            _polymock_restore_tree(label),
+            BT.Wait(1_000),
+
+            _require_quest_completed(
+                int(quest_id),
+                label,
+            ),
+        ],
+    )
+
+
+def _late_win_until_completed(quest_id: int) -> BehaviorTree:
+    data = LAST_THREE_OPPONENT_DATA[int(quest_id)]
+    label = str(data["label"])
+
+    check_or_attempt = BehaviorTree(
+        BehaviorTree.SelectorNode(
+            name=f"{label} - Completed Or Fight Again",
+            children=[
+                _quest_completed_condition(
+                    int(quest_id),
+                    label,
+                ).root,
+                _late_one_attempt(int(quest_id)).root,
+            ],
+        )
+    )
+
+    return BehaviorTree(
+        BehaviorTree.RepeaterUntilSuccessNode(
+            name=f"{label} - Retry Until Victory",
+            child=check_or_attempt.root,
+            timeout_ms=0,
+        )
+    )
+
+
+def _steps_late_opponent(quest_id: int) -> list[PlannerStep]:
+    data = LAST_THREE_OPPONENT_DATA[int(quest_id)]
+    label = str(data["label"])
+    outpost = str(data["outpost"])
+    accept_dialog = int(data["accept_dialog"])
+    reward_dialog = int(data["reward_dialog"])
+
+    return [
+        (
+            f"{label} - 001 Travel Rata Sum",
+            lambda: BT.Travel(target_map_name="Rata Sum", log=BT_FLOW_LOGS),
+        ),
+        (
+            f"{label} - 002 Accept Quest",
+            lambda: BT.MoveAndDialog(
+                POLYMOCK_HOFF_POS,
+                accept_dialog,
+                log=BT_FLOW_LOGS,
+            ),
+        ),
+
+        (
+            f"{label} - 003 Travel {outpost}",
+            lambda: BT.Travel(target_map_name=outpost, log=BT_FLOW_LOGS),
+        ),
+        (
+            f"{label} - 004 Retry Until Victory",
+            lambda: _late_win_until_completed(int(quest_id)),
+        ),
+
+        (
+            f"{label} - 005 Travel Rata Sum",
+            lambda: BT.Travel(target_map_name="Rata Sum", log=BT_FLOW_LOGS),
+        ),
+        (
+            f"{label} - 006 Settle",
+            lambda: BT.Wait(POST_LOAD_WAIT_MS),
+        ),
+        (
+            f"{label} - 007 Claim Reward",
+            lambda: BT.MoveAndDialog(
+                POLYMOCK_HOFF_POS,
+                reward_dialog,
+                log=BT_FLOW_LOGS,
+            ),
+        ),
+    ]
+
+
+def _steps_dune() -> list[PlannerStep]:
+    steps = _steps_late_opponent(DUNE_TEARDRINKER_QUEST_ID)
+    steps.append(
+        (
+            "Dune Teardrinker - 008 Register Aloe Seed Reward",
+            lambda: BT.MoveAndDialog(
+                POLYMOCK_REGISTER_POS,
+                REGISTER_ALOE_SEED,
+                log=BT_FLOW_LOGS,
+            ),
+        )
+    )
+    return steps
+
+
+def _steps_grulhammer() -> list[PlannerStep]:
+    steps = _steps_late_opponent(GRULHAMMER_QUEST_ID)
+    steps.append(
+        (
+            "Grulhammer - 008 Register Fire Elemental Reward",
+            lambda: BT.MoveAndDialog(
+                POLYMOCK_REGISTER_POS,
+                REGISTER_FIRE_ELEMENTAL,
+                log=BT_FLOW_LOGS,
+            ),
+        )
+    )
+    return steps
+
+
+def _steps_volumandus() -> list[PlannerStep]:
+    steps = _steps_late_opponent(VOLUMANDUS_QUEST_ID)
+    steps.append(
+        (
+            "Volumandus - 008 Register Ice Elemental Reward",
+            lambda: BT.MoveAndDialog(
+                POLYMOCK_REGISTER_POS,
+                REGISTER_ICE_ELEMENTAL,
+                log=BT_FLOW_LOGS,
+            ),
+        )
+    )
+    return steps
+
+
+
+_hoff_attempt_counter = 0
+
+
+def _hoff_attempt_log() -> BehaviorTree:
+    def _log_attempt(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        global _hoff_attempt_counter
+        _hoff_attempt_counter += 1
+        _trace_log(
+            MODULE_NAME,
+            f"[HoffRetry] Starting attempt #{_hoff_attempt_counter}.",
+        )
+        return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Master Hoff - Log Attempt",
+            action_fn=_log_attempt,
+            aftercast_ms=0,
+        )
+    )
+
+
+def _hoff_one_attempt_from_rata() -> BehaviorTree:
+    """
+    One complete Master Hoff match from Rata Sum.
+
+    Hoff dialog 0x84 teleports into the Polymock instance.
+    Arena selector/combat NPC is at (4185,44).
+    """
+    return BT.Sequence(
+        name="Master Hoff - One Full Match Attempt",
+        children=[
+            _hoff_attempt_log(),
+            _polymock_prepare_tree(HOFF_QUEST_ID, "Master Hoff"),
+
+            BT.MoveAndDialog(
+                POLYMOCK_HOFF_POS,
+                HOFF_START_DIALOG,
+                log=BT_FLOW_LOGS,
+            ),
+            _wait_for_arena("Master Hoff"),
+
+            _select_pieces(
+                "Master Hoff",
+                (
+                    MATCH_FIRE_ELEMENTAL,
+                    MATCH_ICE_ELEMENTAL,
+                    MATCH_EARTH_ELEMENTAL,
+                ),
+                ROUND_FIRE_ELEMENTAL,
+                selection_pos=HOFF_SELECTION_POS,
+            ),
+
+            # No match timeout; GW returns us to Rata Sum.
+            BT.WaitForMapLoad(
+                map_name="Rata Sum",
+                timeout_ms=0,
+            ),
+            _polymock_restore_tree("Master Hoff"),
+            BT.Wait(1_000),
+
+            _require_quest_completed(
+                HOFF_QUEST_ID,
+                "Master Hoff",
+            ),
+        ],
+    )
+
+
+def _hoff_win_until_completed() -> BehaviorTree:
+    check_or_attempt = BehaviorTree(
+        BehaviorTree.SelectorNode(
+            name="Master Hoff - Completed Or Fight Again",
+            children=[
+                _quest_completed_condition(
+                    HOFF_QUEST_ID,
+                    "Master Hoff",
+                ).root,
+                _hoff_one_attempt_from_rata().root,
+            ],
+        )
+    )
+
+    return BehaviorTree(
+        BehaviorTree.RepeaterUntilSuccessNode(
+            name="Master Hoff - Retry Until Victory",
+            child=check_or_attempt.root,
+            timeout_ms=0,
+        )
+    )
+
+
+def _steps_hoff() -> list[PlannerStep]:
+    return [
+        (
+            "Master Hoff - 001 Travel Rata Sum",
+            lambda: BT.Travel(
+                target_map_name="Rata Sum",
+                log=BT_FLOW_LOGS,
+            ),
+        ),
+        (
+            "Master Hoff - 002 Accept Final Quest",
+            lambda: BT.MoveAndDialog(
+                POLYMOCK_HOFF_POS,
+                HOFF_ACCEPT_DIALOG,
+                log=BT_FLOW_LOGS,
+            ),
+        ),
+        (
+            "Master Hoff - 003 Retry Until Victory",
+            lambda: _hoff_win_until_completed(),
+        ),
+        (
+            "Master Hoff - 004 Settle",
+            lambda: BT.Wait(POST_LOAD_WAIT_MS),
+        ),
+        (
+            "Master Hoff - 005 Claim Final Reward",
+            lambda: BT.MoveAndDialog(
+                POLYMOCK_HOFF_POS,
+                HOFF_REWARD_DIALOG,
+                log=BT_FLOW_LOGS,
+            ),
+        ),
+    ]
+
+
+# =============================================================================
+# Quest / combat sequences
+# =============================================================================
+
+def _steps_yulma(*, include_reward: bool = True) -> list[PlannerStep]:
+    steps: list[PlannerStep] = [
+        ("Yulma - 001 Travel Rata Sum", lambda: BT.Travel(target_map_name="Rata Sum", log=BT_FLOW_LOGS)),
+        ("Yulma - 002 Accept Quest", lambda: BT.MoveAndDialog(POLYMOCK_HOFF_POS, YULMA_ACCEPT_DIALOG, log=BT_FLOW_LOGS)),
+
+        # Initial starter pieces registration.
+        ("Yulma - 003 Register Starter Piece 1", lambda: BT.MoveAndDialog(POLYMOCK_REGISTER_POS, REGISTER_STARTER_1, log=BT_FLOW_LOGS)),
+        ("Yulma - 004 Register Starter Piece 2", lambda: BT.SendDialog(REGISTER_STARTER_2, log=BT_FLOW_LOGS)),
+        ("Yulma - 005 Register Starter Piece 3", lambda: BT.SendDialog(REGISTER_STARTER_3, log=BT_FLOW_LOGS)),
+
+        ("Yulma - 006 Prepare Polymock", lambda: _polymock_prepare_tree(YULMA_QUEST_ID, "Yulma")),
+        ("Yulma - 007 Start Challenge", lambda: BT.MoveAndDialog(YULMA_POS, 0x85, log=BT_FLOW_LOGS)),
+        ("Yulma - 008 Wait Arena", lambda: _wait_for_arena("Yulma")),
+        (
+            "Yulma - 009 Select Pieces And Start",
+            lambda: _select_pieces(
+                "Yulma",
+                (MATCH_GARGOYLE, MATCH_MERGOYLE, MATCH_SKALE),
+                ROUND_GARGOYLE,
+            ),
+        ),
+
+        # The combat handler is ticked globally while this planner waits.
+        ("Yulma - 010 Wait Return Rata Sum", lambda: BT.WaitForMapLoad(map_name="Rata Sum", timeout_ms=0)),
+        ("Yulma - 011 Restore HeroAI", lambda: _polymock_restore_tree("Yulma")),
+        ("Yulma - 012 Settle", lambda: BT.Wait(POST_LOAD_WAIT_MS)),
+        ("Yulma - 013 Verify Win", lambda: _require_quest_completed(YULMA_QUEST_ID, "Yulma")),
+    ]
+
+    if include_reward:
+        steps.extend(
+            [
+                (
+                    "Yulma - 014 Reward",
+                    lambda: BT.MoveAndDialog(
+                        POLYMOCK_HOFF_POS,
+                        YULMA_REWARD_DIALOG,
+                        log=BT_FLOW_LOGS,
+                    ),
+                ),
+                (
+                    "Yulma - 015 Register Fire Imp Reward",
+                    lambda: BT.MoveAndDialog(
+                        POLYMOCK_REGISTER_POS,
+                        REGISTER_FIRE_IMP,
+                        log=BT_FLOW_LOGS,
+                    ),
+                ),
+            ]
+        )
+    return steps
+
+
+def _steps_plurgg(*, include_reward: bool = True) -> list[PlannerStep]:
+    steps: list[PlannerStep] = [
+        ("Plurgg - 001 Travel Rata Sum", lambda: BT.Travel(target_map_name="Rata Sum", log=BT_FLOW_LOGS)),
+        ("Plurgg - 002 Accept Quest", lambda: BT.MoveAndDialog(POLYMOCK_HOFF_POS, PLURGG_ACCEPT_DIALOG, log=BT_FLOW_LOGS)),
+
+        ("Plurgg - 003 Travel Vlox's Falls", lambda: BT.Travel(target_map_name="Vlox's Falls", log=BT_FLOW_LOGS)),
+        ("Plurgg - 004 Prepare Polymock", lambda: _polymock_prepare_tree(PLURGG_QUEST_ID, "Plurgg")),
+        ("Plurgg - 005 Start Challenge", lambda: BT.MoveAndDialog(PLURGG_POS, 0x85, log=BT_FLOW_LOGS)),
+        ("Plurgg - 006 Wait Arena", lambda: _wait_for_arena("Plurgg")),
+        (
+            "Plurgg - 007 Select Pieces And Start",
+            lambda: _select_pieces(
+                "Plurgg",
+                (MATCH_SKALE, MATCH_FIRE_IMP, MATCH_GARGOYLE),
+                ROUND_SKALE,
+            ),
+        ),
+
+        ("Plurgg - 008 Wait Return Vlox", lambda: BT.WaitForMapLoad(map_name="Vlox's Falls", timeout_ms=0)),
+        ("Plurgg - 009 Restore HeroAI", lambda: _polymock_restore_tree("Plurgg")),
+        ("Plurgg - 010 Travel Rata Sum", lambda: BT.Travel(target_map_name="Rata Sum", log=BT_FLOW_LOGS)),
+        ("Plurgg - 011 Settle", lambda: BT.Wait(POST_LOAD_WAIT_MS)),
+        ("Plurgg - 012 Verify Win", lambda: _require_quest_completed(PLURGG_QUEST_ID, "Plurgg")),
+    ]
+
+    if include_reward:
+        steps.extend(
+            [
+                (
+                    "Plurgg - 013 Reward",
+                    lambda: BT.MoveAndDialog(
+                        POLYMOCK_HOFF_POS,
+                        PLURGG_REWARD_DIALOG,
+                        log=BT_FLOW_LOGS,
+                    ),
+                ),
+                (
+                    "Plurgg - 014 Register Kappa Reward",
+                    lambda: BT.MoveAndDialog(
+                        POLYMOCK_REGISTER_POS,
+                        REGISTER_KAPPA,
+                        log=BT_FLOW_LOGS,
+                    ),
+                ),
+            ]
+        )
+    return steps
+
+
+def _steps_blarp() -> list[PlannerStep]:
+    return [
+        ("Blarp - 001 Travel Rata Sum", lambda: BT.Travel(target_map_name="Rata Sum", log=BT_FLOW_LOGS)),
+        ("Blarp - 002 Accept Quest", lambda: BT.MoveAndDialog(POLYMOCK_HOFF_POS, BLARP_ACCEPT_DIALOG, log=BT_FLOW_LOGS)),
+        ("Blarp - 003 Travel Gadd's Encampment", lambda: BT.Travel(target_map_name="Gadd's Encampment", log=BT_FLOW_LOGS)),
+
+        # This single step loops complete Polymock matches at Gadd.
+        # Loss:
+        #   Gadd -> Blarp -> arena -> roster -> rounds -> Gadd -> retry
+        # Win:
+        #   Gadd -> quest completed -> SUCCESS -> travel Rata Sum
+        ("Blarp - 004 Retry Until Victory", lambda: _blarp_win_until_completed()),
+
+        ("Blarp - 005 Travel Rata Sum", lambda: BT.Travel(target_map_name="Rata Sum", log=BT_FLOW_LOGS)),
+        ("Blarp - 006 Settle", lambda: BT.Wait(POST_LOAD_WAIT_MS)),
+        (
+            "Blarp - 007 Claim Reward",
+            lambda: BT.MoveAndDialog(
+                POLYMOCK_HOFF_POS,
+                BLARP_REWARD_DIALOG,
+                log=BT_FLOW_LOGS,
+            ),
+        ),
+        (
+            "Blarp - 008 Register Ice Imp Reward",
+            lambda: BT.MoveAndDialog(
+                POLYMOCK_REGISTER_POS,
+                REGISTER_ICE_IMP,
+                log=BT_FLOW_LOGS,
+            ),
+        ),
+    ]
+
+
+
+def _steps_fonk() -> list[PlannerStep]:
+    return [
+        ("Fonk - 001 Travel Rata Sum", lambda: BT.Travel(target_map_name="Rata Sum", log=BT_FLOW_LOGS)),
+        (
+            "Fonk - 002 Accept Quest",
+            lambda: BT.MoveAndDialog(
+                POLYMOCK_HOFF_POS,
+                FONK_ACCEPT_DIALOG,
+                log=BT_FLOW_LOGS,
+            ),
+        ),
+        ("Fonk - 003 Travel Gunnar's Hold", lambda: BT.Travel(target_map_name="Gunnar's Hold", log=BT_FLOW_LOGS)),
+
+        # Loss -> automatic return Gunnar -> challenge restarts.
+        # Win  -> quest complete -> leave retry loop.
+        ("Fonk - 004 Retry Until Victory", lambda: _fonk_win_until_completed()),
+
+        ("Fonk - 005 Travel Rata Sum", lambda: BT.Travel(target_map_name="Rata Sum", log=BT_FLOW_LOGS)),
+        ("Fonk - 006 Settle", lambda: BT.Wait(POST_LOAD_WAIT_MS)),
+        (
+            "Fonk - 007 Claim Reward",
+            lambda: BT.MoveAndDialog(
+                POLYMOCK_HOFF_POS,
+                FONK_REWARD_DIALOG,
+                log=BT_FLOW_LOGS,
+            ),
+        ),
+        (
+            "Fonk - 008 Register Earth Elemental Reward",
+            lambda: BT.MoveAndDialog(
+                POLYMOCK_REGISTER_POS,
+                REGISTER_EARTH_ELEMENTAL,
+                log=BT_FLOW_LOGS,
+            ),
+        ),
+    ]
+
+# ---------------------------------------------------------------------------
+# Asura summon skills unlocked through the validated Polymock progression
+# ---------------------------------------------------------------------------
+
+def _steps_unlock_summon_naga_shaman() -> list[PlannerStep]:
+    """Yulma -> Plurgg -> Blarp -> Fonk -> Dune Teardrinker."""
+    return [
+        *_steps_yulma(include_reward=True),
+        *_steps_plurgg(include_reward=True),
+        *_steps_blarp(),
+        *_steps_fonk(),
+        *_steps_dune(),
+    ]
+
+
+def _steps_unlock_summon_ruby_djinn() -> list[PlannerStep]:
+    """Grulhammer Silverfist; earlier Polymock progression is a skill prerequisite."""
+    return _steps_grulhammer()
+
+
+def _steps_unlock_summon_ice_imp() -> list[PlannerStep]:
+    """Necromancer Volumandus; earlier Polymock progression is a skill prerequisite."""
+    return _steps_volumandus()
+
+
+def _steps_unlock_summon_mursaat() -> list[PlannerStep]:
+    """Master Hoff; earlier Polymock progression is a skill prerequisite."""
+    return _steps_hoff()
+
 # ---------------------------------------------------------------------------
 # Converted legacy routes
 # ---------------------------------------------------------------------------
@@ -2696,6 +4639,10 @@ ROUTE_BUILDERS: dict[str, Callable[[], list[PlannerStep]]] = {
     'radiation_field': _steps_unlock_radiation_field,
     'smooth_criminal': _steps_unlock_smooth_criminal,
     'technobabble': _steps_unlock_technobabble,
+    'summon_naga_shaman': _steps_unlock_summon_naga_shaman,
+    'summon_ruby_djinn': _steps_unlock_summon_ruby_djinn,
+    'summon_ice_imp': _steps_unlock_summon_ice_imp,
+    'summon_mursaat': _steps_unlock_summon_mursaat,
     'deft_strike': _steps_unlock_deft_strike,
     'ebon_battle_standard_of_honor': _steps_unlock_ebon_battle_standard_of_honor,
     'ebon_vanguard_assassin_support': _steps_unlock_ebon_vanguard_assassin_support,
@@ -2745,6 +4692,12 @@ SKILL_PREREQUISITES: dict[str, tuple[str, ...]] = {
     ),
     "air_of_superiority": ("pain_inverter",),
 
+    # Polymock skill chain. Each reward route registers its newly earned piece
+    # immediately before the next opponent can need it.
+    "summon_ruby_djinn": ("summon_naga_shaman",),
+    "summon_ice_imp": ("summon_ruby_djinn",),
+    "summon_mursaat": ("summon_ice_imp",),
+
     "ebon_vanguard_assassin_support": ("winds",),
 
     "i_am_unstoppable": ("you_move_like_a_dwarf",),
@@ -2775,6 +4728,10 @@ SKILL_API_NAMES: dict[str, str] = {
     "radiation_field": "Radiation_Field",
     "smooth_criminal": "Smooth_Criminal",
     "technobabble": "Technobabble",
+    "summon_naga_shaman": "Summon_Naga_Shaman",
+    "summon_ruby_djinn": "Summon_Ruby_Djinn",
+    "summon_ice_imp": "Summon_Ice_Imp",
+    "summon_mursaat": "Summon_Mursaat",
     "winds": "Winds",
     "ebon_vanguard_assassin_support": "Ebon_Vanguard_Assassin_Support",
     "you_move_like_a_dwarf": "You_Move_Like_a_Dwarf",
@@ -2996,6 +4953,11 @@ def _start_route(key: str, start_from: str | None = None) -> None:
 
     if tree.IsStarted():
         tree.Stop()
+
+    # A manual route switch must never leave the temporary Polymock HeroAI
+    # override active from the previous planner.
+    if _polymock_runtime_active:
+        _set_polymock_runtime(None, False)
 
     label = _skill_label(key)
     prerequisite_keys = (
@@ -3319,6 +5281,11 @@ def main() -> None:
         initialized = True
 
     tree.tick()
+
+    # The custom Polymock engine is dormant unless a Polymock arena step has
+    # explicitly scoped it on and disabled HeroAI for that match.
+    _tick_polymock_combat()
+    _restore_polymock_runtime_if_idle(tree)
 
     # Keep the native BottingTree draw lifecycle. The managed-window renderer
     # itself has been replaced by _install_compact_ui().

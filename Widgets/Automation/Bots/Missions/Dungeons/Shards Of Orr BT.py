@@ -161,6 +161,10 @@ _inventory_status_snapshot: dict[str, dict[str, object]] = {}
 # equipped weapon type reported by the game.  Martial builds automatically
 # drop the torch for combat; caster builds keep it.
 _drop_torch_for_combat: bool | None = None
+# Last position where a martial leader intentionally dropped the torch for
+# combat. PickupTorch can retrace to this point if the fight pulls the player
+# farther away than the normal ground-item pickup radius.
+_last_torch_drop_position: tuple[float, float] | None = None
 # Set from the Core planner restart metadata after a shrine recovery. While
 # active, a missing torch may be skipped briefly while the route is retraced
 # toward the death location where the dropped torch can still be recovered.
@@ -237,7 +241,7 @@ TORCH_BUFF_ID = 2545
 # Martial leaders keep carrying the torch until enemies are genuinely close.
 # This only controls the automatic torch DROP trigger; Vanquish clear radii
 # remain unchanged.
-TORCH_COMBAT_TRIGGER_RADIUS = Range.Spellcast.value
+TORCH_COMBAT_TRIGGER_RADIUS = Range.Spirit.value
 
 L2_BLESSING_NPC = Vec2f(-14076.0, -19457.0)
 
@@ -2649,8 +2653,10 @@ def ResolveTorchCombatPolicy() -> BehaviorTree:
 def ResetTorchCombatPolicy() -> BehaviorTree:
     def _reset(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
         global _drop_torch_for_combat, _shrine_recovery_torch_skip_active
+        global _last_torch_drop_position
         _drop_torch_for_combat = None
         _shrine_recovery_torch_skip_active = False
+        _last_torch_drop_position = None
         return BehaviorTree.NodeState.SUCCESS
 
     return BehaviorTree(
@@ -2663,13 +2669,28 @@ def ResetTorchCombatPolicy() -> BehaviorTree:
 
 
 def DropTorchForCombat(log: bool = False) -> BehaviorTree:
-    """Drop the torch for martial combat; the current step recovers it afterward."""
+    """Drop the torch for martial combat and remember where it was released."""
 
     def _build(_node: BehaviorTree.Node) -> BehaviorTree:
+        global _last_torch_drop_position
+
         if not _resolve_torch_combat_policy():
             return BT.Succeeder('Keep Torch For Caster Combat')
         if not _is_holding_bundle():
             return BT.Succeeder('No Torch Bundle To Drop')
+
+        try:
+            x, y = Player.GetXY()
+            _last_torch_drop_position = (float(x), float(y))
+            if log:
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    f'Torch combat drop recorded at ({float(x):.0f}, {float(y):.0f}).',
+                    PySystem.Console.MessageType.Info,
+                )
+        except Exception:
+            _last_torch_drop_position = None
+
         return BT.DropBundle(log=log)
 
     return BT.Subtree(name='Drop Torch For Combat If Required', subtree_fn=_build)
@@ -2679,6 +2700,8 @@ def DiscardTorch(log: bool = True) -> BehaviorTree:
     """Drop the torch once the active mechanic no longer needs it."""
 
     def _build(_node: BehaviorTree.Node) -> BehaviorTree:
+        global _last_torch_drop_position
+        _last_torch_drop_position = None
         if not _is_holding_bundle():
             return BT.Succeeder('No Torch Bundle To Discard')
         return BT.DropBundle(log=log)
@@ -2854,12 +2877,13 @@ def _find_ground_torch() -> int | None:
         return None
 
 
-def PickupTorch() -> BehaviorTree:
-    """Require the active torch, with a Core-shrine-resume retrace grace."""
+def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
+    """Recover the active torch, retracing to the last combat-drop point when needed."""
     PICKUP_TIMEOUT_MS = 45_000
     SHRINE_RECOVERY_PICKUP_TIMEOUT_MS = 5_000
     RETRY_DELAY_MS = 1_000
     PICKUP_SEARCH_RADIUS = 7500.0
+    DROP_RETRACE_TOLERANCE = 500.0
 
     def _create_pickup_tree() -> BehaviorTree:
         return BT.PickupGroundItemByModelID(
@@ -2873,20 +2897,26 @@ def PickupTorch() -> BehaviorTree:
         )
 
     pickup_tree = _create_pickup_tree()
+    return_to_drop_tree: BehaviorTree | None = None
     started_at = 0.0
     retry_at = 0.0
     search_logged = False
+    retrace_logged = False
 
     def _reset_state() -> None:
-        nonlocal pickup_tree, started_at, retry_at, search_logged
+        nonlocal pickup_tree, return_to_drop_tree, started_at, retry_at
+        nonlocal search_logged, retrace_logged
         pickup_tree = _create_pickup_tree()
+        return_to_drop_tree = None
         started_at = 0.0
         retry_at = 0.0
         search_logged = False
+        retrace_logged = False
 
     def _pickup_torch_step(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        nonlocal pickup_tree, started_at, retry_at, search_logged
-        global _shrine_recovery_torch_skip_active
+        nonlocal pickup_tree, return_to_drop_tree, started_at, retry_at
+        nonlocal search_logged, retrace_logged
+        global _shrine_recovery_torch_skip_active, _last_torch_drop_position
 
         now = time.monotonic()
 
@@ -2895,6 +2925,7 @@ def PickupTorch() -> BehaviorTree:
 
         if _is_holding_bundle():
             _shrine_recovery_torch_skip_active = False
+            _last_torch_drop_position = None
             _reset_state()
             return BehaviorTree.NodeState.SUCCESS
 
@@ -2912,13 +2943,10 @@ def PickupTorch() -> BehaviorTree:
         elapsed_ms = int((now - started_at) * 1000.0)
 
         if (
-            _shrine_recovery_torch_skip_active
+            allow_shrine_skip
+            and _shrine_recovery_torch_skip_active
             and elapsed_ms >= SHRINE_RECOVERY_PICKUP_TIMEOUT_MS
         ):
-            # After a shrine wipe the dropped torch can be far behind the selected
-            # resume waypoint. Do not fail/restart the resumed planner point forever.
-            # Keep the recovery bypass active for later torch-managed points until
-            # a torch is actually recovered or the torch policy is explicitly reset.
             PySystem.Console.Log(
                 MODULE_NAME,
                 'Torch not recovered after 5s following shrine recovery; continuing to the next route point.',
@@ -2937,10 +2965,49 @@ def PickupTorch() -> BehaviorTree:
             return BehaviorTree.NodeState.FAILURE
 
         ground_torch = _find_ground_torch()
-        if ground_torch == 0:
-            # The torch remains required throughout a torch-managed section, so
-            # its absence stays blocking until it is recovered.
+
+        if ground_torch == 0 and _last_torch_drop_position is not None:
+            if return_to_drop_tree is None:
+                drop_x, drop_y = _last_torch_drop_position
+                return_to_drop_tree = BT.Move(
+                    Vec2f(float(drop_x), float(drop_y)),
+                    tolerance=DROP_RETRACE_TOLERANCE,
+                    pause_on_combat=False,
+                    log=False,
+                )
+                if not retrace_logged:
+                    PySystem.Console.Log(
+                        MODULE_NAME,
+                        f'Torch not found nearby; returning to the recorded drop point ({drop_x:.0f}, {drop_y:.0f}).',
+                        PySystem.Console.MessageType.Warning,
+                    )
+                    retrace_logged = True
+
+            return_to_drop_tree.blackboard = node.blackboard
+            move_result = BehaviorTree.Node._normalize_state(return_to_drop_tree.tick())
+            if move_result == BehaviorTree.NodeState.RUNNING:
+                return BehaviorTree.NodeState.RUNNING
+
+            if move_result == BehaviorTree.NodeState.FAILURE:
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    'Failed to return to the recorded torch drop point; continuing local torch search.',
+                    PySystem.Console.MessageType.Warning,
+                )
+                return_to_drop_tree = None
+                _last_torch_drop_position = None
+                return BehaviorTree.NodeState.RUNNING
+
+            return_to_drop_tree = None
+            pickup_tree = _create_pickup_tree()
+            pickup_tree.blackboard = node.blackboard
+            retry_at = 0.0
             return BehaviorTree.NodeState.RUNNING
+
+        if ground_torch == 0:
+            return BehaviorTree.NodeState.RUNNING
+
+        return_to_drop_tree = None
 
         if now < retry_at:
             return BehaviorTree.NodeState.RUNNING
@@ -2953,6 +3020,7 @@ def PickupTorch() -> BehaviorTree:
 
         if pickup_result == BehaviorTree.NodeState.SUCCESS and _is_holding_bundle():
             _shrine_recovery_torch_skip_active = False
+            _last_torch_drop_position = None
             _reset_state()
             return BehaviorTree.NodeState.SUCCESS
 
@@ -4075,6 +4143,9 @@ def Level2_BrazierRoute2() -> BehaviorTree:
         return BT.Sequence(
             name='Level 2 Brazier Route 2 - Restart Safe',
             children=[
+                # This mechanic cannot start without the physical torch. Unlike
+                # normal shrine-retrace points, do not allow the 5s skip here.
+                PickupTorch(allow_shrine_skip=False),
                 BrazierSequence('Level 2 Brazier Route 2', L2_BRAZIER_PART2),
                 _mark_restart_safe_mechanic_node('level2_brazier_route_2'),
                 DiscardTorch(log=True),
