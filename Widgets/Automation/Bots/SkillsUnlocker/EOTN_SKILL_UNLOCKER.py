@@ -2761,18 +2761,18 @@ def _select_pieces(
 
                 # Select the three Polymock pieces one by one.
                 BT.SendDialog(match_piece_dialogs[0], log=BT_FLOW_LOGS),
-                BT.Wait(1_000),
+                BT.Wait(500),
                 BT.SendDialog(match_piece_dialogs[1], log=BT_FLOW_LOGS),
-                BT.Wait(1_000),
+                BT.Wait(500),
                 BT.SendDialog(match_piece_dialogs[2], log=BT_FLOW_LOGS),
-                BT.Wait(1_000),
+                BT.Wait(500),
 
                 # Choose the piece that will actually be used for round 1.
                 BT.SendDialog(first_round_piece_dialog, log=BT_FLOW_LOGS),
 
                 # Important: give the selected active Polymock time to load
                 # BEFORE sending the final 0x87 start dialog.
-                BT.Wait(5_000),
+                BT.Wait(500),
 
                 # Hoff/Wokk quirk observed in live testing: retarget Wokk before
                 # sending the final 0x87 launch dialog.
