@@ -4316,7 +4316,7 @@ def _steps_unlock_ebon_escape() -> list[PlannerStep]:
     ))
     steps.append((
         'Ebon Escape - 007 Wait For Return To Eye',
-        lambda: BT.WaitForMapToChange(
+        lambda: BT.WaitForMapLoad(
             map_name='Eye of the North outpost',
             timeout_ms=MAP_TIMEOUT_MS,
         ),
