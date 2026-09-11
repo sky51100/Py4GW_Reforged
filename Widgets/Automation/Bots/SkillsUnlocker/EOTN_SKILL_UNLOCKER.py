@@ -3129,6 +3129,8 @@ def _steps_late_opponent(quest_id: int) -> list[PlannerStep]:
                 log=BT_FLOW_LOGS,
             ),
         ),
+        (f"{label} - 008 Close Reward Window",
+         lambda: BT.CancelSkillRewardWindow())
     ]
 
 
@@ -3749,6 +3751,77 @@ def _steps_unlock_ebon_battle_standard_of_honor() -> list[PlannerStep]:
     steps.append(('Ebon Battle Standard of Honor - 015 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=649, timeout_ms=MAP_TIMEOUT_MS)))
     steps.append(('Ebon Battle Standard of Honor - 016 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-21141.81, 12378.68), 0x836007, log=True)))
     steps.append(('Ebon Battle Standard of Honor - 017 Cancel Skill Reward Window', lambda: BT.CancelSkillRewardWindow()))
+    return steps
+
+
+def _steps_unlock_ebon_escape() -> list[PlannerStep]:
+    steps: list[PlannerStep] = []
+    steps.append((
+        'Ebon Escape - 001 Travel Eye of the North',
+        lambda: BT.Travel(
+            target_map_name='Eye of the North outpost',
+            log=True,
+        ),
+    ))
+    steps.append((
+        'Ebon Escape - 002 Accept Quest',
+        lambda: BT.MoveAndDialog(
+            Vec2f(-1856.00, 3073.00),
+            0x836901,
+            log=True,
+        ),
+    ))
+    steps.append((
+        'Ebon Escape - 003 Enter Mission',
+        lambda: BT.SendDialog(
+            0x85,
+            log=True,
+        ),
+    ))
+    steps.append((
+        'Ebon Escape - 004 Wait For Mission Map',
+        lambda: BT.WaitForMapToChange(
+            map_id=695,
+            timeout_ms=MAP_TIMEOUT_MS,
+        ),
+    ))
+    steps.append((
+        'Ebon Escape - 005 Move To Defense Point',
+        lambda: BT.Move(
+            Vec2f(2070.34, 81.76),
+            log=False,
+        ),
+    ))
+    steps.append((
+        'Ebon Escape - 006 Hold And Clear Area',
+        lambda: BT.WaitForClearEnemiesInArea(
+            2070.34,
+            81.76,
+            stable_clear_ms=180_000,
+            keep_player_near_center=True,
+            radius=Range.Spirit.value,
+            log=True,
+        ),
+    ))
+    steps.append((
+        'Ebon Escape - 007 Wait For Return To Eye',
+        lambda: BT.WaitForMapToChange(
+            map_name='Eye of the North outpost',
+            timeout_ms=MAP_TIMEOUT_MS,
+        ),
+    ))
+    steps.append((
+        'Ebon Escape - 008 Claim Reward',
+        lambda: BT.MoveAndDialog(
+            Vec2f(-1856.00, 3073.00),
+            0x836907,
+            log=True,
+        ),
+    ))
+    steps.append((
+        'Ebon Escape - 009 Close Reward Window',
+        lambda: BT.CancelSkillRewardWindow(),
+    ))
     return steps
 
 
@@ -4645,6 +4718,7 @@ ROUTE_BUILDERS: dict[str, Callable[[], list[PlannerStep]]] = {
     'summon_mursaat': _steps_unlock_summon_mursaat,
     'deft_strike': _steps_unlock_deft_strike,
     'ebon_battle_standard_of_honor': _steps_unlock_ebon_battle_standard_of_honor,
+    'ebon_escape': _steps_unlock_ebon_escape,
     'ebon_vanguard_assassin_support': _steps_unlock_ebon_vanguard_assassin_support,
     'winds': _steps_unlock_winds,
     'i_am_unstoppable': _steps_unlock_i_am_unstoppable,
@@ -4733,6 +4807,7 @@ SKILL_API_NAMES: dict[str, str] = {
     "summon_ice_imp": "Summon_Ice_Imp",
     "summon_mursaat": "Summon_Mursaat",
     "winds": "Winds",
+    "ebon_escape": "Ebon_Escape",
     "ebon_vanguard_assassin_support": "Ebon_Vanguard_Assassin_Support",
     "you_move_like_a_dwarf": "You_Move_Like_a_Dwarf",
     "i_am_unstoppable": "I_Am_Unstoppable",
