@@ -4305,14 +4305,7 @@ def _steps_unlock_ebon_escape() -> list[PlannerStep]:
     ))
     steps.append((
         'Ebon Escape - 006 Hold And Clear Area',
-        lambda: BT.WaitForClearEnemiesInArea(
-            2070.34,
-            81.76,
-            stable_clear_ms=180_000,
-            keep_player_near_center=True,
-            radius=Range.Spirit.value,
-            log=True,
-        ),
+        lambda: BT.Wait(180_000),
     ))
     steps.append((
         'Ebon Escape - 007 Wait For Return To Eye',
