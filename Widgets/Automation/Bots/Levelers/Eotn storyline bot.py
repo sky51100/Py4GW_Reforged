@@ -1,24 +1,27 @@
 from __future__ import annotations
 
+import os
+import time
 from collections.abc import Callable, Sequence
 
 import PySkillbar
-from Py4GWCoreLib.FrameTree import Frame
 import PySystem
-
 from Py4GWCoreLib import (
+    Agent,
     ConsoleLog,
     GLOBAL_CACHE,
     HeroType,
     Map,
     Player,
+    Utils,
 )
-import os
-import time
-import PySystem
+from Py4GWCoreLib.AgentArray import AgentArray
 from Py4GWCoreLib.BottingTree import BottingTree
-from Py4GWCoreLib.enums_src.GameData_enums import Range
+from Py4GWCoreLib.Context import GWContext
+from Py4GWCoreLib.enums_src.GameData_enums import Attribute, Profession, Range
+from Py4GWCoreLib.enums_src.Model_enums import ModelID
 from Py4GWCoreLib.enums_src.Multiboxing_enums import SharedCommandType
+from Py4GWCoreLib.FrameTree import Frame
 from Py4GWCoreLib.native_src.internals.types import Vec2f
 from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
 from Py4GWCoreLib.routines_src.BehaviourTrees import BT as RoutinesBT
@@ -26,13 +29,6 @@ from Py4GWCoreLib.routines_src.behaviourtrees_src.constants.lists import (
     CONSUMABLE_UPKEEPS,
 )
 from Sources.ApoSource.ApoBottingLib import wrappers as BT
-from Py4GWCoreLib import Agent, ConsoleLog, GLOBAL_CACHE, Player, Utils
-from Py4GWCoreLib.AgentArray import AgentArray
-from Py4GWCoreLib.Context import GWContext
-from Py4GWCoreLib.enums_src.GameData_enums import Attribute, Profession
-from Py4GWCoreLib.enums_src.Model_enums import ModelID
-
-
 
 
 
@@ -271,6 +267,9 @@ def _prepare_standard_party2() -> BehaviorTree:
         ],
     )
 
+# Blood Washes Blood - stable IDs confirmed by probes.
+EGIL_MODEL_ID = 6397
+BEAR_SPIRIT_MODEL_ID = 6461
 BLOOD_WASHES_BLOOD_BEAR_FORM_EFFECT_ID = 228
 BLOOD_WASHES_BLOOD_URSAN_FORCE_SKILL_ID = 2396
 
@@ -283,21 +282,26 @@ def _maintain_blood_washes_blood_bear_form() -> BehaviorTree:
       - Otherwise do nothing and let HeroAI use the normal build.
 
     Bear skillbar:
-      - While bear form effect 228 is active, use mission Ursan Force (2396)
-        whenever it is present/ready and its own effect is not already active.
+      - Detect the Blood Washes Blood bear bar from mission Ursan Force (2396)
+        being present specifically in slot 4.
+      - Use mission Ursan Force whenever it is ready and its own effect is not
+        already active.
       - Never cast an arbitrary normal-build slot 4.
     """
 
     def _has_bear_form() -> BehaviorTree.NodeState:
-        player_id = int(Player.GetAgentID() or 0)
-        if player_id <= 0:
-            return BehaviorTree.NodeState.FAILURE
+        # The mission bear form replaces the normal bar and puts the
+        # Blood Washes Blood version of Ursan Force (2396) in slot 4.
+        # Detect the temporary bar directly instead of passing the probed
+        # effect id 228 to Effects.HasEffect(), which expects a skill id.
+        ursan_force_slot = int(
+            GLOBAL_CACHE.SkillBar.GetSlotBySkillID(
+                BLOOD_WASHES_BLOOD_URSAN_FORCE_SKILL_ID
+            ) or 0
+        )
         return (
             BehaviorTree.NodeState.SUCCESS
-            if GLOBAL_CACHE.Effects.HasEffect(
-                player_id,
-                BLOOD_WASHES_BLOOD_BEAR_FORM_EFFECT_ID,
-            )
+            if ursan_force_slot == 4
             else BehaviorTree.NodeState.FAILURE
         )
 
@@ -330,7 +334,7 @@ def _maintain_blood_washes_blood_bear_form() -> BehaviorTree:
                 BLOOD_WASHES_BLOOD_URSAN_FORCE_SKILL_ID
             ) or 0
         )
-        if not 1 <= slot <= 8:
+        if slot != 4:
             return BehaviorTree.NodeState.FAILURE
 
         return (
@@ -428,7 +432,6 @@ def _select_and_equip_reward_skill(slot: int = 8) -> BehaviorTree:
             )
             return BehaviorTree.NodeState.SUCCESS
 
-
         skill_frame.mouse_action(5)
 
         return BehaviorTree.NodeState.SUCCESS
@@ -466,6 +469,8 @@ def _select_and_equip_reward_skill(slot: int = 8) -> BehaviorTree:
             ),
         ],
     )
+
+
 def _pixel_stack() -> BehaviorTree:
     """Request distant multibox party members to stack on the leader."""
 
@@ -579,8 +584,8 @@ class _TickSidecarWhileMainRunningNode(BehaviorTree.Node):
 
         sidecar_state = self.sidecar.tick()
         if sidecar_state != BehaviorTree.NodeState.RUNNING:
-            # _use_bear_skill_4() is a one-shot selector. Reset it after each
-            # completed attempt so it is tried again on the next Vanquish tick.
+            # The bear-form maintenance selector is one-shot. Reset it after
+            # each completed attempt so it can run again on the next main tick.
             self.sidecar.reset()
 
         return BehaviorTree.NodeState.RUNNING
@@ -633,6 +638,105 @@ def _planner_vanquish_point_steps(
         result.append((step_name, _factory))
 
     return result
+
+
+class _RetryMoveDirectUntilReachedNode(BehaviorTree.Node):
+    """Probe a passage directly until the player is physically on the far side.
+
+    Blood Washes Blood barricades must not use normal pathfinding for the
+    far-side verification point: while the barricade is still present, the
+    pathfinder can choose an alternate route. MoveDirect keeps the supplied
+    verification point as the direct movement target instead.
+    """
+
+    def __init__(
+        self,
+        destination: Vec2f,
+        *,
+        name: str,
+        tolerance: float = 180.0,
+        retry_interval_ms: int = 6_000,
+    ) -> None:
+        super().__init__(
+            name=name,
+            node_type="RetryMoveDirectUntilReached",
+            node_category="movement",
+        )
+        self.destination = destination
+        self.tolerance = max(1.0, float(tolerance))
+        self.retry_interval_ms = max(500, int(retry_interval_ms))
+        self.move = self._coerce_node(
+            BT.MoveDirect(
+                destination,
+                pause_on_combat=False,
+                log=True,
+            )
+        )
+        self.attempt_started_at = 0.0
+
+    def get_children(self) -> list[BehaviorTree.Node]:
+        return [self.move]
+
+    def reset(self) -> None:
+        super().reset()
+        self.move.reset()
+        self.attempt_started_at = 0.0
+
+    def _destination_reached(self) -> bool:
+        x, y = Player.GetXY()
+        dx = float(x) - float(self.destination.x)
+        dy = float(y) - float(self.destination.y)
+        return dx * dx + dy * dy <= self.tolerance * self.tolerance
+
+    def _restart_move(self, now: float) -> None:
+        self.move.reset()
+        self.attempt_started_at = now
+
+    def _tick_impl(self) -> BehaviorTree.NodeState:
+        if self._destination_reached():
+            return BehaviorTree.NodeState.SUCCESS
+
+        if self.blackboard is not None:
+            self.move.blackboard = self.blackboard
+
+        now = time.monotonic()
+        if self.attempt_started_at <= 0.0:
+            self.attempt_started_at = now
+        elif (now - self.attempt_started_at) * 1000.0 >= self.retry_interval_ms:
+            ConsoleLog(
+                MODULE_NAME,
+                f"{self.name}: passage not confirmed; retrying direct verification.",
+                log=True,
+            )
+            self._restart_move(now)
+
+        move_state = self.move.tick()
+
+        if self._destination_reached():
+            return BehaviorTree.NodeState.SUCCESS
+
+        if move_state != BehaviorTree.NodeState.RUNNING:
+            self._restart_move(now)
+
+        return BehaviorTree.NodeState.RUNNING
+
+
+def _verify_blood_washes_blood_barricade_passage(
+    name: str,
+    verify_point: Vec2f,
+) -> BehaviorTree:
+    """Use the far-side coordinate only to prove that the barricade is open."""
+    return BehaviorTree(
+        _TickSidecarWhileMainRunningNode(
+            main=_RetryMoveDirectUntilReachedNode(
+                verify_point,
+                name=f"{name} - Verify Player Crossed Barricade",
+            ),
+            sidecar=_maintain_blood_washes_blood_bear_form(),
+            name=f"{name} - Verify Passage With Bear Form",
+        )
+    )
+
 
 # ---------------------------------------------------------------------------
 # Initialization and optional Hall of Monuments unlock
@@ -1815,42 +1919,212 @@ def _steps_CompleteCurseOfTheNornbear() -> list[PlannerStep]:
 
 def _steps_BloodWashesBlood() -> list[PlannerStep]:
     return [
-        _planner_map_prep_step('Blood Washes Blood' + ' - 00 Map Preparation', 'Sifhalla'),
-        ('Blood Washes Blood - 01 Aggressive', lambda: _aggressive()),
-        *_planner_vanquish_point_steps('Blood Washes Blood - 02 Vanquish Route 01', [(16163.0, 22852.0), (16717.0, 22789.0)]),
-        ('Blood Washes Blood - 03 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name='Jaga Moraine')),
-        *_planner_vanquish_point_steps('Blood Washes Blood - 04 Vanquish Route 02', [(-11949.0, -23710.0), (-8929.0, -21112.0), (-6111.0, -14675.0), (-5757.0, -13735.0), (-4855.0, -10881.0), (-3702.0, -8096.0), (-2962.0, -7412.0), (-1397.0, -6161.0), (1055.0, -3190.0), (2170.0, -397.0), (2659.0, 484.0), (3151.0, 1355.0), (3726.0, 4064.0), (4621.0, 5918.0)]),
-        ('Blood Washes Blood - 05 Pacifist', lambda: _pacifist()),
-        ('Blood Washes Blood - 06 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(4621.0, 5918.0), 8593409)),
-        ('Blood Washes Blood - 07 Aggressive', lambda: _aggressive()),
-        *_planner_vanquish_point_steps('Blood Washes Blood - 08 Vanquish Route 03', [(3014.0, 3308.0), (-567.0, -1090.0), (5147.0, -5920.0), (10490.0, -9516.0), (11885.0, -16663.0), (9771.0, -21332.0)]),
-        ('Blood Washes Blood - 09 Wait', lambda: BT.Wait(80000)),
-        ('Blood Washes Blood - 10 Move', lambda: BT.Move(Vec2f(9221.0, -21462.0))),
-        ('Blood Washes Blood - 11 Pacifist', lambda: _pacifist()),
-        ('Blood Washes Blood - 12 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(9504.0, -21390.0), 8593415)),
-        ('Blood Washes Blood - 13 Move And Dialog', lambda: BT.Move(Vec2f(9285,-20889))),
-        ('Blood Washes Blood - 13bis Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(9688.0, -21012.0), 132)),
-        ('Blood Washes Blood - 14 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(16045.0, -20642.0), target_map_name='Blood Washes Blood')),
-        ('Blood Washes Blood - 15 Aggressive', lambda: _aggressive()),
-        *_planner_vanquish_point_steps('Blood Washes Blood - 16 Vanquish Route 04', [(419.0, -3059.0), (-2083.0, 1061.0), (1742.0, 4963.0), (228.0, 10003.0), (3266.0, 12358.0), (3299.0, 13489.0), (365.0, 13684.0), (2752.0, 13410.0), (2258.0, 14533.0), (1446.0, 15008.0), (127.0, 14203.0), (13.0, 13430.0), (795.0, 13120.0), (1519.0, 13251.0), (940.0, 14144.0)]),
-        ('Blood Washes Blood - 17 Pacifist', lambda: _pacifist()),
-        ('Blood Washes Blood - 18 Move And Interact', lambda: BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True)),
-        ('Blood Washes Blood - 19 Move And Interact', lambda: BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True)),
-        ('Blood Washes Blood - 20 Select And Equip Reward Skill', lambda: _select_and_equip_reward_skill(8)),
-        ('Blood Washes Blood - 21 Aggressive', lambda: _aggressive()),
+        _planner_map_prep_step(
+            "Blood Washes Blood - 00 Map Preparation",
+            "Sifhalla",
+        ),
+        ("Blood Washes Blood - 01 Aggressive", lambda: _aggressive()),
         *_planner_vanquish_point_steps(
-            'Blood Washes Blood - 22 Vanquish Route 05',
-            [(2360.0, 13448.0), (9167.0, 11874.0), (11309.0, 11588.0), (11886.0, 10714.0), (13453.0, 8619.0), (15097.0, 5363.0)],
-            during_step_factory=_maintain_blood_washes_blood_bear_form,
+            "Blood Washes Blood - 02 Vanquish Route 01",
+            [(16163.0, 22852.0), (16717.0, 22789.0)],
+        ),
+        (
+            "Blood Washes Blood - 03 Wait For Map Load",
+            lambda: BT.WaitForMapLoad(map_name="Jaga Moraine"),
         ),
         *_planner_vanquish_point_steps(
-            'Blood Washes Blood - 23 Vanquish Route 06',
-            [(16024.0, 3473.0), (16766.0, 5052.0), (18332.0, 3893.0), (17662.0, 3049.0), (17960.0, 2005.0), (16668.0, 1509.0), (17388.0, -205.0), (15749.0, 167.0), (15724.0, -2018.0)],
+            "Blood Washes Blood - 04 Vanquish Route 02",
+            [
+                (-11949.0, -23710.0),
+                (-8929.0, -21112.0),
+                (-6111.0, -14675.0),
+                (-5757.0, -13735.0),
+                (-4855.0, -10881.0),
+                (-3702.0, -8096.0),
+                (-2962.0, -7412.0),
+                (-1397.0, -6161.0),
+                (1055.0, -3190.0),
+                (2170.0, -397.0),
+                (2659.0, 484.0),
+                (3151.0, 1355.0),
+                (3726.0, 4064.0),
+                (4621.0, 5918.0),
+            ],
+        ),
+        ("Blood Washes Blood - 05 Pacifist", lambda: _pacifist()),
+        (
+            "Blood Washes Blood - 06 Move And Dialog",
+            lambda: BT.MoveAndDialog(Vec2f(4621.0, 5918.0), 8593409),
+        ),
+        ("Blood Washes Blood - 07 Aggressive", lambda: _aggressive()),
+        *_planner_vanquish_point_steps(
+            "Blood Washes Blood - 08 Vanquish Route 03",
+            [
+                (3014.0, 3308.0),
+                (-567.0, -1090.0),
+                (5147.0, -5920.0),
+                (10490.0, -9516.0),
+                (11885.0, -16663.0),
+                (9771.0, -21332.0),
+            ],
+        ),
+        ("Blood Washes Blood - 09 Wait", lambda: BT.Wait(80000)),
+        (
+            "Blood Washes Blood - 10 Move To Egil If Present",
+            lambda: _move_to_egil_if_present(),
+        ),
+        ("Blood Washes Blood - 11 Pacifist", lambda: _pacifist()),
+        (
+            "Blood Washes Blood - 12 Move",
+            lambda: BT.Move(Vec2f(9285, -20889)),
+        ),
+        (
+            "Blood Washes Blood - 13 Bear Spirit Dialog",
+            lambda: BT.MoveAndDialogByModelID(
+                BEAR_SPIRIT_MODEL_ID,
+                8593415,
+                log=True,
+            ),
+        ),
+        (
+            "Blood Washes Blood - 14 Bear Spirit Send Dialog",
+            lambda: BT.TargetAgentByModelIDAndSendDialog(
+                BEAR_SPIRIT_MODEL_ID,
+                132,
+            ),
+        ),
+        (
+            "Blood Washes Blood - 15 Move And Exit Map",
+            lambda: BT.MoveAndExitMap(
+                Vec2f(16045.0, -20642.0),
+                target_map_name="Blood Washes Blood",
+            ),
+        ),
+        ("Blood Washes Blood - 16 Aggressive", lambda: _aggressive()),
+        *_planner_vanquish_point_steps(
+            "Blood Washes Blood - 17 Vanquish Route 04",
+            [
+                (419.0, -3059.0),
+                (-2083.0, 1061.0),
+                (1742.0, 4963.0),
+                (228.0, 10003.0),
+                (3266.0, 12358.0),
+                (3299.0, 13489.0),
+                (365.0, 13684.0),
+            ],
+        ),
+        ("Blood Washes Blood - 18 Pacifist", lambda: _pacifist()),
+        (
+            "Blood Washes Blood - 19 Move And Interact",
+            lambda: BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True),
+        ),
+        (
+            "Blood Washes Blood - 20 Move And Interact",
+            lambda: BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True),
+        ),
+        (
+            "Blood Washes Blood - 21 Select And Equip Reward Skill",
+            lambda: _select_and_equip_reward_skill(8),
+        ),
+        ("Blood Washes Blood - 22 Aggressive", lambda: _aggressive()),
+
+        # Original route. Barricade approach points are inserted without
+        # replacing any original waypoint. Bear-form maintenance stays active
+        # through the far-side verification of barricade 04 only.
+        *_planner_vanquish_point_steps(
+            "Blood Washes Blood - 23 Route To Barricade 01",
+            [
+                (7375, 12256),                 # Original path point 01
+                (8137.44, 12125.30),           # Barricade 01 - closest approach
+            ],
             during_step_factory=_maintain_blood_washes_blood_bear_form,
         ),
-        ('Blood Washes Blood - 24 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
-        ('Blood Washes Blood - 25 Wait For Map Load', lambda: BT.WaitForMapLoad(map_name="Gunnar's Hold")),
+        (
+            "Blood Washes Blood - 24 Verify Barricade 01 Passage",
+            lambda: _verify_blood_washes_blood_barricade_passage(
+                "Blood Washes Blood - Barricade 01",
+                Vec2f(8514.08, 12101.35),      # Barricade 01 - far side
+            ),
+        ),
+        *_planner_vanquish_point_steps(
+            "Blood Washes Blood - 25 Route To Barricade 02",
+            [
+                (10984, 11918),                # Original path point 02
+                (11337.05, 11403.98),          # Barricade 02 - closest approach
+            ],
+            during_step_factory=_maintain_blood_washes_blood_bear_form,
+        ),
+        (
+            "Blood Washes Blood - 26 Verify Barricade 02 Passage",
+            lambda: _verify_blood_washes_blood_barricade_passage(
+                "Blood Washes Blood - Barricade 02",
+                Vec2f(11709.23, 10948.48),     # Barricade 02 - far side
+            ),
+        ),
+        *_planner_vanquish_point_steps(
+            "Blood Washes Blood - 27 Route To Barricade 03",
+            [(13038.97, 9352.95)],              # Barricade 03 - approach
+            during_step_factory=_maintain_blood_washes_blood_bear_form,
+        ),
+        (
+            "Blood Washes Blood - 28 Verify Barricade 03 Passage",
+            lambda: _verify_blood_washes_blood_barricade_passage(
+                "Blood Washes Blood - Barricade 03",
+                Vec2f(13175.19, 8990.44),      # Barricade 03 - far side
+            ),
+        ),
+        *_planner_vanquish_point_steps(
+            "Blood Washes Blood - 29 Route To Barricade 04",
+            [
+                (13502, 8591),                 # Original path point 03
+                (16885, 7971),                 # Original path point 04
+                (15198, 6897),                 # Original path point 05
+                (14874, 3441),                 # Original path point 06
+                (15379.00, 3398.32),           # Barricade 04 - approach
+            ],
+            during_step_factory=_maintain_blood_washes_blood_bear_form,
+        ),
+        (
+            "Blood Washes Blood - 30 Verify Barricade 04 Passage",
+            lambda: _verify_blood_washes_blood_barricade_passage(
+                "Blood Washes Blood - Barricade 04",
+                Vec2f(15729.87, 3342.82),      # Barricade 04 - far side
+            ),
+        ),
+
+        # Barricade 04 crossed: no more manual bear-form / skill-4 maintenance.
+        *_planner_vanquish_point_steps(
+            "Blood Washes Blood - 31 Vanquish After Last Barricade",
+            [
+                (16960, 3216),                 # Original path point 07
+                (16734, 5066),                 # Original path point 08
+                (18257, 3930),                 # Original path point 09
+                (17938, 2201),                 # Original path point 10
+                (15908, -280),                 # Original path point 11
+                (11438, 7209),                 # Original path point 12
+            ],
+        ),
+        (
+            "Blood Washes Blood - 32 Wait For Map Load",
+            lambda: BT.WaitForMapLoad(map_name="Gunnar's Hold"),
+        ),
     ]
+
+
+def _move_to_egil_if_present() -> BehaviorTree:
+    return BT.Selector(
+        name="Blood Washes Blood - Move To Egil If Present",
+        children=[
+            BT.MoveToModelID(
+                EGIL_MODEL_ID,
+                pause_on_combat=False,
+                log=True,
+            ),
+            BT.Succeeder(
+                name="Egil Absent - Previous Phase Already Completed"
+            ),
+        ],
+    )
 
 
 def _steps_TravelToOlafstead() -> list[PlannerStep]:
@@ -2065,25 +2339,16 @@ def _steps_FindingGadd() -> list[PlannerStep]:
         ('Finding Gadd - 01 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-8295.0, -23572.0), 8598276)),
         ('Finding Gadd - 02 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(16230.20, 16030.80), 8596481)),
         ('Finding Gadd - 03 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(16517.00, 16089.00), 8598529)),
-        ('Finding Gadd - 02 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-9690.0, -19524.0), target_map_id=558)),
-        *_planner_vanquish_point_steps('Finding Gadd - 03 Vanquish Route 02', [(-4466.15, -21025.91), (-6967.77, -19810.06), (11669.0, -23829.0)]),
-        ('Finding Gadd - 04 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(11881.0, -23802.0), 8598276)),
-        *_planner_vanquish_point_steps('Finding Gadd - 05 Vanquish Route 03', [(8017.92, -20124.24), (11184.85, -14188.88)]),
-        ('Finding Gadd - 06 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
-        ('Finding Gadd - 07 Wait', lambda: BT.Wait(5000)),
-        ('Finding Gadd - 08 Move', lambda: BT.Move(Vec2f(-5740.47, -13723.29))),
-        ('Finding Gadd - 09 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
-        ('Finding Gadd - 10 Wait', lambda: BT.Wait(5000)),
-        ('Finding Gadd - 11 Move', lambda: BT.Move(Vec2f(2417.11, -25444.55), avoid_obstacles=False)),
-        ('Finding Gadd - 12 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
-        ('Finding Gadd - 13 Wait', lambda: BT.Wait(5000)),
-        ('Finding Gadd - 14 Move', lambda: BT.Move(Vec2f(11566,-23851))),
-        ('Finding Gadd - 15 Wait', lambda: BT.Wait(20000)),
-
-        ('Finding Gadd - 17 Dialog', lambda: BT.MoveAndDialog(Vec2f(11812.06, -23920.79), 8598276)),
-        ('Finding Gadd - 18 Wait', lambda: BT.Wait(10000)),
-        ('Finding Gadd - 19 Move', lambda: BT.MoveAndDialog(Vec2f(11795.0, -24125.0), 8598279)),
+        ('Finding Gadd - 04 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-9690.0, -19524.0), target_map_id=558)),
+        *_planner_vanquish_point_steps('Finding Gadd - 05 Vanquish Route', [(-4466.15, -21025.91), (-6967.77, -19810.06), (11858.20, -23099.82)]),
+        ('Finding Gadd - 06 Move And Dialog', lambda: BT.MoveAndDialogByModelID(5999, 0x833304, log=True)),
+        *_planner_vanquish_point_steps('Finding Gadd - 07 Vanquish Route', [(8017.92, -20124.24), (11184.85, -14188.88),(-5740.47, -13723.29),(2417.11, -25444.55),(11566,-23851)]),
+        ('Finding Gadd - 9 Wait', lambda: BT.Wait(10000)),
+        ('Finding Gadd - 8 Dialog', lambda: BT.MoveAndDialogByModelID(6772, 8598276, log=True)),
+        ('Finding Gadd - 9 Wait', lambda: BT.Wait(10000)),
+        ('Finding Gadd - 10 Move', lambda: BT.MoveAndDialog(Vec2f(11795.0, -24125.0), 8598279)),
     ]
+
 
 
 def _steps_FindingTheBloodstone() -> list[PlannerStep]:
@@ -2109,6 +2374,8 @@ def _steps_FindingTheBloodstone() -> list[PlannerStep]:
 def _steps_LabSpace() -> list[PlannerStep]:
     return [
         ('LabSpace - Unlock Rata Sum 0', lambda: BT.Travel(target_map_id=624)),
+        ('LabSpace - Take next story quests 1', lambda: BT.MoveAndDialog(Vec2f(16517.00, 16089.00),0x833401)),
+        ('LabSpace - Take next story quests 2', lambda: BT.MoveAndDialog(Vec2f(16202.00, 16092.00),0x832C01)),
         ("LabSpace - Prepare Standard Party Full", lambda: _prepare_standard_party_full()),
         ('LabSpace - Unlock Rata Sum 1', lambda: BT.MoveAndExitMap(Vec2f(15360,12015), target_map_id=485)),
         *_planner_vanquish_point_steps('LabSpace - Unlock Rata Sum 2',[(13856,11004),(6067,-95),(-4525,-4292),(-5923,-7830),(-2872,-11614),(-6080,-13317),(-12623,-14600),(-17826,-14505),]),
@@ -2238,7 +2505,7 @@ def _steps_ALittleHelp() -> list[PlannerStep]:
 ('ALittleHelp 4', lambda: BT.MoveAndExitMap(Vec2f(-8618,-14375), target_map_id=572)),
 *_planner_vanquish_point_steps('ALittleHelp 4',[(-5413,15875),(-15672,11827),(-10182,-115),(-16273,-5484),(-20039,-10133),(-21923,-9612),(-24115,-10567)]),
 ('ALittleHelp 6', lambda: BT.WaitUntilOutOfCombat()),
-('ALittleHelp 7', lambda: BT.MoveAndDialog(Vec2f(-24216.00, -10563.00), 8598532)),
+('ALittleHelp 7', lambda: BT.MoveAndDialogByModelID(6789, 8598532)),
 ('ALittleHelp 8', lambda: BT.Travel(target_map_name="Rata Sum")),
 ('ALittleHelp 9', lambda: BT.MoveAndDialog(Vec2f(16051.00, 15183.00), 8598535)),
 ('ALittleHelp 10', lambda: BT.SendDialog(132)),
@@ -2759,7 +3026,7 @@ def _heart_cyndr_encounter() -> BehaviorTree:
 def _steps_HeartofTheShiverspeak() -> list[PlannerStep]:
     return [
         *_planner_vanquish_point_steps('HeartofTheShiverspeak - 01', [(16656,10285),(14959,6248),(11603,7924),(11184,6397),(11129,2735),(7633,832),], clear_area_radius=Range.Earshot.value),
-        ('HeartofTheShiverspeak - 02 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(7361.00, 591.00), 0x833104)),
+        ('HeartofTheShiverspeak - 02 Move And Dialog', lambda: BT.MoveAndDialogByModelID(6271, 0x833104)),
         *_planner_vanquish_point_steps('HeartofTheShiverspeak - 03 Kill', [(10241,-1296),(11520,-2522),]),
         (
             'HeartofTheShiverspeak - 04 Destroy Wall 1',
@@ -2799,7 +3066,7 @@ def _steps_HeartofTheShiverspeak() -> list[PlannerStep]:
                 verify_pos=Vec2f(-5499,-11675),
             ),
         ),
-        ('HeartofTheShiverspeak - 14 Move to Cyndr Room', lambda: BT.Move([(-5499,-11675),(-6779,-14780)], pause_on_combat=False)),
+        ('HeartofTheShiverspeak - 14 Move to Cyndr Room', lambda: BT.Move([(-5499,-11675),(-5739.00, -17127.00)], pause_on_combat=False)),
         ('HeartofTheShiverspeak - 15 Wait For Cyndr', lambda: _heart_wait_for_cyndr()),
         ('HeartofTheShiverspeak - 16 Defeat Cyndr', lambda: _heart_cyndr_encounter()),
         ('HeartofTheShiverspeak - 17 Exit Level 3', lambda: BT.MoveAndInteract(Vec2f(-5739.00, -17127.00))),
