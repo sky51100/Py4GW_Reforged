@@ -24,6 +24,7 @@ from Py4GWCoreLib.enums_src.Multiboxing_enums import SharedCommandType
 from Py4GWCoreLib.FrameTree import Frame
 from Py4GWCoreLib.native_src.internals.types import Vec2f
 from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
+from Py4GWCoreLib.Skill import Skill
 from Py4GWCoreLib.routines_src.BehaviourTrees import BT as RoutinesBT
 from Py4GWCoreLib.routines_src.behaviourtrees_src.constants.lists import (
     CONSUMABLE_UPKEEPS,
@@ -53,7 +54,7 @@ initialized = False
 # Generic BT helpers
 # ---------------------------------------------------------------------------
 
-def _aggressive(name: str = "Configure Aggressive") -> BehaviorTree:
+def _aggressive() -> BehaviorTree:
     return ensure_botting_tree().Config.Aggressive(
         multi_account=True,
         account_isolation=True,
@@ -64,7 +65,7 @@ def _aggressive(name: str = "Configure Aggressive") -> BehaviorTree:
     )
 
 
-def _pacifist(name: str = "Configure Pacifist") -> BehaviorTree:
+def _pacifist() -> BehaviorTree:
     return ensure_botting_tree().Config.Pacifist(
         multi_account=True,
         account_isolation=True,
@@ -843,7 +844,6 @@ NORN_TOURNAMENT_OPTIONAL_ELITE_SKILL = "Signet_of_Spirits"
 RITUALIST_ELITE_TOME_MODEL_ID = int(ModelID.Ritualist_Elite_Tome.value)
 GOLD_ZAISHEN_COIN_MODEL_ID = int(ModelID.Gold_Zaishen_Coin.value)
 
-from Py4GWCoreLib.Skill import Skill
 Painful_Bond_ID = Skill.GetID("Painful_Bond")
 
 PRE_XANDRA_BUILD_BLACKBOARD_KEY = "eotn_pre_xandra_player_build"
@@ -1816,21 +1816,11 @@ def _is_kaineng_center_unlocked(log: bool = True) -> BehaviorTree:
     )
 
 
-def _steps_PrepareXandraTournament() -> list[PlannerStep]:
-    return [
-        ('PrepareXandraTournament - 01 Prepare Norn Tournament Skills', lambda: UnlockNornTournamentSkills(log=True)),
-        ('PrepareXandraTournament - 02 Travel', lambda: BT.Travel(target_map_name="Gunnar's Hold", log=True)),
-        ('PrepareXandraTournament - 03 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(17763.0, -11467.0), 8604161)),
-    ]
-
-
-
-
 def CompleteOptionalXandraTournament(
     return_outpost_name: str = "Gunnar's Hold",
     log: bool = True,
 ) -> BehaviorTree:
-    """Run every Xandra-tournament preparation step only with Kaineng unlocked."""
+    """Run the complete optional Xandra tournament only when Kaineng is unlocked."""
 
     return BT.Selector(
         name="Optional Xandra Tournament",
@@ -1839,7 +1829,19 @@ def CompleteOptionalXandraTournament(
                 name="Run Xandra Tournament With Kaineng",
                 children=[
                     _is_kaineng_center_unlocked(log=log),
-                    
+                    UnlockNornTournamentSkills(log=log),
+                    BT.Travel(
+                        target_map_name=return_outpost_name,
+                        log=log,
+                    ),
+                    BT.MoveAndDialog(
+                        Vec2f(17763.0, -11467.0),
+                        8604161,
+                    ),
+                    Fight_Sequence(
+                        return_outpost_name=return_outpost_name,
+                        log=log,
+                    ),
                 ],
             ),
             BT.Sequence(
@@ -1894,7 +1896,7 @@ def _steps_CompleteTrackingTheNornbear() -> list[PlannerStep]:
 
 def _steps_CompleteCurseOfTheNornbear() -> list[PlannerStep]:
     return [
-        _planner_map_prep_step('Curse Of The Nornbear' + ' - 00 Map Preparation', 'Sifhalla'),
+        _planner_map_prep_step('Curse Of The Nornbear - 00 Map Preparation', 'Sifhalla'),
         ('Curse Of The Nornbear - 01 Prepare Standard Party Xandra', lambda: _prepare_standard_party_xandra()),
         ('Curse Of The Nornbear - 02 Aggressive', lambda: _aggressive()),
         ('Curse Of The Nornbear - 03 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14353.0, 23905.0), 134)),
@@ -1910,10 +1912,9 @@ def _steps_CompleteCurseOfTheNornbear() -> list[PlannerStep]:
         ('Curse Of The Nornbear - 13 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=643, timeout_ms=60000)),
         ('Curse Of The Nornbear - 14 Wait', lambda: BT.Wait(2000)),
         ('Curse Of The Nornbear - 15 Move', lambda: BT.Move(Vec2f(14353.0, 23905.0))),
-        ('Curse Of The Nornbear - 16 Pacifist', lambda: _pacifist()),
-        ('Curse Of The Nornbear - 17 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14353.0, 23905.0), 8620292)),
-        ('Curse Of The Nornbear - 18 Auto Dialog', lambda: BT.SendDialog(137)),
-        ('Curse Of The Nornbear - 19 Auto Dialog', lambda: BT.SendDialog(138)),
+        ('Curse Of The Nornbear - 16 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(14353.0, 23905.0), 8620292)),
+        ('Curse Of The Nornbear - 17 Send Dialog', lambda: BT.SendDialog(137)),
+        ('Curse Of The Nornbear - 18 Send Dialog', lambda: BT.SendDialog(138)),
     ]
 
 
@@ -1951,14 +1952,12 @@ def _steps_BloodWashesBlood() -> list[PlannerStep]:
                 (4621.0, 5918.0),
             ],
         ),
-        ("Blood Washes Blood - 05 Pacifist", lambda: _pacifist()),
         (
-            "Blood Washes Blood - 06 Move And Dialog",
+            "Blood Washes Blood - 05 Move And Dialog",
             lambda: BT.MoveAndDialog(Vec2f(4621.0, 5918.0), 8593409),
         ),
-        ("Blood Washes Blood - 07 Aggressive", lambda: _aggressive()),
         *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 08 Vanquish Route 03",
+            "Blood Washes Blood - 06 Vanquish Route 03",
             [
                 (3014.0, 3308.0),
                 (-567.0, -1090.0),
@@ -1968,18 +1967,18 @@ def _steps_BloodWashesBlood() -> list[PlannerStep]:
                 (9771.0, -21332.0),
             ],
         ),
-        ("Blood Washes Blood - 09 Wait", lambda: BT.Wait(80000)),
+        ("Blood Washes Blood - 07 Wait", lambda: BT.Wait(80000)),
         (
-            "Blood Washes Blood - 10 Move To Egil If Present",
+            "Blood Washes Blood - 08 Move To Egil If Present",
             lambda: _move_to_egil_if_present(),
         ),
-        ("Blood Washes Blood - 11 Pacifist", lambda: _pacifist()),
+        ("Blood Washes Blood - 09 Pacifist", lambda: _pacifist()),
         (
-            "Blood Washes Blood - 12 Move",
+            "Blood Washes Blood - 10 Move",
             lambda: BT.Move(Vec2f(9285, -20889)),
         ),
         (
-            "Blood Washes Blood - 13 Bear Spirit Dialog",
+            "Blood Washes Blood - 11 Bear Spirit Dialog",
             lambda: BT.MoveAndDialogByModelID(
                 BEAR_SPIRIT_MODEL_ID,
                 8593415,
@@ -1987,22 +1986,22 @@ def _steps_BloodWashesBlood() -> list[PlannerStep]:
             ),
         ),
         (
-            "Blood Washes Blood - 14 Bear Spirit Send Dialog",
+            "Blood Washes Blood - 12 Bear Spirit Send Dialog",
             lambda: BT.TargetAgentByModelIDAndSendDialog(
                 BEAR_SPIRIT_MODEL_ID,
                 132,
             ),
         ),
         (
-            "Blood Washes Blood - 15 Move And Exit Map",
+            "Blood Washes Blood - 13 Move And Exit Map",
             lambda: BT.MoveAndExitMap(
                 Vec2f(16045.0, -20642.0),
                 target_map_name="Blood Washes Blood",
             ),
         ),
-        ("Blood Washes Blood - 16 Aggressive", lambda: _aggressive()),
+        ("Blood Washes Blood - 14 Aggressive", lambda: _aggressive()),
         *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 17 Vanquish Route 04",
+            "Blood Washes Blood - 15 Vanquish Route 04",
             [
                 (419.0, -3059.0),
                 (-2083.0, 1061.0),
@@ -2013,26 +2012,26 @@ def _steps_BloodWashesBlood() -> list[PlannerStep]:
                 (365.0, 13684.0),
             ],
         ),
-        ("Blood Washes Blood - 18 Pacifist", lambda: _pacifist()),
+        ("Blood Washes Blood - 16 Pacifist", lambda: _pacifist()),
         (
-            "Blood Washes Blood - 19 Move And Interact",
+            "Blood Washes Blood - 17 Move And Interact",
             lambda: BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True),
         ),
         (
-            "Blood Washes Blood - 20 Move And Interact",
+            "Blood Washes Blood - 18 Move And Interact",
             lambda: BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True),
         ),
         (
-            "Blood Washes Blood - 21 Select And Equip Reward Skill",
+            "Blood Washes Blood - 19 Select And Equip Reward Skill",
             lambda: _select_and_equip_reward_skill(8),
         ),
-        ("Blood Washes Blood - 22 Aggressive", lambda: _aggressive()),
+        ("Blood Washes Blood - 20 Aggressive", lambda: _aggressive()),
 
         # Original route. Barricade approach points are inserted without
         # replacing any original waypoint. Bear-form maintenance stays active
         # through the far-side verification of barricade 04 only.
         *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 23 Route To Barricade 01",
+            "Blood Washes Blood - 21 Route To Barricade 01",
             [
                 (7375, 12256),                 # Original path point 01
                 (8137.44, 12125.30),           # Barricade 01 - closest approach
@@ -2040,14 +2039,14 @@ def _steps_BloodWashesBlood() -> list[PlannerStep]:
             during_step_factory=_maintain_blood_washes_blood_bear_form,
         ),
         (
-            "Blood Washes Blood - 24 Verify Barricade 01 Passage",
+            "Blood Washes Blood - 22 Verify Barricade 01 Passage",
             lambda: _verify_blood_washes_blood_barricade_passage(
                 "Blood Washes Blood - Barricade 01",
                 Vec2f(8514.08, 12101.35),      # Barricade 01 - far side
             ),
         ),
         *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 25 Route To Barricade 02",
+            "Blood Washes Blood - 23 Route To Barricade 02",
             [
                 (10984, 11918),                # Original path point 02
                 (11337.05, 11403.98),          # Barricade 02 - closest approach
@@ -2055,26 +2054,26 @@ def _steps_BloodWashesBlood() -> list[PlannerStep]:
             during_step_factory=_maintain_blood_washes_blood_bear_form,
         ),
         (
-            "Blood Washes Blood - 26 Verify Barricade 02 Passage",
+            "Blood Washes Blood - 24 Verify Barricade 02 Passage",
             lambda: _verify_blood_washes_blood_barricade_passage(
                 "Blood Washes Blood - Barricade 02",
                 Vec2f(11709.23, 10948.48),     # Barricade 02 - far side
             ),
         ),
         *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 27 Route To Barricade 03",
+            "Blood Washes Blood - 25 Route To Barricade 03",
             [(13038.97, 9352.95)],              # Barricade 03 - approach
             during_step_factory=_maintain_blood_washes_blood_bear_form,
         ),
         (
-            "Blood Washes Blood - 28 Verify Barricade 03 Passage",
+            "Blood Washes Blood - 26 Verify Barricade 03 Passage",
             lambda: _verify_blood_washes_blood_barricade_passage(
                 "Blood Washes Blood - Barricade 03",
                 Vec2f(13175.19, 8990.44),      # Barricade 03 - far side
             ),
         ),
         *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 29 Route To Barricade 04",
+            "Blood Washes Blood - 27 Route To Barricade 04",
             [
                 (13502, 8591),                 # Original path point 03
                 (16885, 7971),                 # Original path point 04
@@ -2085,7 +2084,7 @@ def _steps_BloodWashesBlood() -> list[PlannerStep]:
             during_step_factory=_maintain_blood_washes_blood_bear_form,
         ),
         (
-            "Blood Washes Blood - 30 Verify Barricade 04 Passage",
+            "Blood Washes Blood - 28 Verify Barricade 04 Passage",
             lambda: _verify_blood_washes_blood_barricade_passage(
                 "Blood Washes Blood - Barricade 04",
                 Vec2f(15729.87, 3342.82),      # Barricade 04 - far side
@@ -2094,7 +2093,7 @@ def _steps_BloodWashesBlood() -> list[PlannerStep]:
 
         # Barricade 04 crossed: no more manual bear-form / skill-4 maintenance.
         *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 31 Vanquish After Last Barricade",
+            "Blood Washes Blood - 29 Vanquish After Last Barricade",
             [
                 (16960, 3216),                 # Original path point 07
                 (16734, 5066),                 # Original path point 08
@@ -2105,7 +2104,7 @@ def _steps_BloodWashesBlood() -> list[PlannerStep]:
             ],
         ),
         (
-            "Blood Washes Blood - 32 Wait For Map Load",
+            "Blood Washes Blood - 30 Wait For Map Load",
             lambda: BT.WaitForMapLoad(map_name="Gunnar's Hold"),
         ),
     ]
@@ -2142,17 +2141,16 @@ def _steps_TravelToOlafstead() -> list[PlannerStep]:
 
 def _steps_CompleteShrineOfRavenSpirit() -> list[PlannerStep]:
     return [
-        _planner_map_prep_step('Shrine Of The Raven Spirit' + ' - 00 Map Preparation', 'Olafstead'),
+        _planner_map_prep_step('Shrine Of The Raven Spirit - 00 Map Preparation', 'Olafstead'),
         ('Shrine Of The Raven Spirit - 01 Prepare Standard Party Xandra', lambda: _prepare_standard_party_xandra()),
         ('Shrine Of The Raven Spirit - 02 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(132.0, -684.0), 8596993)),
         ('Shrine Of The Raven Spirit - 03 Aggressive', lambda: _aggressive()),
         ('Shrine Of The Raven Spirit - 04 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-1392.0, 1205.0), target_map_id=553)),
         *_planner_vanquish_point_steps('Shrine Of The Raven Spirit - 05 Vanquish Route 01', [(-2252.0, 831.0), (-2887.0, -2894.0), (-3211.0, -3843.0), (-3940.0, -3155.0), (-4941.0, 728.0), (-5310.0, 3693.0), (-8984.0, 4861.0), (-12866.0, 5695.0), (-13612.0, 6369.0), (-14355.0, 7040.0), (-14909.0, 7880.0), (-15520.0, 8680.0)]),
-        ('Shrine Of The Raven Spirit - 06 Target Olaf And Dialog', lambda: _pacifist()),
         ('Shrine Of The Raven Spirit - 06 Target Olaf And Dialog', lambda: BT.TargetAgentByModelIDAndSendDialog(OLAF_OLAFSON_MODEL_ID, 133, log=True)),
         ('Shrine Of The Raven Spirit - 07 Wait For Clear Area', lambda: BT.WaitForClearEnemiesInArea(-15696.0, 8732.0, radius=Range.Longbow.value, stable_clear_ms=60000, log=True)),
-        ('Shrine Of The Raven Spirit - 08 Travel', lambda: BT.Travel(target_map_name='Olafstead')),
-        ('Shrine Of The Raven Spirit - 09 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(132.0, -684.0), 0X832E04)),
+        ('Shrine Of The Raven Spirit - 08 Travel To Olafstead', lambda: BT.Travel(target_map_name='Olafstead')),
+        ('Shrine Of The Raven Spirit - 09 Complete Quest Dialog', lambda: BT.MoveAndDialog(Vec2f(132.0, -684.0), 0x832E04)),
         ('Shrine Of The Raven Spirit - 10 Wait', lambda: BT.Wait(2000)),
     ]
 
@@ -2218,30 +2216,26 @@ def _steps_AdvanceToLongeyeEdge() -> list[PlannerStep]:
 
 def _steps_SearchForTheEbonVanguard() -> list[PlannerStep]:
     return [
-        _planner_map_prep_step('Search For The Ebon Vanguard' + ' - 00 Map Preparation', 650),
+        _planner_map_prep_step('Search For The Ebon Vanguard - 00 Map Preparation', 650),
         ('Search For The Ebon Vanguard - 01 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-25160.0, 13505.0), 8591361)),
         ('Search For The Ebon Vanguard - 02 Aggressive', lambda: _aggressive()),
         ('Search For The Ebon Vanguard - 03 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-21502.0, 12458.0), target_map_name='Grothmar Wardowns')),
         *_planner_vanquish_point_steps('Search For The Ebon Vanguard - 04 Vanquish Route 01', [(-14000.0, 4297.0), (-9580.0, -2860.0)]),
-        ('Search For The Ebon Vanguard - 05 Pacifist', lambda: _pacifist()),
-        ('Search For The Ebon Vanguard - 06 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-9580.0, -2860.0), 8591367)),
-        ('Search For The Ebon Vanguard - 07 Send Dialog', lambda: BT.SendDialog(132)),
-        ('Search For The Ebon Vanguard - 08 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=665)),
-        ('Search For The Ebon Vanguard - 09 Aggressive', lambda: _aggressive()),
-        *_planner_vanquish_point_steps('Search For The Ebon Vanguard - 10 Vanquish Route 02', [(5221.0, -3019.0), (18715.0, -3896.0), (20010.0, -66.0), (17938.0, 2493.0), (19705.0, 3742.0)]),
-        ('Search For The Ebon Vanguard - 11 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=649)),
-        ('Search For The Ebon Vanguard - 12 Pacifist', lambda: _pacifist()),
-        ('Search For The Ebon Vanguard - 13 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(19106.0, 413.0), 8621057)),
-        ('Search For The Ebon Vanguard - 14 Aggressive', lambda: _aggressive()),
-        *_planner_vanquish_point_steps('Search For The Ebon Vanguard - 15 Vanquish Route 03', [(11484.0, 1898.0), (11388.0, 4143.0), (23634.0, 15333.0)]),
-        ('Search For The Ebon Vanguard - 16 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(25604.0, 15412.0), target_map_id=647)),
-        *_planner_vanquish_point_steps('Search For The Ebon Vanguard - 17 Vanquish Route 04', [(-13181.0, 3067.0), (-14576.0, 10999.0), (-15193.0, 13347.0)]),
-        ('Search For The Ebon Vanguard - 18 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(-15369.0, 13087.0))),
-        ('Search For The Ebon Vanguard - 19 Move', lambda: BT.Move(Vec2f(-17533.0, 14473.0))),
-        ('Search For The Ebon Vanguard - 20 Move', lambda: BT.Move(Vec2f(-16740.0, 17124.0))),
-        ('Search For The Ebon Vanguard - 21 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
-        ('Search For The Ebon Vanguard - 22 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=648)),
-        ('Search For The Ebon Vanguard - 23 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-19090.86, 18003.03), 8621063)),
+        ('Search For The Ebon Vanguard - 05 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-9580.0, -2860.0), 8591367)),
+        ('Search For The Ebon Vanguard - 06 Send Dialog', lambda: BT.SendDialog(132)),
+        ('Search For The Ebon Vanguard - 07 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=665)),
+        *_planner_vanquish_point_steps('Search For The Ebon Vanguard - 08 Vanquish Route 02', [(5221.0, -3019.0), (18715.0, -3896.0), (20010.0, -66.0), (17938.0, 2493.0), (19705.0, 3742.0)]),
+        ('Search For The Ebon Vanguard - 09 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=649)),
+        ('Search For The Ebon Vanguard - 10 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(19106.0, 413.0), 8621057)),
+        *_planner_vanquish_point_steps('Search For The Ebon Vanguard - 11 Vanquish Route 03', [(11484.0, 1898.0), (11388.0, 4143.0), (23634.0, 15333.0)]),
+        ('Search For The Ebon Vanguard - 12 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(25604.0, 15412.0), target_map_id=647)),
+        *_planner_vanquish_point_steps('Search For The Ebon Vanguard - 13 Vanquish Route 04', [(-13181.0, 3067.0), (-14576.0, 10999.0), (-15193.0, 13347.0)]),
+        ('Search For The Ebon Vanguard - 14 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(-15369.0, 13087.0))),
+        ('Search For The Ebon Vanguard - 15 Move', lambda: BT.Move(Vec2f(-17533.0, 14473.0))),
+        ('Search For The Ebon Vanguard - 16 Move', lambda: BT.Move(Vec2f(-16740.0, 17124.0))),
+        ('Search For The Ebon Vanguard - 17 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
+        ('Search For The Ebon Vanguard - 18 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=648)),
+        ('Search For The Ebon Vanguard - 19 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-19090.86, 18003.03), 8621063)),
     ]
 
 
@@ -2371,87 +2365,87 @@ def _steps_FindingTheBloodstone() -> list[PlannerStep]:
 
 def _steps_LabSpace() -> list[PlannerStep]:
     return [
-        ('LabSpace - Unlock Rata Sum 0', lambda: BT.Travel(target_map_id=624)),
-        ('LabSpace - Take next story quests 1', lambda: BT.MoveAndDialog(Vec2f(16517.00, 16089.00),0x833401)),
-        ('LabSpace - Take next story quests 2', lambda: BT.MoveAndDialog(Vec2f(16202.00, 16092.00),0x832C01)),
-        ("LabSpace - Prepare Standard Party Full", lambda: _prepare_standard_party_full()),
-        ('LabSpace - Unlock Rata Sum 1', lambda: BT.MoveAndExitMap(Vec2f(15360,12015), target_map_id=485)),
-        *_planner_vanquish_point_steps('LabSpace - Unlock Rata Sum 2',[(13856,11004),(6067,-95),(-4525,-4292),(-5923,-7830),(-2872,-11614),(-6080,-13317),(-12623,-14600),(-17826,-14505),]),
-        ('LabSpace - Unlock Rata Sum 3', lambda: BT.MoveAndExitMap(Vec2f(-20751,-20094), target_map_id=572)),
-        *_planner_vanquish_point_steps('LabSpace - Unlock Rata Sum 4',[(16143,13302),(11572,13967),(4551,15089),(-1219,14737),(-6124,15859),(-11606,14416),(-17312,12108),(-20647,9415),(-23916,9351),(-25863,10650),]),
-        ('LabSpace - Unlock Rata Sum 5', lambda: BT.MoveAndExitMap(Vec2f(-26394,10028), target_map_id=569)),
-        *_planner_vanquish_point_steps('LabSpace - Unlock Rata Sum 6',[ (17610,-6862),(17279,-1470),(17874,7038), (16322,13060)]),
-        ('LabSpace - Unlock Rata Sum 7', lambda: BT.MoveAndExitMap(Vec2f(16411,14405), target_map_id=640)),
-        ('LabSpace - 1', lambda: BT.MoveAndDialog(Vec2f(16024.0, 18468.0), 8596484)),
-
-            
-        ('LabSpace - 2', lambda: BT.MoveAndExitMap(Vec2f(16376,13436), target_map_name="Magus Stones")),
-        ('LabSpace - 3', lambda: BT.MoveAndDialog(Vec2f(10228.0, 11488.0), 8596484)),
-        *_planner_vanquish_point_steps('LabSpace - 4', [(8329.03, 9954.58), (7258.69, 10987.36), (4812.16, 11197.93), (2778.98, 13297.53), (499.76, 14253.58), (-4305.25, 13044.76), (-11493.07, 16584.55), (-17671.37, 14695.37)]),
-        ('LabSpace - 6', lambda: BT.AddModelToLootWhitelist(24628)),
-        ('LabSpace - 5', lambda: BT.MoveAndDialogByModelID(6776,0x832C07)),
-
-        ('LabSpace - 7', lambda:BT.SendDialog(0x84)),
-        ('LabSpace - 7', lambda:BT.MoveDirect(Vec2f(-18513,16437))),
+        ('Lab Space - 00 Travel', lambda: BT.Travel(target_map_id=624)),
+        ('Lab Space - 01 Take Next Story Quest 1', lambda: BT.MoveAndDialog(Vec2f(16517.00, 16089.00), 0x833401)),
+        ('Lab Space - 02 Take Next Story Quest 2', lambda: BT.MoveAndDialog(Vec2f(16202.00, 16092.00), 0x832C01)),
+        ('Lab Space - 03 Prepare Standard Party Full', lambda: _prepare_standard_party_full()),
+        ('Lab Space - 04 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(15360, 12015), target_map_id=485)),
+        *_planner_vanquish_point_steps('Lab Space - 05 Vanquish Route 01', [(13856,11004),(6067,-95),(-4525,-4292),(-5923,-7830),(-2872,-11614),(-6080,-13317),(-12623,-14600),(-17826,-14505)]),
+        ('Lab Space - 06 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-20751, -20094), target_map_id=572)),
+        *_planner_vanquish_point_steps('Lab Space - 07 Vanquish Route 02', [(16143,13302),(11572,13967),(4551,15089),(-1219,14737),(-6124,15859),(-11606,14416),(-17312,12108),(-20647,9415),(-23916,9351),(-25863,10650)]),
+        ('Lab Space - 08 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-26394, 10028), target_map_id=569)),
+        *_planner_vanquish_point_steps('Lab Space - 09 Vanquish Route 03', [(17610,-6862),(17279,-1470),(17874,7038),(16322,13060)]),
+        ('Lab Space - 10 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(16411, 14405), target_map_id=640)),
+        ('Lab Space - 11 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(16024.0, 18468.0), 8596484)),
+        ('Lab Space - 12 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(16376, 13436), target_map_name="Magus Stones")),
+        ('Lab Space - 13 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(10228.0, 11488.0), 8596484)),
+        *_planner_vanquish_point_steps('Lab Space - 14 Vanquish Route 04', [(8329.03, 9954.58), (7258.69, 10987.36), (4812.16, 11197.93), (2778.98, 13297.53), (499.76, 14253.58), (-4305.25, 13044.76), (-11493.07, 16584.55), (-17671.37, 14695.37)]),
+        ('Lab Space - 15 Add Loot Whitelist', lambda: BT.AddModelToLootWhitelist(24628)),
+        ('Lab Space - 16 Move And Dialog By Model ID', lambda: BT.MoveAndDialogByModelID(6776, 0x832C07)),
+        ('Lab Space - 17 Send Dialog', lambda: BT.SendDialog(0x84)),
+        ('Lab Space - 18 Move Direct', lambda: BT.MoveDirect(Vec2f(-18513, 16437))),
     ]
+
 
 FLUCTUATION_MATRIX_MODEL_IDS = {
     22782,
     25413,
 }
 
+
 def _steps_TheElusiveGolemancer() -> list[PlannerStep]:
     return [
-        ('TheElusiveGolemancer 0', lambda: BT.MoveAndExitMap(Vec2f(-20318,14531), target_map_id=658)),
-        ('TheElusiveGolemancer 1', lambda: BT.MoveAndDialog(Vec2f(-14542.0, 12237.0),129)),
-        ('TheElusiveGolemancer 1', lambda: BT.Move(Vec2f(-17204.16, 8545.91))),
-        ('TheElusiveGolemancer 2', lambda: BT.MoveAndInteractWithGadget(Vec2f(-17601.0, 8150.0), log=True)),
-        ('TheElusiveGolemancer 3', lambda: BT.Wait(20_000)),
-        ('TheElusiveGolemancer 4', lambda: BT.Move([Vec2f(-15960.14, 3309.37), Vec2f(-13369.91, -965.44)], avoid_obstacles=False, tolerance=800)),
-        ('TheElusiveGolemancer 5', lambda: BT.MoveAndInteractWithGadget(Vec2f(-11737.0, -3710.0), log=True)),
-            *_planner_vanquish_point_steps('TheElusiveGolemancer 6', [(-15108.84, -2793.48),(-16518.94, -662.78),]),
-            ('TheElusiveGolemancer 7', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)),
-            *_planner_vanquish_point_steps('TheElusiveGolemancer 8', [(-16898.24, -612.0), (-17391.0, -528.0), (-17597.36, 15027.91), (18755.0, -19827.0)]),
-            ('TheElusiveGolemancer 9', lambda: BT.WaitForMapLoad(map_id=659)),
-            ('TheElusiveGolemancer 10', lambda: BT.MoveAndInteractWithGadget(Vec2f(15979.0, -17531.0), log=True)),
-            ('TheElusiveGolemancer 11', lambda: _pacifist()),
-            *_planner_vanquish_point_steps('TheElusiveGolemancer 12', [(18031.51, -13929.63),(17886.86, -13218.39),]),
-            ('TheElusiveGolemancer 13', lambda: BT.MoveAndInteractWithGadget(Vec2f(15551.0, -13705.0), log=True)),
-            ('TheElusiveGolemancer 14', lambda: BT.Wait(3_000)),
-            ('TheElusiveGolemancer 11', lambda: _aggressive()),
-            *_planner_vanquish_point_steps('TheElusiveGolemancer 15', [(15551.0, -13705.0),(9928.16, -10998.24),(5953.36, -9815.89),(4531.82, -9827.91),(3035.53, -9450.54),(3485.59, -11380.60),],),
-            ('TheElusiveGolemancer 17', lambda: BT.MoveAndDialog((-229.0, -12033.0), 0x84)),
-            ('TheElusiveGolemancer 18', lambda: BT.Move(Vec2f(3176.96, -17026.31))),
-            ('TheElusiveGolemancer 19', lambda: BT.Wait(10_000)),
-            ('TheElusiveGolemancer 20', lambda: BT.MoveAndDialog((-2639.00, -15247.00), 0x84)),
-            ('TheElusiveGolemancer 21', lambda: BT.Move(Vec2f(3468.83, -16308.18))),
-            ('TheElusiveGolemancer 22', lambda: BT.Wait(10_000)),
-            ('TheElusiveGolemancer 23', lambda: _pacifist()),
-            ('TheElusiveGolemancer 24', lambda: BT.Move(Vec2f(5107.97, -17710.35))),
-            ('TheElusiveGolemancer 25', lambda: BT.FlagAllHeroes(5413.07, -19400.44)),
-            ('TheElusiveGolemancer 26', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS),max_distance=10_000.0,timeout_ms=10_000,allow_unassigned=True,interaction_interval_ms=500,log=True,),),
-            ('TheElusiveGolemancer 27', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
-            ('TheElusiveGolemancer 28', lambda: _pixel_stack()),
-            ('TheElusiveGolemancer 29', lambda: BT.Wait(5_000)),
-            ('TheElusiveGolemancer 30', lambda: BT.DropBundle(log=True)),
-            ('TheElusiveGolemancer 31', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS),max_distance=10_000.0,timeout_ms=10_000,allow_unassigned=True,interaction_interval_ms=500,log=True,),),
-            ('TheElusiveGolemancer 32', lambda: BT.Wait(1_000)),
-            ('TheElusiveGolemancer 33', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
-            ('TheElusiveGolemancer 34', lambda: _pixel_stack()),
-            ('TheElusiveGolemancer 35', lambda: BT.Wait(5_000)),
-            ('TheElusiveGolemancer 36', lambda: BT.DropBundle(log=True)),
-            ('TheElusiveGolemancer 37', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS),max_distance=10_000.0,timeout_ms=10_000,allow_unassigned=True,interaction_interval_ms=500,log=True,)),
-            ('TheElusiveGolemancer 38', lambda: BT.Wait(1_000)),
-            ('TheElusiveGolemancer 39', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
-            ('TheElusiveGolemancer 40', lambda: _pixel_stack()),
-            ('TheElusiveGolemancer 41', lambda: BT.Wait(5_000)),
-            ('TheElusiveGolemancer 42', lambda: BT.DropBundle(log=True)),
-            ('TheElusiveGolemancer 43', lambda: BT.VanquishNode([(6882.36, -20769.41), (6566.0, -21425.0)], clear_area_radius=Range.Earshot.value)),
-            ('TheElusiveGolemancer 44', lambda: BT.WaitForMapLoad(map_id=660)),
-            ('TheElusiveGolemancer 45', lambda: _aggressive()),
-            *_planner_vanquish_point_steps('TheElusiveGolemancer 46', [(-12164.0, 10409.53),(-12584.28, 13570.28),(-15062.15, 16139.62),(-18265.0, 13647.0),]),
-            ('TheElusiveGolemancer 46', lambda: BT.WaitForMapLoad(map_id=640)),
-        ]
+        ('The Elusive Golemancer - 00 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-20318, 14531), target_map_id=658)),
+        ('The Elusive Golemancer - 01 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-14542.0, 12237.0), 129)),
+        ('The Elusive Golemancer - 02 Move', lambda: BT.Move(Vec2f(-17204.16, 8545.91))),
+        ('The Elusive Golemancer - 03 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(-17601.0, 8150.0), log=True)),
+        ('The Elusive Golemancer - 04 Wait', lambda: BT.Wait(20_000)),
+        ('The Elusive Golemancer - 05 Move', lambda: BT.Move([Vec2f(-15960.14, 3309.37), Vec2f(-13369.91, -965.44)], avoid_obstacles=False, tolerance=800)),
+        ('The Elusive Golemancer - 06 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(-11737.0, -3710.0), log=True)),
+        *_planner_vanquish_point_steps('The Elusive Golemancer - 07 Vanquish Route 01', [(-15108.84, -2793.48), (-16518.94, -662.78)]),
+        ('The Elusive Golemancer - 08 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)),
+        *_planner_vanquish_point_steps('The Elusive Golemancer - 09 Vanquish Route 02', [(-16898.24, -612.0), (-17391.0, -528.0), (-17597.36, 15027.91), (18755.0, -19827.0)]),
+        ('The Elusive Golemancer - 10 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=659)),
+        ('The Elusive Golemancer - 11 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(15979.0, -17531.0), log=True)),
+        ('The Elusive Golemancer - 12 Pacifist', lambda: _pacifist()),
+        *_planner_vanquish_point_steps('The Elusive Golemancer - 13 Vanquish Route 03', [(18031.51, -13929.63), (17886.86, -13218.39)]),
+        ('The Elusive Golemancer - 14 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(15551.0, -13705.0), log=True)),
+        ('The Elusive Golemancer - 15 Wait', lambda: BT.Wait(3_000)),
+        ('The Elusive Golemancer - 16 Aggressive', lambda: _aggressive()),
+        *_planner_vanquish_point_steps('The Elusive Golemancer - 17 Vanquish Route 04', [(15551.0, -13705.0), (9928.16, -10998.24), (5953.36, -9815.89), (4531.82, -9827.91), (3035.53, -9450.54), (3485.59, -11380.60)]),
+        ('The Elusive Golemancer - 18 Move And Dialog', lambda: BT.MoveAndDialog((-229.0, -12033.0), 0x84)),
+        ('The Elusive Golemancer - 19 Move', lambda: BT.Move(Vec2f(3176.96, -17026.31))),
+        ('The Elusive Golemancer - 20 Wait', lambda: BT.Wait(10_000)),
+        ('The Elusive Golemancer - 21 Move And Dialog', lambda: BT.MoveAndDialog((-2639.00, -15247.00), 0x84)),
+        ('The Elusive Golemancer - 22 Move', lambda: BT.Move(Vec2f(3468.83, -16308.18))),
+        ('The Elusive Golemancer - 23 Wait', lambda: BT.Wait(10_000)),
+        ('The Elusive Golemancer - 24 Pacifist', lambda: _pacifist()),
+        ('The Elusive Golemancer - 25 Move', lambda: BT.Move(Vec2f(5107.97, -17710.35))),
+        ('The Elusive Golemancer - 26 Flag All Heroes', lambda: BT.FlagAllHeroes(5413.07, -19400.44)),
+        ('The Elusive Golemancer - 27 Pickup Fluctuation Matrix 1', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS), max_distance=10_000.0, timeout_ms=10_000, allow_unassigned=True, interaction_interval_ms=500, log=True)),
+        ('The Elusive Golemancer - 28 Move And Interact With Gadget 1', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
+        ('The Elusive Golemancer - 29 Pixel Stack 1', lambda: _pixel_stack()),
+        ('The Elusive Golemancer - 30 Wait 1', lambda: BT.Wait(5_000)),
+        ('The Elusive Golemancer - 31 Drop Bundle 1', lambda: BT.DropBundle(log=True)),
+        ('The Elusive Golemancer - 32 Pickup Fluctuation Matrix 2', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS), max_distance=10_000.0, timeout_ms=10_000, allow_unassigned=True, interaction_interval_ms=500, log=True)),
+        ('The Elusive Golemancer - 33 Wait 2', lambda: BT.Wait(1_000)),
+        ('The Elusive Golemancer - 34 Move And Interact With Gadget 2', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
+        ('The Elusive Golemancer - 35 Pixel Stack 2', lambda: _pixel_stack()),
+        ('The Elusive Golemancer - 36 Wait 3', lambda: BT.Wait(5_000)),
+        ('The Elusive Golemancer - 37 Drop Bundle 2', lambda: BT.DropBundle(log=True)),
+        ('The Elusive Golemancer - 38 Pickup Fluctuation Matrix 3', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS), max_distance=10_000.0, timeout_ms=10_000, allow_unassigned=True, interaction_interval_ms=500, log=True)),
+        ('The Elusive Golemancer - 39 Wait 4', lambda: BT.Wait(1_000)),
+        ('The Elusive Golemancer - 40 Move And Interact With Gadget 3', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
+        ('The Elusive Golemancer - 41 Pixel Stack 3', lambda: _pixel_stack()),
+        ('The Elusive Golemancer - 42 Wait 5', lambda: BT.Wait(5_000)),
+        ('The Elusive Golemancer - 43 Drop Bundle 3', lambda: BT.DropBundle(log=True)),
+        ('The Elusive Golemancer - 44 Vanquish Final Room', lambda: BT.VanquishNode([(6882.36, -20769.41), (6566.0, -21425.0)], clear_area_radius=Range.Earshot.value)),
+        ('The Elusive Golemancer - 45 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=660)),
+        ('The Elusive Golemancer - 46 Aggressive', lambda: _aggressive()),
+        *_planner_vanquish_point_steps('The Elusive Golemancer - 47 Vanquish Route 05', [(-12164.0, 10409.53), (-12584.28, 13570.28), (-15062.15, 16139.62), (-18265.0, 13647.0)]),
+        ('The Elusive Golemancer - 48 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=640)),
+    ]
+
 
 def _unflag_alittlehelp_heroes_local() -> BehaviorTree:
     def _unflag(hero_position: int) -> BehaviorTree:
@@ -2496,60 +2490,61 @@ def _unflag_alittlehelp_heroes_local() -> BehaviorTree:
 
 
 def _steps_ALittleHelp() -> list[PlannerStep]:
-        return [
-('ALittleHelp 0', lambda: BT.MoveAndExitMap(Vec2f(20320,16861), target_map_id=501)),
-*_planner_vanquish_point_steps('ALittleHelp 1', [(-22469,-5887),(-12978,-8490),(2552,-9452),(9029,-9692),(14574,-9613)]),
-('ALittleHelp 2', lambda: BT.MoveAndDialog(Vec2f(17611.00, -9341.00), 8598532)),
-*_planner_vanquish_point_steps('ALittleHelp 3',[(8016,-10470),(1025,-8638),(-4327,-10132),(-8425,-12543),]),
-('ALittleHelp 4', lambda: BT.MoveAndExitMap(Vec2f(-8618,-14375), target_map_id=572)),
-*_planner_vanquish_point_steps('ALittleHelp 4',[(-5413,15875),(-15672,11827),(-10182,-115),(-16273,-5484),(-20039,-10133),(-21923,-9612),(-24115,-10567)]),
-('ALittleHelp 6', lambda: BT.WaitUntilOutOfCombat()),
-('ALittleHelp 7', lambda: BT.MoveAndDialogByModelID(6789, 8598532)),
-('ALittleHelp 8', lambda: BT.Travel(target_map_name="Rata Sum")),
-('ALittleHelp 9', lambda: BT.MoveAndDialog(Vec2f(16051.00, 15183.00), 8598535)),
-('ALittleHelp 10', lambda: BT.SendDialog(132)),
-('ALittleHelp 11', lambda: BT.WaitForMapLoad(map_id=664)),
-('ALittleHelp 17', lambda: BT.Move(Vec2f(-16715.00, 8931.00))),
-('ALittleHelp 14', lambda: BT.FlagHero(1, -17880.37, 10046.01)),
-('ALittleHelp 15', lambda: BT.FlagHero(2, -17880.37, 10046.01)),
-('ALittleHelp 16', lambda: BT.FlagHero(3, -17880.37, 10046.01)),
-('ALittleHelp 17', lambda: BT.Move(Vec2f(-15538.57, 7641.21))),
-('ALittleHelp 18', lambda: BT.Wait(5000)),
-('ALittleHelp 18', lambda: BT.WaitForClearEnemiesInArea(-15538.57, 7641.21,stable_clear_ms=60_000, radius=Range.Spirit.value, log=True)),
-('ALittleHelp 19', lambda: _unflag_alittlehelp_heroes_local()),
-('ALittleHelp 20', lambda:BT.TargetAgentByName(agent_name='Sokka', log=True)),
-('ALittleHelp 21', lambda:BT.InteractTargetAndSendDialog(132)),
-('ALittleHelp 22', lambda: BT.DropBundle(log=True)),
-('ALittleHelp 23', lambda: BT.Wait(5000)),
-('ALittleHelp 21', lambda:BT.InteractTargetAndSendDialog(132)),
-('ALittleHelp 22', lambda: BT.DropBundle(log=True)),
-*_planner_vanquish_point_steps('ALittleHelp 23',[(-16519,9556),(-14161,7403),(-10389,9222),(-9492,10399),(-7471,13112),(-6188,15259),]),
-('ALittleHelp 24', lambda: BT.WaitForMapToChange(map_id=640)),
-('ALittleHelp 25', lambda: BT.MoveAndDialog(Vec2f(16051.00, 15183.00),8622855))
+    return [
+        ('A Little Help - 00 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(20320, 16861), target_map_id=501)),
+        *_planner_vanquish_point_steps('A Little Help - 01 Vanquish Route 01', [(-22469,-5887),(-12978,-8490),(2552,-9452),(9029,-9692),(14574,-9613)]),
+        ('A Little Help - 02 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(17611.00, -9341.00), 8598532)),
+        *_planner_vanquish_point_steps('A Little Help - 03 Vanquish Route 02', [(8016,-10470),(1025,-8638),(-4327,-10132),(-8425,-12543)]),
+        ('A Little Help - 04 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-8618, -14375), target_map_id=572)),
+        *_planner_vanquish_point_steps('A Little Help - 05 Vanquish Route 03', [(-5413,15875),(-15672,11827),(-10182,-115),(-16273,-5484),(-20039,-10133),(-21923,-9612),(-24115,-10567)]),
+        ('A Little Help - 06 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat()),
+        ('A Little Help - 07 Move And Dialog By Model ID', lambda: BT.MoveAndDialogByModelID(6789, 8598532)),
+        ('A Little Help - 08 Travel To Rata Sum', lambda: BT.Travel(target_map_name="Rata Sum")),
+        ('A Little Help - 09 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(16051.00, 15183.00), 8598535)),
+        ('A Little Help - 10 Send Dialog', lambda: BT.SendDialog(132)),
+        ('A Little Help - 11 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=664)),
+        ('A Little Help - 12 Move To Hero Flag Setup', lambda: BT.Move(Vec2f(-16715.00, 8931.00))),
+        ('A Little Help - 13 Flag Hero 1', lambda: BT.FlagHero(1, -17880.37, 10046.01)),
+        ('A Little Help - 14 Flag Hero 2', lambda: BT.FlagHero(2, -17880.37, 10046.01)),
+        ('A Little Help - 15 Flag Hero 3', lambda: BT.FlagHero(3, -17880.37, 10046.01)),
+        ('A Little Help - 16 Move To Combat Position', lambda: BT.Move(Vec2f(-15538.57, 7641.21))),
+        ('A Little Help - 17 Initial Wait', lambda: BT.Wait(5000)),
+        ('A Little Help - 18 Wait For Clear Area', lambda: BT.WaitForClearEnemiesInArea(-15538.57, 7641.21, stable_clear_ms=60_000, radius=Range.Spirit.value, log=True)),
+        ('A Little Help - 19 Unflag Heroes', lambda: _unflag_alittlehelp_heroes_local()),
+        ('A Little Help - 20 Target Sokka', lambda: BT.TargetAgentByName(agent_name='Sokka', log=True)),
+        ('A Little Help - 21 First Sokka Dialog', lambda: BT.InteractTargetAndSendDialog(132)),
+        ('A Little Help - 22 First Bundle Drop', lambda: BT.DropBundle(log=True)),
+        ('A Little Help - 23 Wait Before Second Sokka Dialog', lambda: BT.Wait(5000)),
+        ('A Little Help - 24 Second Sokka Dialog', lambda: BT.InteractTargetAndSendDialog(132)),
+        ('A Little Help - 25 Second Bundle Drop', lambda: BT.DropBundle(log=True)),
+        *_planner_vanquish_point_steps('A Little Help - 26 Vanquish Route 04', [(-16519,9556),(-14161,7403),(-10389,9222),(-9492,10399),(-7471,13112),(-6188,15259)]),
+        ('A Little Help - 27 Wait For Map Change', lambda: BT.WaitForMapToChange(map_id=640)),
+        ('A Little Help - 28 Complete Quest Dialog', lambda: BT.MoveAndDialog(Vec2f(16051.00, 15183.00), 8622855)),
+    ]
 
-]
 
 def _steps_Jalis() -> list[PlannerStep]:
-        return [
-('Jalis 0 - Travel Eyes of The North', lambda: BT.Travel(642)),
-('Jalis 1 - Enter Hall of Monuments ', lambda: BT.MoveAndExitMap(Vec2f(1522.0, 464.0), target_map_id=499)),
-('Jalis 2 - Navigate to Target Location', lambda: BT.Move([(-1797,-3176),(-8148,-3770),])),
-('Jalis 3 - Exit Current Map', lambda: BT.MoveAndExitMap(Vec2f(-10224,-3758), target_map_id=625)),
-*_planner_vanquish_point_steps('Jalis 4 - Vanquish Points',[(19160,18738),(1408,19625),(-2193,16151),(-4747,17842),]),
-('Jalis 5 - Interact for vision', lambda: BT.MoveAndDialog(Vec2f(-4874.00, 17584.00), 0x838907)),
-('Jalis 6 - Travel to Eyes of The North', lambda: BT.Travel(642)),
-('Jalis 7 - Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-4575,5752), target_map_id=646)),
-('Jalis 8 - Interact with Jalis', lambda: BT.MoveAndDialog(Vec2f(-6662.00, 6584.00), 0x63F)),
-('Jalis 9 - Travel Eyes of The North', lambda: BT.Travel(642)),
-('Jalis 10 - Prepare Touch Team', lambda: _prepare_touch_team()),
-('Jalis 10 - Exit Map', lambda: BT.MoveAndExitMap(Vec2f(1522.0, 464.0), target_map_id=499)),
-('Jalis 11 - Navigate to Target Location', lambda: BT.Move([(-1797,-3176),(-8148,-3770),])),
-('Jalis 12 - Enter to Battledepths', lambda: BT.MoveAndExitMap(Vec2f(-10224,-3758), target_map_id=625)),
-*_planner_vanquish_point_steps('Jalis 13 - Vanquish Points',[(19160,18738),(1408,19625),(-2193,16151),(-4747,17842),]),
-('Jalis 14 - Interact with Jalis', lambda: BT.MoveAndDialog(Vec2f(-4874.00, 17584.00), 0x833101)),
-*_planner_vanquish_point_steps('Jalis 15 - Vanquish Points', [(1115,11797),(6542,12098),(7916,10192),(6055,7277),]),
-('Jalis 16 - Enter to HeartofTheShiverspeak', lambda: BT.MoveAndExitMap(Vec2f(5873,8216), target_map_id=607)),
-        ]
+    return [
+        ('Jalis - 00 Travel Eye Of The North', lambda: BT.Travel(642)),
+        ('Jalis - 01 Enter Hall Of Monuments', lambda: BT.MoveAndExitMap(Vec2f(1522.0, 464.0), target_map_id=499)),
+        ('Jalis - 02 Navigate To Target Location', lambda: BT.Move([(-1797,-3176),(-8148,-3770)])),
+        ('Jalis - 03 Exit Current Map', lambda: BT.MoveAndExitMap(Vec2f(-10224, -3758), target_map_id=625)),
+        *_planner_vanquish_point_steps('Jalis - 04 Vanquish Route 01', [(19160,18738),(1408,19625),(-2193,16151),(-4747,17842)]),
+        ('Jalis - 05 Interact For Vision', lambda: BT.MoveAndDialog(Vec2f(-4874.00, 17584.00), 0x838907)),
+        ('Jalis - 06 Travel Eye Of The North', lambda: BT.Travel(642)),
+        ('Jalis - 07 Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-4575, 5752), target_map_id=646)),
+        ('Jalis - 08 Interact With Jalis', lambda: BT.MoveAndDialog(Vec2f(-6662.00, 6584.00), 0x63F)),
+        ('Jalis - 09 Travel Eye Of The North', lambda: BT.Travel(642)),
+        ('Jalis - 10 Prepare Touch Team', lambda: _prepare_touch_team()),
+        ('Jalis - 11 Exit Map', lambda: BT.MoveAndExitMap(Vec2f(1522.0, 464.0), target_map_id=499)),
+        ('Jalis - 12 Navigate To Target Location', lambda: BT.Move([(-1797,-3176),(-8148,-3770)])),
+        ('Jalis - 13 Enter Battledepths', lambda: BT.MoveAndExitMap(Vec2f(-10224, -3758), target_map_id=625)),
+        *_planner_vanquish_point_steps('Jalis - 14 Vanquish Route 02', [(19160,18738),(1408,19625),(-2193,16151),(-4747,17842)]),
+        ('Jalis - 15 Interact With Jalis', lambda: BT.MoveAndDialog(Vec2f(-4874.00, 17584.00), 0x833101)),
+        *_planner_vanquish_point_steps('Jalis - 16 Vanquish Route 03', [(1115,11797),(6542,12098),(7916,10192),(6055,7277)]),
+        ('Jalis - 17 Enter Heart Of The Shiverpeaks', lambda: BT.MoveAndExitMap(Vec2f(5873, 8216), target_map_id=607)),
+    ]
+
 
 HEART_BUDGER_MODEL_ID = 6230
 HEART_CYNDR_MODEL_ID = 6965
@@ -3077,49 +3072,47 @@ def _steps_HeartofTheShiverspeak() -> list[PlannerStep]:
 
 def _steps_DestructionsDepth() -> list[PlannerStep]:
     return [
-        ('DestructionsDepth - 01 Wait for map change', lambda: BT.WaitForMapToChange(map_id=670)),
-        ('DestructionsDepth - 02 Move and interact with golem 1', lambda: BT.MoveAndDialog(Vec2f(14875.00, -577.00),0x88)),
-        ('DestructionsDepth - 10 Change Golem Type', lambda: BT.MoveAndDialog(Vec2f(14875.00, -577.00),0x85)),
-        ('DestructionsDepth - 03 Wait mana', lambda: BT.Wait(5000)),
-        ('DestructionsDepth - 03 Move and interact with golem 2', lambda: BT.MoveAndDialog(Vec2f(14615.07, -518.46),0x88)),
-        ('DestructionsDepth - 03 Wait mana', lambda: BT.Wait(5000)),
-        ('DestructionsDepth - 04 Move and interact with golem 3', lambda: BT.MoveAndDialog(Vec2f(14206.00, -373.00),0x88)),
-        *_planner_vanquish_point_steps('DestructionsDepth - 05 Vanquish Route', [(13838,-1004),(9735,-795),(6821,-1560),(7233,-4327),(4614,-3797),]),
-        ('DestructionsDepth - 06 Wait open door', lambda: BT.Wait(15000)),
-        *_planner_vanquish_point_steps('DestructionsDepth - 07 Vanquish Route', [(1602,-4001),(531,-5912),(-2602,-7593),(-3055,-9348),(-2090,-14031),(-5409,-16717),(-8116,-16917),]),
-        ('DestructionsDepth - 08 Move and exit', lambda: BT.MoveAndExitMap(Vec2f(-7550,-18381),target_map_id=671)),
-        ('DestructionsDepth - 09 Move and interact with golem 1', lambda: BT.MoveAndDialog(Vec2f(1863.00, 2429.00),0x88)),
-        ('DestructionsDepth - 10 Change Golem Type', lambda: BT.MoveAndDialog(Vec2f(1863.00, 2429.00),0x85)),
-        ('DestructionsDepth - 10 Wait mana', lambda: BT.Wait(5000)),
-        ('DestructionsDepth - 11 Move and interact with golem 2', lambda: BT.MoveAndDialog(Vec2f(2115.00, 2518.00),0x88)),
-        ('DestructionsDepth - 12 Wait mana', lambda: BT.Wait(5000)),
-        ('DestructionsDepth - 13 Move and interact with golem 3', lambda: BT.MoveAndDialog(Vec2f(2333.00, 2556.00),0x88)),
-        *_planner_vanquish_point_steps('DestructionsDepth - 14 Vanquish Route', [(5039,2032),(5939,152),(7203,-3396),(5053,-7207),]),
-        ('DestructionsDepth - 15 Clear Area', lambda: BT.ClearEnemiesInArea(Vec2f(5053,-7207),radius=Range.Compass.value,)),
-        ('DestructionsDepth - 16 Wait for Clear Enemies', lambda: BT.WaitForClearEnemiesInArea(5053,-7207, radius=Range.Compass.value, stable_clear_ms=60_000,)),
-        *_planner_vanquish_point_steps('DestructionsDepth - 17 Vanquish Route', [(7318,-3547),(12260,-3868),(14750,-5535),(15423,-17214),]),
-        ('DestructionsDepth - 18 Move and exit', lambda: BT.MoveAndExitMap(Vec2f(15474,-18742),target_map_id=672)),
-        ('DestructionsDepth - 19 Move and interact with golem 1', lambda: BT.MoveAndDialog(Vec2f(-40.00, 3742.00),0x88)),
-        ('DestructionsDepth - 20 Change Golem Type', lambda: BT.MoveAndDialog(Vec2f(-40.00, 3742.00),0x85)),
-        ('DestructionsDepth - 20 Wait mana', lambda: BT.Wait(5000)),
-        ('DestructionsDepth - 21 Move and interact with golem 2', lambda: BT.MoveAndDialog(Vec2f(331.00, 3745.00),0x88)),
-        ('DestructionsDepth - 22 Change Golem Type', lambda: BT.MoveAndDialog(Vec2f(331.00, 3745.00),0x85)),
-        ('DestructionsDepth - 22 Wait mana', lambda: BT.Wait(5000)),
-        ('DestructionsDepth - 23 Move and interact with golem 3', lambda: BT.MoveAndDialog(Vec2f(-369.00, 3750.00),0x88)),
-        *_planner_vanquish_point_steps('DestructionsDepth - 24 Vanquish Route', [(-1781,3491),(-1056,4167),(1150,4138),(2034,3173),(934,1862),(1386,656),(-664,370),]),
-        ('DestructionsDepth - 25 Wait for Map Change', lambda: BT.WaitForMapToChange(map_id=652)),
-        
+        ("Destruction's Depths - L1 01 Wait For Map Change", lambda: BT.WaitForMapToChange(map_id=670)),
+        ("Destruction's Depths - L1 02 Activate Golem 1", lambda: BT.MoveAndDialog(Vec2f(14875.00, -577.00), 0x88)),
+        ("Destruction's Depths - L1 03 Change Golem 1 Type", lambda: BT.MoveAndDialog(Vec2f(14875.00, -577.00), 0x85)),
+        ("Destruction's Depths - L1 04 Wait Mana", lambda: BT.Wait(5000)),
+        ("Destruction's Depths - L1 05 Activate Golem 2", lambda: BT.MoveAndDialog(Vec2f(14615.07, -518.46), 0x88)),
+        ("Destruction's Depths - L1 06 Wait Mana", lambda: BT.Wait(5000)),
+        ("Destruction's Depths - L1 07 Activate Golem 3", lambda: BT.MoveAndDialog(Vec2f(14206.00, -373.00), 0x88)),
+        *_planner_vanquish_point_steps("Destruction's Depths - L1 08 Vanquish Route 01", [(13838,-1004),(9735,-795),(6821,-1560),(7233,-4327),(4614,-3797)]),
+        ("Destruction's Depths - L1 09 Wait For Door", lambda: BT.Wait(15000)),
+        *_planner_vanquish_point_steps("Destruction's Depths - L1 10 Vanquish Route 02", [(1602,-4001),(531,-5912),(-2602,-7593),(-3055,-9348),(-2090,-14031),(-5409,-16717),(-8116,-16917)]),
+        ("Destruction's Depths - L1 11 Exit Level", lambda: BT.MoveAndExitMap(Vec2f(-7550, -18381), target_map_id=671)),
 
+        ("Destruction's Depths - L2 01 Activate Golem 1", lambda: BT.MoveAndDialog(Vec2f(1863.00, 2429.00), 0x88)),
+        ("Destruction's Depths - L2 02 Change Golem 1 Type", lambda: BT.MoveAndDialog(Vec2f(1863.00, 2429.00), 0x85)),
+        ("Destruction's Depths - L2 03 Wait Mana", lambda: BT.Wait(5000)),
+        ("Destruction's Depths - L2 04 Activate Golem 2", lambda: BT.MoveAndDialog(Vec2f(2115.00, 2518.00), 0x88)),
+        ("Destruction's Depths - L2 05 Wait Mana", lambda: BT.Wait(5000)),
+        ("Destruction's Depths - L2 06 Activate Golem 3", lambda: BT.MoveAndDialog(Vec2f(2333.00, 2556.00), 0x88)),
+        *_planner_vanquish_point_steps("Destruction's Depths - L2 07 Vanquish Route 01", [(5039,2032),(5939,152),(7203,-3396),(5053,-7207)]),
+        ("Destruction's Depths - L2 08 Clear Area", lambda: BT.ClearEnemiesInArea(Vec2f(5053, -7207), radius=Range.Compass.value)),
+        ("Destruction's Depths - L2 09 Wait For Clear Area", lambda: BT.WaitForClearEnemiesInArea(5053, -7207, radius=Range.Compass.value, stable_clear_ms=60_000)),
+        *_planner_vanquish_point_steps("Destruction's Depths - L2 10 Vanquish Route 02", [(7318,-3547),(12260,-3868),(14750,-5535),(15423,-17214)]),
+        ("Destruction's Depths - L2 11 Exit Level", lambda: BT.MoveAndExitMap(Vec2f(15474, -18742), target_map_id=672)),
 
+        ("Destruction's Depths - L3 01 Activate Golem 1", lambda: BT.MoveAndDialog(Vec2f(-40.00, 3742.00), 0x88)),
+        ("Destruction's Depths - L3 02 Change Golem 1 Type", lambda: BT.MoveAndDialog(Vec2f(-40.00, 3742.00), 0x85)),
+        ("Destruction's Depths - L3 03 Wait Mana", lambda: BT.Wait(5000)),
+        ("Destruction's Depths - L3 04 Activate Golem 2", lambda: BT.MoveAndDialog(Vec2f(331.00, 3745.00), 0x88)),
+        ("Destruction's Depths - L3 05 Change Golem 2 Type", lambda: BT.MoveAndDialog(Vec2f(331.00, 3745.00), 0x85)),
+        ("Destruction's Depths - L3 06 Wait Mana", lambda: BT.Wait(5000)),
+        ("Destruction's Depths - L3 07 Activate Golem 3", lambda: BT.MoveAndDialog(Vec2f(-369.00, 3750.00), 0x88)),
+        *_planner_vanquish_point_steps("Destruction's Depths - L3 08 Vanquish Route", [(-1781,3491),(-1056,4167),(1150,4138),(2034,3173),(934,1862),(1386,656),(-664,370)]),
+        ("Destruction's Depths - L3 09 Wait For Map Change", lambda: BT.WaitForMapToChange(map_id=652)),
     ]
+
 
 # ---------------------------------------------------------------------------
 # Optional Olias unlock
 # ---------------------------------------------------------------------------
 
 OLIAS_HERO_ID = int(HeroType.Olias.value)
-
-
 MOX_HERO_ID = int(HeroType.MOX.value)
 
 
@@ -3473,8 +3466,31 @@ def EnsureOliasUnlocked(log: bool = True) -> BehaviorTree:
 # ---------------------------------------------------------------------------
 
 
-def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
-    return [
+def _validate_unique_execution_step_names(
+    steps: list[PlannerStep],
+) -> list[PlannerStep]:
+    """Fail immediately when two planner steps expose the same name."""
+
+    seen: set[str] = set()
+    duplicates: list[str] = []
+
+    for step_name, _factory in steps:
+        if step_name in seen and step_name not in duplicates:
+            duplicates.append(step_name)
+        seen.add(step_name)
+
+    if duplicates:
+        duplicate_list = ", ".join(repr(name) for name in duplicates)
+        raise ValueError(
+            f"{MODULE_NAME}: duplicate planner step names detected: "
+            f"{duplicate_list}"
+        )
+
+    return steps
+
+
+def get_execution_steps() -> list[PlannerStep]:
+    steps: list[PlannerStep] = [
         *_steps_InitializeBot(),
         *_steps_UnlockEyeOfTheNorthPool(),
         *_steps_ObtainStoryBook(),
@@ -3484,8 +3500,6 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
         ('Save Pre-Xandra Player Build', SavePreXandraPlayerBuild),
         *_steps_Unlock_Xandra(),
         ('Optional Xandra Tournament', CompleteOptionalXandraTournament),
-        *_steps_PrepareXandraTournament(),
-        ('Fight Sequence', Fight_Sequence),
         ('Restore Pre-Xandra Player Build', RestorePreXandraPlayerBuild),
         *_steps_TravelToSifhalla(),
         *_steps_CompleteTrackingTheNornbear(),
@@ -3506,8 +3520,10 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
         *_steps_ALittleHelp(),
         *_steps_Jalis(),
         *_steps_HeartofTheShiverspeak(),
-        *_steps_DestructionsDepth()
+        *_steps_DestructionsDepth(),
     ]
+
+    return _validate_unique_execution_step_names(steps)
 
 
 def ensure_botting_tree() -> BottingTree:
