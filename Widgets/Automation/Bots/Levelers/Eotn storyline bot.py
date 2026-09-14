@@ -2152,7 +2152,7 @@ def _steps_CompleteShrineOfRavenSpirit() -> list[PlannerStep]:
         ('Shrine Of The Raven Spirit - 06 Target Olaf And Dialog', lambda: BT.TargetAgentByModelIDAndSendDialog(OLAF_OLAFSON_MODEL_ID, 133, log=True)),
         ('Shrine Of The Raven Spirit - 07 Wait For Clear Area', lambda: BT.WaitForClearEnemiesInArea(-15696.0, 8732.0, radius=Range.Longbow.value, stable_clear_ms=60000, log=True)),
         ('Shrine Of The Raven Spirit - 08 Travel', lambda: BT.Travel(target_map_name='Olafstead')),
-        ('Shrine Of The Raven Spirit - 09 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(132.0, -684.0), 8596999)),
+        ('Shrine Of The Raven Spirit - 09 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(132.0, -684.0), 0X832E04)),
         ('Shrine Of The Raven Spirit - 10 Wait', lambda: BT.Wait(2000)),
     ]
 
@@ -2327,8 +2327,8 @@ def _steps_FindingGadd() -> list[PlannerStep]:
         *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 2', [(18151, 10252), (12551, 4510), (3069, -5735), (-10915, 3126), (-19310, 6501), (-23267, 7881)]),
         ('Finding Gadd - Unlock Gadds Camp 3', lambda: BT.WaitForMapLoad(map_id=639)),
         ('Finding Gadd - Unlock Gadds Camp 4', lambda: BT.MoveAndExitMap(Vec2f(-26186,10582), target_map_id=604)),
-        *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 5',[(-14003,14202),(-16378,11031),(-17869,7983),(-16067,5680),(-16727,2566),(-17584,-472),(-18026,-11361),(-19478,-11785),]),
-        ('Finding Gadd - Unlock Gadds Camp 6', lambda: BT.MoveAndExitMap(Vec2f(-26186,10582), target_map_id=624)),
+        *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 5',[(-14003,14202),(-16378,11031),(-17869,7983),(-16067,5680),(-16727,2566),(-17584,-472),(-18026,-11361)]),
+        ('Finding Gadd - Unlock Gadds Camp 6', lambda: BT.MoveAndExitMap(Vec2f(-20209,-11995), target_map_id=624)),
         ('Finding Gadd - Unlock Gadds Camp 7', lambda: BT.MoveAndDialog(Vec2f(16363, 15909), 0x833301,)),
         *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 8', [(13455.43, 10678.0), (9850.0, 5025.0), (11207.11, 1872.32), (10452.02, 178.5), (10782.86, -3321.0), (8360.94, -6550.0), (10382.85, -12342.0), (10080.3, -13995.0),(10667.0, -16116.0), (10747.49, -17546.0), (11156.0, -17802.0)]),
         ('Finding Gadd - Unlock Gadds Camp 8', lambda: BT.MoveAndExitMap(Vec2f(9240.07, -20260.95), target_map_id=581)),
@@ -2337,23 +2337,21 @@ def _steps_FindingGadd() -> list[PlannerStep]:
         ('Finding Gadd - Unlock Gadds Camp 10', lambda: BT.MoveAndExitMap(Vec2f(14224,11771), target_map_id=638)),
 
         ('Finding Gadd - 01 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-8295.0, -23572.0), 8598276)),
-        ('Finding Gadd - 02 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(16230.20, 16030.80), 8596481)),
-        ('Finding Gadd - 03 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(16517.00, 16089.00), 8598529)),
-        ('Finding Gadd - 04 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-9690.0, -19524.0), target_map_id=558)),
-        *_planner_vanquish_point_steps('Finding Gadd - 05 Vanquish Route', [(-4466.15, -21025.91), (-6967.77, -19810.06), (11858.20, -23099.82)]),
-        ('Finding Gadd - 06 Move And Dialog', lambda: BT.MoveAndDialogByModelID(5999, 0x833304, log=True)),
-        *_planner_vanquish_point_steps('Finding Gadd - 07 Vanquish Route', [(8017.92, -20124.24), (11184.85, -14188.88),(-5740.47, -13723.29),(2417.11, -25444.55),(11566,-23851)]),
-        ('Finding Gadd - 9 Wait', lambda: BT.Wait(10000)),
-        ('Finding Gadd - 8 Dialog', lambda: BT.MoveAndDialogByModelID(6772, 8598276, log=True)),
-        ('Finding Gadd - 9 Wait', lambda: BT.Wait(10000)),
-        ('Finding Gadd - 10 Move', lambda: BT.MoveAndDialog(Vec2f(11795.0, -24125.0), 8598279)),
+        ('Finding Gadd - 02 Move And Exit', lambda: BT.MoveAndExitMap(Vec2f(-9604,-20187), target_map_id=558)),
+        *_planner_vanquish_point_steps('Finding Gadd - 03 Move To Livia', [(-8113,-17955),(-2808,-22064),(6115,-22309),(11604,-23291),]),
+        ('Finding Gadd - 04 Move And Dialog', lambda: BT.MoveAndDialogByModelID(5999, 8598276)),
+        *_planner_vanquish_point_steps('Finding Gadd - 05 Vanquish Route', [(8017.92, -20124.24), (11184.85, -14188.88),(-5740.47, -13723.29),(2417.11, -25444.55),(12056.22, -24132.56)]),
+        ('Finding Gadd - 6 Wait', lambda: BT.Wait(10000)),
+        ('Finding Gadd - 7 Dialog', lambda: BT.MoveAndDialogByModelID(6772, 8598276, log=True)),
+        ('Finding Gadd - 8 Wait', lambda: BT.Wait(10000)),
+        ('Finding Gadd - 9 Dialog ', lambda: BT.MoveAndDialog(Vec2f(11795.0, -24125.0), 8598279))
     ]
 
 
 
 def _steps_FindingTheBloodstone() -> list[PlannerStep]:
     return [
-        ('Finding The Bloodstone - 01 Auto Dialog', lambda: BT.SendDialog(132)),
+        ('Finding The Bloodstone - 01 Dialog', lambda: BT.SendDialog(0x84)),
         ('Finding The Bloodstone - 02 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=661)),
         *_planner_vanquish_point_steps('Finding The Bloodstone - 03 Vanquish Route 02', [(12437.0, 16557.0), (12588.0, 14755.0), (15387.0, 6941.0)]),
         ('Finding The Bloodstone - 04 Wait Until Out Of Combat', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120000)),
