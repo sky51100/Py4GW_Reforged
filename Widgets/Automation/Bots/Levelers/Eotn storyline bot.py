@@ -2388,10 +2388,11 @@ def _steps_LabSpace() -> list[PlannerStep]:
         ('LabSpace - 2', lambda: BT.MoveAndExitMap(Vec2f(16376,13436), target_map_name="Magus Stones")),
         ('LabSpace - 3', lambda: BT.MoveAndDialog(Vec2f(10228.0, 11488.0), 8596484)),
         *_planner_vanquish_point_steps('LabSpace - 4', [(8329.03, 9954.58), (7258.69, 10987.36), (4812.16, 11197.93), (2778.98, 13297.53), (499.76, 14253.58), (-4305.25, 13044.76), (-11493.07, 16584.55), (-17671.37, 14695.37)]),
-        ('LabSpace - 6', lambda: BT.AddModelToLootWhitelist(25413)),
-        ('LabSpace - 5', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)),
+        ('LabSpace - 6', lambda: BT.AddModelToLootWhitelist(24628)),
+        ('LabSpace - 5', lambda: BT.MoveAndDialogByModelID(6776,0x832C07)),
+
+        ('LabSpace - 7', lambda:BT.SendDialog(0x84)),
         ('LabSpace - 7', lambda:BT.MoveDirect(Vec2f(-18513,16437))),
-        ('LabSpace - 7', lambda:BT.MoveAndDialog(Vec2f(-18794.00, 16287.00),8596487)),
     ]
 
 FLUCTUATION_MATRIX_MODEL_IDS = {
