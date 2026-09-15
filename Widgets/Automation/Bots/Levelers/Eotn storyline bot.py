@@ -3065,7 +3065,7 @@ def _steps_HeartofTheShiverspeak() -> list[PlannerStep]:
                 verify_pos=Vec2f(-5499,-11675),
             ),
         ),
-        ('HeartofTheShiverspeak - 14 Move to Cyndr Room', lambda: BT.Move([(-5499,-11675),(-5739.00, -17127.00)], pause_on_combat=False)),
+        ('HeartofTheShiverspeak - 14 Move to Cyndr Room', lambda: BT.Move([(-5499,-11675),(-7515.01, -17050.18)], pause_on_combat=False)),
         ('HeartofTheShiverspeak - 15 Wait For Cyndr', lambda: _heart_wait_for_cyndr()),
         ('HeartofTheShiverspeak - 16 Defeat Cyndr', lambda: _heart_cyndr_encounter()),
         ('HeartofTheShiverspeak - 17 Exit Level 3', lambda: BT.MoveAndInteract(Vec2f(-5739.00, -17127.00))),
