@@ -2559,14 +2559,15 @@ def _steps_ALittleHelp() -> list[PlannerStep]:
         ('A Little Help - 18 Wait For Clear Area', lambda: BT.WaitForClearEnemiesInArea(-15538.57, 7641.21, stable_clear_ms=60_000, radius=Range.Spirit.value, log=True)),
         ('A Little Help - 19 Unflag Heroes', lambda: _unflag_alittlehelp_heroes_local()),
         ('A Little Help - 20 Target Sokka', lambda: BT.TargetAgentByName(agent_name='Sokka', log=True)),
-        ('A Little Help - 21 First Sokka Dialog', lambda: BT.InteractTargetAndSendDialog(132)),
+        ('A Little Help - 21 First Sokka Dialog', lambda: BT.InteractTargetAndSendDialog(0x84)),
         ('A Little Help - 22 First Bundle Drop', lambda: BT.DropBundle(log=True)),
         ('A Little Help - 23 Wait Before Second Sokka Dialog', lambda: BT.Wait(5000)),
-        ('A Little Help - 24 Second Sokka Dialog', lambda: BT.InteractTargetAndSendDialog(132)),
-        ('A Little Help - 25 Second Bundle Drop', lambda: BT.DropBundle(log=True)),
-        *_planner_vanquish_point_steps('A Little Help - 26 Vanquish Route 04', [(-16519,9556),(-14161,7403),(-10389,9222),(-9492,10399),(-7471,13112),(-6188,15259)]),
-        ('A Little Help - 27 Wait For Map Change', lambda: BT.WaitForMapToChange(map_id=640)),
-        ('A Little Help - 28 Complete Quest Dialog', lambda: BT.MoveAndDialog(Vec2f(16051.00, 15183.00), 8622855)),
+        ('A Little Help - 24 Target Sokka', lambda: BT.TargetAgentByName(agent_name='Sokka', log=True)),
+        ('A Little Help - 25 Second Sokka Dialog', lambda: BT.InteractTargetAndSendDialog(0x84)),
+        ('A Little Help - 26 Second Bundle Drop', lambda: BT.DropBundle(log=True)),
+        *_planner_vanquish_point_steps('A Little Help - 27 Vanquish Route 04', [(-16519,9556),(-14161,7403),(-10389,9222),(-9492,10399),(-7471,13112),(-6188,15259)]),
+        ('A Little Help - 28 Wait For Map Change', lambda: BT.WaitForMapToChange(map_id=640)),
+        ('A Little Help - 29 Complete Quest Dialog', lambda: BT.MoveAndDialog(Vec2f(16051.00, 15183.00), 8622855)),
     ]
 
 
