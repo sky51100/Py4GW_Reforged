@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 
 import PySkillbar
 import PySystem
+import PyUIManager
 from Py4GWCoreLib import (
     Agent,
     ConsoleLog,
@@ -423,9 +424,11 @@ def _select_and_equip_reward_skill(slot: int = 8) -> BehaviorTree:
             )
             return BehaviorTree.NodeState.SUCCESS
 
-        skill_frame = reward_window.find_child(8 + int(slot))
+        # Use the native child lookup here. The reward window is dynamic and
+        # its children can change while selecting a skill.
+        skill_frame = reward_window.child_native(8 + int(slot))
 
-        if skill_frame is None or not skill_frame.is_usable:
+        if not skill_frame.is_usable:
             ConsoleLog(
                 MODULE_NAME,
                 f"Skill reward slot {slot} was not found; continuing.",
@@ -433,7 +436,13 @@ def _select_and_equip_reward_skill(slot: int = 8) -> BehaviorTree:
             )
             return BehaviorTree.NodeState.SUCCESS
 
-        skill_frame.mouse_action(5)
+        # This frame is a button. Use the dedicated button action used by the
+        # original working EotN implementation instead of Frame.mouse_action(),
+        # which routes through the generic test_mouse_action binding.
+        PyUIManager.UIManager.button_mouse_action_by_frame_id(
+            skill_frame.frame_id,
+            5,
+        )
 
         return BehaviorTree.NodeState.SUCCESS
 
@@ -1954,7 +1963,7 @@ def _steps_BloodWashesBlood() -> list[PlannerStep]:
         ),
         (
             "Blood Washes Blood - 05 Move And Dialog",
-            lambda: BT.MoveAndDialog(Vec2f(4621.0, 5918.0), 8593409),
+            lambda: BT.MoveAndDialog(Vec2f(4621.0, 5918.0), 0x832001),
         ),
         *_planner_vanquish_point_steps(
             "Blood Washes Blood - 06 Vanquish Route 03",
@@ -2114,9 +2123,8 @@ def _move_to_egil_if_present() -> BehaviorTree:
     return BT.Selector(
         name="Blood Washes Blood - Move To Egil If Present",
         children=[
-            BT.MoveToModelID(
-                EGIL_MODEL_ID,
-                pause_on_combat=False,
+            BT.MoveAndDialogByModelID(
+                EGIL_MODEL_ID,0x832007,
                 log=True,
             ),
             BT.Succeeder(
@@ -2246,10 +2254,10 @@ def _steps_WarbandOfBrothers() -> list[PlannerStep]:
         ('Warband Of Brothers - 02 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-19094.0, 17945.0), 132)),
         ('Warband Of Brothers - 03 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=666)),
         ('Warband Of Brothers - 04 Add Loot Whitelist', lambda: BT.AddModelToLootWhitelist(25413)),
-        *_planner_vanquish_point_steps('Warband Of Brothers - 05 Vanquish Route 01', [(-13404.0, -2958.0), (-7696.0, 4576.0), (-5939.0, 3668.0), (-7823.0, 6395.0), (-5790.0, 7957.0), (-12068.0, 3611.0),(-4043.76, 6405.57) ]),
+        *_planner_vanquish_point_steps('Warband Of Brothers - 05 Vanquish Route 01', [(-13404.0, -2958.0), (-7696.0, 4576.0), (-5939.0, 3668.0), (-7823.0, 6395.0), (-4505,6687), (-12068.0, 3611.0),(-4347,6626) ]),
         ('Warband Of Brothers - 06 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(-4043.76, 6405.57), log=True)),
         ('Warband Of Brothers - 07 Wait', lambda: BT.Wait(2000)),
-        *_planner_vanquish_point_steps('Warband Of Brothers - 08 Vanquish Route 02', [(-4799.0, 6891.0), (-9905.0, 5280.0), (-13153.0, 3346.0), (-4600.0, 6494.0),(-1959.15, 7955.19), (1490.38, 8409.88), (3217.9, 8404.31), (-4608.37, 6540.96), (-16482.0, 1716.68), (-18616.02, 806.14), (-19704.0, 318.0)]),
+        *_planner_vanquish_point_steps('Warband Of Brothers - 08 Vanquish Route 02', [(-379,8914),(857,7328),(3204,8501),(-2376,8121),(-5357,6536),(-6435,7170),(-16866,543),(-19704.0, 318.0)]),
         ('Warband Of Brothers - 09 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=667)),
         ('Warband Of Brothers - 10 Add Loot Whitelist', lambda: BT.AddModelToLootWhitelist(25413)),
         *_planner_vanquish_point_steps('Warband Of Brothers - 11 Vanquish Route 03', [(-3290.88, 15187.92), (-1760.07, 12088.74), (-475.83, 11932.78), (-2164.81, 11785.08), (-2061.81, 12930.91), (-2407.16, 14068.22), (-2030.78, 12776.65)]),
@@ -2316,6 +2324,7 @@ def _steps_AssaultOnTheStrongHold() -> list[PlannerStep]:
 def _steps_FindingGadd() -> list[PlannerStep]:
     return [
         _planner_map_prep_step('Finding Gadd' + ' - 00 Map Preparation', 645),
+        ('Finding Gadd - Exit Outpost', lambda: BT.MoveAndExitMap(Vec2f(-1413,1230),target_map_name="Varajar Fells")),
         *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 1',[(-3638,-4352),(-8976,-2448),(-11746,-6048),(-17007,-6187),(-20768,-9927),(-26166,-13391),],),
         ('Finding Gadd - Unlock Gadds Camp 1', lambda: BT.WaitForMapLoad(map_id=566)),
         *_planner_vanquish_point_steps('Finding Gadd - Unlock Gadds Camp 2', [(18151, 10252), (12551, 4510), (3069, -5735), (-10915, 3126), (-19310, 6501), (-23267, 7881)]),
@@ -2392,6 +2401,8 @@ FLUCTUATION_MATRIX_MODEL_IDS = {
     25413,
 }
 
+ELUSIVE_PROTECTION_GOLEM_MODEL_ID = 6880
+
 
 def _steps_TheElusiveGolemancer() -> list[PlannerStep]:
     return [
@@ -2412,38 +2423,74 @@ def _steps_TheElusiveGolemancer() -> list[PlannerStep]:
         ('The Elusive Golemancer - 14 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(15551.0, -13705.0), log=True)),
         ('The Elusive Golemancer - 15 Wait', lambda: BT.Wait(3_000)),
         ('The Elusive Golemancer - 16 Aggressive', lambda: _aggressive()),
-        *_planner_vanquish_point_steps('The Elusive Golemancer - 17 Vanquish Route 04', [(15551.0, -13705.0), (9928.16, -10998.24), (5953.36, -9815.89), (4531.82, -9827.91), (3035.53, -9450.54), (3485.59, -11380.60)]),
-        ('The Elusive Golemancer - 18 Move And Dialog', lambda: BT.MoveAndDialog((-229.0, -12033.0), 0x84)),
-        ('The Elusive Golemancer - 19 Move', lambda: BT.Move(Vec2f(3176.96, -17026.31))),
-        ('The Elusive Golemancer - 20 Wait', lambda: BT.Wait(10_000)),
-        ('The Elusive Golemancer - 21 Move And Dialog', lambda: BT.MoveAndDialog((-2639.00, -15247.00), 0x84)),
-        ('The Elusive Golemancer - 22 Move', lambda: BT.Move(Vec2f(3468.83, -16308.18))),
-        ('The Elusive Golemancer - 23 Wait', lambda: BT.Wait(10_000)),
-        ('The Elusive Golemancer - 24 Pacifist', lambda: _pacifist()),
-        ('The Elusive Golemancer - 25 Move', lambda: BT.Move(Vec2f(5107.97, -17710.35))),
-        ('The Elusive Golemancer - 26 Flag All Heroes', lambda: BT.FlagAllHeroes(5413.07, -19400.44)),
-        ('The Elusive Golemancer - 27 Pickup Fluctuation Matrix 1', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS), max_distance=10_000.0, timeout_ms=10_000, allow_unassigned=True, interaction_interval_ms=500, log=True)),
-        ('The Elusive Golemancer - 28 Move And Interact With Gadget 1', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
-        ('The Elusive Golemancer - 29 Pixel Stack 1', lambda: _pixel_stack()),
-        ('The Elusive Golemancer - 30 Wait 1', lambda: BT.Wait(5_000)),
-        ('The Elusive Golemancer - 31 Drop Bundle 1', lambda: BT.DropBundle(log=True)),
-        ('The Elusive Golemancer - 32 Pickup Fluctuation Matrix 2', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS), max_distance=10_000.0, timeout_ms=10_000, allow_unassigned=True, interaction_interval_ms=500, log=True)),
-        ('The Elusive Golemancer - 33 Wait 2', lambda: BT.Wait(1_000)),
-        ('The Elusive Golemancer - 34 Move And Interact With Gadget 2', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
-        ('The Elusive Golemancer - 35 Pixel Stack 2', lambda: _pixel_stack()),
-        ('The Elusive Golemancer - 36 Wait 3', lambda: BT.Wait(5_000)),
-        ('The Elusive Golemancer - 37 Drop Bundle 2', lambda: BT.DropBundle(log=True)),
-        ('The Elusive Golemancer - 38 Pickup Fluctuation Matrix 3', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS), max_distance=10_000.0, timeout_ms=10_000, allow_unassigned=True, interaction_interval_ms=500, log=True)),
-        ('The Elusive Golemancer - 39 Wait 4', lambda: BT.Wait(1_000)),
-        ('The Elusive Golemancer - 40 Move And Interact With Gadget 3', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
-        ('The Elusive Golemancer - 41 Pixel Stack 3', lambda: _pixel_stack()),
-        ('The Elusive Golemancer - 42 Wait 5', lambda: BT.Wait(5_000)),
-        ('The Elusive Golemancer - 43 Drop Bundle 3', lambda: BT.DropBundle(log=True)),
-        ('The Elusive Golemancer - 44 Vanquish Final Room', lambda: BT.VanquishNode([(6882.36, -20769.41), (6566.0, -21425.0)], clear_area_radius=Range.Earshot.value)),
-        ('The Elusive Golemancer - 45 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=660)),
-        ('The Elusive Golemancer - 46 Aggressive', lambda: _aggressive()),
-        *_planner_vanquish_point_steps('The Elusive Golemancer - 47 Vanquish Route 05', [(-12164.0, 10409.53), (-12584.28, 13570.28), (-15062.15, 16139.62), (-18265.0, 13647.0)]),
-        ('The Elusive Golemancer - 48 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=640)),
+
+        # Keep the first original waypoint, then activate and follow the protection
+        # golem instead of using the old fixed waypoints at (9928, -10998) and
+        # (5953, -9815). The final old point is retained as the follow exit area.
+        *_planner_vanquish_point_steps(
+            'The Elusive Golemancer - 17 Approach Protection Golem',
+            [(15551.0, -13705.0)],
+        ),
+        (
+            'The Elusive Golemancer - 18 Interact With Protection Golem',
+            lambda: BT.MoveAndInteractByModelID(
+                ELUSIVE_PROTECTION_GOLEM_MODEL_ID,
+                log=True,
+            ),
+        ),
+        ('The Elusive Golemancer - 19 Wait For Protection Golem', lambda: BT.Wait(1_000)),
+        (
+            'The Elusive Golemancer - 20 Follow Protection Golem',
+            lambda: BT.FollowModel(
+                ELUSIVE_PROTECTION_GOLEM_MODEL_ID,
+                follow_range=Range.Nearby.value,
+                timeout_ms=120_000,
+                repath_interval_ms=500,
+                repath_distance=150.0,
+                exit_by_area=((5953.36, -9815.89), 800.0),
+                log=True,
+            ),
+        ),
+        *_planner_vanquish_point_steps(
+            'The Elusive Golemancer - 21 Vanquish Route 04 After Protection Golem',
+            [
+                (4531.82, -9827.91),
+                (3054.24, -9730.68),
+                (3485.59, -11380.60),
+            ],
+        ),
+
+        ('The Elusive Golemancer - 22 Move And Dialog', lambda: BT.MoveAndDialog((-229.0, -12033.0), 0x84)),
+        ('The Elusive Golemancer - 23 Move', lambda: BT.Move(Vec2f(3176.96, -17026.31))),
+        ('The Elusive Golemancer - 24 Wait', lambda: BT.Wait(10_000)),
+        ('The Elusive Golemancer - 25 Move And Dialog', lambda: BT.MoveAndDialog((-2639.00, -15247.00), 0x84)),
+        ('The Elusive Golemancer - 26 Move', lambda: BT.Move(Vec2f(3468.83, -16308.18))),
+        ('The Elusive Golemancer - 27 Wait', lambda: BT.Wait(15_000)),
+        ('The Elusive Golemancer - 28 Pacifist', lambda: _pacifist()),
+        ('The Elusive Golemancer - 29 Move', lambda: BT.Move(Vec2f(5107.97, -17710.35))),
+        ('The Elusive Golemancer - 30 Flag All Heroes', lambda: BT.FlagAllHeroes(5413.07, -19400.44)),
+        ('The Elusive Golemancer - 31 Pickup Fluctuation Matrix 1', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS), max_distance=10_000.0, timeout_ms=10_000, allow_unassigned=True, interaction_interval_ms=500, log=True)),
+        ('The Elusive Golemancer - 32 Move And Interact With Gadget 1', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
+        ('The Elusive Golemancer - 33 Pixel Stack 1', lambda: _pixel_stack()),
+        ('The Elusive Golemancer - 34 Wait 1', lambda: BT.Wait(5_000)),
+        ('The Elusive Golemancer - 35 Drop Bundle 1', lambda: BT.DropBundle(log=True)),
+        ('The Elusive Golemancer - 36 Pickup Fluctuation Matrix 2', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS), max_distance=10_000.0, timeout_ms=10_000, allow_unassigned=True, interaction_interval_ms=500, log=True)),
+        ('The Elusive Golemancer - 37 Wait 2', lambda: BT.Wait(1_000)),
+        ('The Elusive Golemancer - 38 Move And Interact With Gadget 2', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
+        ('The Elusive Golemancer - 39 Pixel Stack 2', lambda: _pixel_stack()),
+        ('The Elusive Golemancer - 40 Wait 3', lambda: BT.Wait(2_000)),
+        ('The Elusive Golemancer - 41 Drop Bundle 2', lambda: BT.DropBundle(log=True)),
+        ('The Elusive Golemancer - 42 Pickup Fluctuation Matrix 3', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS), max_distance=10_000.0, timeout_ms=10_000, allow_unassigned=True, interaction_interval_ms=500, log=True)),
+        ('The Elusive Golemancer - 43 Wait 4', lambda: BT.Wait(1_000)),
+        ('The Elusive Golemancer - 44 Move And Interact With Gadget 3', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
+        ('The Elusive Golemancer - 45 Pixel Stack 3', lambda: _pixel_stack()),
+        ('The Elusive Golemancer - 46 Wait 5', lambda: BT.Wait(5_000)),
+        ('The Elusive Golemancer - 47 Drop Bundle 3', lambda: BT.DropBundle(log=True)),
+        ('The Elusive Golemancer - 48 Vanquish Final Room', lambda: BT.VanquishNode([(6882.36, -20769.41), (6566.0, -21425.0)], clear_area_radius=Range.Earshot.value)),
+        ('The Elusive Golemancer - 49 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=660)),
+        ('The Elusive Golemancer - 50 Aggressive', lambda: _aggressive()),
+        *_planner_vanquish_point_steps('The Elusive Golemancer - 51 Vanquish Route 05', [(-12164.0, 10409.53), (-12584.28, 13570.28), (-15062.15, 16139.62), (-18265.0, 13647.0)]),
+        ('The Elusive Golemancer - 52 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=640)),
     ]
 
 
