@@ -17,6 +17,7 @@ from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
 from Py4GWCoreLib.Py4GWcorelib import ConsoleLog
 from Py4GWCoreLib.Routines import Routines
 from Py4GWCoreLib.routines_src.Agents import Agents as RoutinesAgents
+from Sources.Sky.Support import draw_support_button
 from Sources.ApoSource.ApoBottingLib import wrappers as BT
 from Sources.frenkeyLib.Polymock import combat, state
 from Sources.frenkeyLib.Polymock.data import PolymockPieces, Polymock_Quests
@@ -5719,6 +5720,9 @@ def draw_portal_ui() -> None:
     toggle_label = "Hide Route Controls" if _show_route_controls else "Show Route Controls"
     if PyImGui.button(f"{toggle_label}##SU_BT_ToggleRouteControls"):
         _show_route_controls = not _show_route_controls
+
+    PyImGui.same_line(0.0, -1.0)
+    draw_support_button(unique_id="SkyKoFiSkillUnlocker")
 
     if _show_route_controls:
         current_step = str(ensure_botting_tree().GetBlackboardValue("current_step_name", "") or "")

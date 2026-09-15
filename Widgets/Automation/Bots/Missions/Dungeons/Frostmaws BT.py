@@ -29,6 +29,7 @@ from Py4GWCoreLib.routines_src.behaviourtrees_src.constants.lists import (
     CONSUMABLE_UPKEEPS as ALL_CONSUMABLE_UPKEEPS,
 )
 from Py4GWCoreLib.routines_src.behaviourtrees_src.shared import BTShared
+from Sources.Sky.Support import attach_botting_tree_support
 from Sources.ApoSource.ApoBottingLib import wrappers as BT
 from Widgets.System.Messaging import (
     get_inventory_count,
@@ -3815,6 +3816,7 @@ def main() -> None:
     _sync_runtime_upkeeps()
     tree.tick()
     _tick_direct_pcon_upkeep()
+    attach_botting_tree_support(tree)
     tree.UI.draw_window(icon_path=TEXTURE,
         main_child_dimensions=(550, 390),
         extra_tabs=[("Statistics", _draw_statistics), ("Config", _draw_run_config)],

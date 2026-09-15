@@ -28,6 +28,7 @@ from Py4GWCoreLib.py4gwcorelib_src.system_settings.loot_filters.controller impor
 from Py4GWCoreLib.routines_src.BehaviourTrees import BT as RoutinesBT
 from Py4GWCoreLib.routines_src.behaviourtrees_src.items import BTItems
 from Py4GWCoreLib.routines_src.behaviourtrees_src.shared import BTShared
+from Sources.Sky.Support import attach_botting_tree_support
 from Sources.ApoSource.ApoBottingLib import wrappers as BT
 
 
@@ -3022,6 +3023,7 @@ def main() -> None:
 
     tree = ensure_botting_tree()
     tree.tick()
+    attach_botting_tree_support(tree)
     tree.UI.draw_window(
         icon_path=TEXTURE,
         main_child_dimensions=(440, 390),

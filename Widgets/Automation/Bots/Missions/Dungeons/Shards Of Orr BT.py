@@ -19,6 +19,7 @@ from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
 from Py4GWCoreLib.enums_src.Player_enums import PlayerStatus
 from Py4GWCoreLib.routines_src.behaviourtrees_src.constants.lists import CONSET_UPKEEPS, CONSUMABLE_UPKEEPS as ALL_CONSUMABLE_UPKEEPS
 from Py4GWCoreLib.routines_src.behaviourtrees_src.shared import BTShared
+from Sources.Sky.Support import attach_botting_tree_support
 from Sources.ApoSource.ApoBottingLib import wrappers as BT
 from Widgets.System.Messaging import get_inventory_count, reset_inventory_count, get_inventory_state, reset_inventory_state
 import PyImGui
@@ -2668,8 +2669,61 @@ def ResetTorchCombatPolicy() -> BehaviorTree:
     )
 
 
+def _bundle_released_check(name: str) -> BehaviorTree:
+    """Succeed only after the player is confirmed to no longer hold a bundle."""
+
+    def _check() -> BehaviorTree.NodeState:
+        return (
+            BehaviorTree.NodeState.SUCCESS
+            if not _is_holding_bundle()
+            else BehaviorTree.NodeState.FAILURE
+        )
+
+    return BehaviorTree(
+        BehaviorTree.ConditionNode(
+            name=name,
+            condition_fn=_check,
+        )
+    )
+
+
+def _verified_drop_bundle(
+    name: str,
+    *,
+    log: bool,
+    attempts: int = 3,
+) -> BehaviorTree:
+    """Drop a held bundle and verify that the game actually released it.
+
+    BT.DropBundle() only sends the drop action. For torch mechanics we also
+    confirm that Agent.IsHoldingItem() becomes false before continuing.
+    """
+    children: list[BehaviorTree] = [
+        _bundle_released_check(f'{name} - Already Released')
+    ]
+
+    for attempt in range(1, max(1, int(attempts)) + 1):
+        children.append(
+            BT.Sequence(
+                name=f'{name} - Attempt {attempt}',
+                children=[
+                    BT.DropBundle(log=log),
+                    BT.Wait(250 + ((attempt - 1) * 150)),
+                    _bundle_released_check(
+                        f'{name} - Verify Attempt {attempt}'
+                    ),
+                ],
+            )
+        )
+
+    return BT.Selector(
+        name=name,
+        children=children,
+    )
+
+
 def DropTorchForCombat(log: bool = False) -> BehaviorTree:
-    """Drop the torch for martial combat and remember where it was released."""
+    """Drop the torch for martial combat and verify it was actually released."""
 
     def _build(_node: BehaviorTree.Node) -> BehaviorTree:
         global _last_torch_drop_position
@@ -2691,20 +2745,27 @@ def DropTorchForCombat(log: bool = False) -> BehaviorTree:
         except Exception:
             _last_torch_drop_position = None
 
-        return BT.DropBundle(log=log)
+        return _verified_drop_bundle(
+            'Drop Torch For Combat - Confirm Release',
+            log=log,
+        )
 
     return BT.Subtree(name='Drop Torch For Combat If Required', subtree_fn=_build)
 
 
 def DiscardTorch(log: bool = True) -> BehaviorTree:
-    """Drop the torch once the active mechanic no longer needs it."""
+    """Discard the torch and do not continue until release is confirmed."""
 
     def _build(_node: BehaviorTree.Node) -> BehaviorTree:
         global _last_torch_drop_position
         _last_torch_drop_position = None
         if not _is_holding_bundle():
             return BT.Succeeder('No Torch Bundle To Discard')
-        return BT.DropBundle(log=log)
+
+        return _verified_drop_bundle(
+            'Discard Torch After Mechanic - Confirm Release',
+            log=log,
+        )
 
     return BT.Subtree(name='Discard Torch After Mechanic', subtree_fn=_build)
 
@@ -2753,18 +2814,14 @@ def _torch_aware_combat_node(
     def _tick(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
         nonlocal combat_tree, drop_tree
 
-        # Drop the torch as soon as the BT enters combat. With pause_on_combat=True,
-        # movement stops when COMBAT_ACTIVE is set, so waiting only for the player
-        # to enter the close trigger radius can deadlock a martial build at range.
-        combat_active = bool(node.blackboard.get("COMBAT_ACTIVE", False))
-
+        # Keep carrying the torch while travelling. Martial leaders only drop it
+        # once a living enemy is genuinely inside the dedicated combat radius.
+        # After the verified drop, normal Vanquish / HeroAI combat owns the fight
+        # until the combat step completes, then the existing PickupTorch() resumes.
         should_drop_torch = (
             _resolve_torch_combat_policy()
             and _is_holding_bundle()
-            and (
-                combat_active
-                or _enemy_in_torch_combat_range(trigger_radius)
-            )
+            and _enemy_in_torch_combat_range(trigger_radius)
         )
 
         if should_drop_torch:
@@ -4054,8 +4111,8 @@ def Level1_EnterLevel2() -> BehaviorTree:
         children=[
             _map_guarded_point(name=name, map_id=SOO_LEVEL_1, child=BT.Sequence(name=f'{name} And Load Level 2',
             children=[
-            BT.MoveAndExitMap(Vec2f(20400.5, 1300.0), target_map_id=SOO_LEVEL_2, log=False),
-            BT.WaitForMapLoad(map_id=SOO_LEVEL_2, timeout_ms=60000)]), skip_if_in_maps=(SOO_LEVEL_2,)),
+            BT.MoveAndExitMap(Vec2f(20500.5, 1300.0), target_map_id=SOO_LEVEL_2, log=False),
+            BT.WaitForMapLoad(map_id=SOO_LEVEL_2, timeout_ms=60000)]),),
             _mark_l2_start_node(),
             BT.Wait(2_000),
         ],
@@ -4814,6 +4871,7 @@ def main() -> None:
     _sync_consumable_upkeeps()
     tree.tick()
     _tick_direct_pcon_upkeep()
+    attach_botting_tree_support(tree)
     tree.UI.draw_window(icon_path=TEXTURE, iconwidth=96, main_child_dimensions=(550, 380), extra_tabs=[('Statistics', _draw_statistics), ('Config', _draw_run_config)])
 
 
