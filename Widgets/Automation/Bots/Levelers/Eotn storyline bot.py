@@ -3015,9 +3015,10 @@ def _heart_cyndr_encounter() -> BehaviorTree:
                 HEART_CYNDR_XANDRA_FLAG.y,
             ),
             BT.Wait(400),
-            BT.TargetAgentByModelID(HEART_CYNDR_MODEL_ID, log=True),
+            BT.TargetAgentByModelIDAndInteract(HEART_CYNDR_MODEL_ID, log=True),
             _heart_xandra_cyndr_skill_sequence(),
             _heart_wait_until_cyndr_dead(),
+            BT.Wait(10000)
         ],
     )
 
@@ -3068,8 +3069,8 @@ def _steps_HeartofTheShiverspeak() -> list[PlannerStep]:
         ('HeartofTheShiverspeak - 14 Move to Cyndr Room', lambda: BT.Move([(-5499,-11675),(-7515.01, -17050.18)], pause_on_combat=False)),
         ('HeartofTheShiverspeak - 15 Wait For Cyndr', lambda: _heart_wait_for_cyndr()),
         ('HeartofTheShiverspeak - 16 Defeat Cyndr', lambda: _heart_cyndr_encounter()),
-        ('HeartofTheShiverspeak - 17 Exit Level 3', lambda: BT.MoveAndInteract(Vec2f(-5739.00, -17127.00))),
-        ('HeartofTheShiverspeak - 18 Move To Exit', lambda: BT.MoveAndInteract(Vec2f(-6592.00, -16928.00),)),
+        ('HeartofTheShiverspeak - 17 Exit Level 3', lambda: BT.MoveAndInteractWithGadget(Vec2f(-5739.00, -17127.00))),
+        ('HeartofTheShiverspeak - 18 Move To Exit', lambda: BT.MoveAndInteractWithGadget(Vec2f(-6592.00, -16928.00),)),
         ('HeartofTheShiverspeak - 19 Wait For Map Change', lambda: BT.WaitForMapToChange(map_id=625, timeout_ms=190_000)),
         ('HeartofTheShiverspeak - 20 Talk to Jalis', lambda: BT.MoveAndDialog(Vec2f(-4874.00, 17584.00),0x833107)),
         ('HeartofTheShiverspeak - 21 Talk to Jalis for next step', lambda: BT.SendDialog(0x84)),
