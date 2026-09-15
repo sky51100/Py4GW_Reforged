@@ -6,6 +6,7 @@ import Py4GW
 import PyPing
 from Py4GWCoreLib import Player, GLOBAL_CACHE, SpiritModelID, Timer, Agent, Routines, Range, Allegiance, AgentArray, Utils
 from Py4GWCoreLib import Weapon, Effects
+from Py4GWCoreLib.UIManager import UIManager
 from Py4GWCoreLib.enums import SPIRIT_BUFF_MAP, ModelID
 from Py4GWCoreLib.GlobalCache.HexRemovalPriority import get_hexed_ally_for_removal
 from Py4GWCoreLib.EnemyBlacklist import EnemyBlacklist
@@ -2119,6 +2120,13 @@ class CombatClass:
         """
         Execute the first castable skill in the prioritized skill order.
         """
+        # NPC dialogs can stay open after SendDialog has already returned.
+        # Never cast a skill or fall through to auto-attack while that UI is open.
+        if UIManager.IsNPCDialogVisible():
+            self.in_casting_routine = False
+            self.ResetSkillPointer()
+            return False
+
         if not ooc:
             self._maybe_call_leader_selected_target(cached_data)
 
