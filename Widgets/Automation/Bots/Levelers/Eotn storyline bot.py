@@ -3024,8 +3024,8 @@ def _heart_cyndr_encounter() -> BehaviorTree:
 
 def _steps_HeartofTheShiverspeak() -> list[PlannerStep]:
     return [
-        *_planner_vanquish_point_steps('HeartofTheShiverspeak - 01', [(16656,10285),(14959,6248),(11603,7924),(11184,6397),(11129,2735),(7633,832),], clear_area_radius=Range.Earshot.value),
-        ('HeartofTheShiverspeak - 02 Move And Dialog', lambda: BT.MoveAndDialogByModelID(6271, 0x833104)),
+        *_planner_vanquish_point_steps('HeartofTheShiverspeak - 01', [(16656,10285),(14959,6248),(11603,7924),(10251.43, 7158.36),(11184,6397),(11129,2735),(7633,832),], clear_area_radius=Range.Nearby.value),
+        ('HeartofTheShiverspeak - 02 Move And Dialog', lambda: BT.MoveAndDialogByModelID(HEART_BUDGER_MODEL_ID, 0x833104)),
         *_planner_vanquish_point_steps('HeartofTheShiverspeak - 03 Kill', [(10241,-1296),(11520,-2522),]),
         (
             'HeartofTheShiverspeak - 04 Destroy Wall 1',
