@@ -3052,8 +3052,8 @@ def _steps_HeartofTheShiverspeak() -> list[PlannerStep]:
             'HeartofTheShiverspeak - 11 Destroy Wall 3',
             lambda: _heart_destroy_wall(
                 name='Heart Wall 3',
-                wall_pos=Vec2f(1273,-17228),
-                verify_pos=Vec2f(728,-16696),
+                wall_pos=Vec2f(1264.75, -17241.79),
+                verify_pos=Vec2f(686,-16616),
             ),
         ),
         *_planner_vanquish_point_steps('HeartofTheShiverspeak - 12 Vanquish Route 04', [(828,-16794),(-722,-14645),(-1331,-13489),(-4122,-10775),]),
