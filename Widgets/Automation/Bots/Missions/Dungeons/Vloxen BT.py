@@ -25,6 +25,7 @@ from Py4GWCoreLib.routines_src.behaviourtrees_src.constants.lists import (
     CONSUMABLE_UPKEEPS as ALL_CONSUMABLE_UPKEEPS,
 )
 from Py4GWCoreLib.routines_src.behaviourtrees_src.shared import BTShared
+from Sources.Sky.DungeonParty import DungeonPartyConfig
 from Sources.Sky.Support import attach_botting_tree_support
 from Sources.ApoSource.ApoBottingLib import wrappers as BT
 from Widgets.System.Messaging import (
@@ -76,6 +77,7 @@ _GB_SNAPSHOT_SECTION = "Glacial Blades Snapshot"
 _GB_RUN_SECTION = "Glacial Blades Run"
 _CHAR_NAMES_SECTION = "Character Names"
 _settings = Settings(f"{INI_PATH}/{INI_FILENAME}", "global")
+_dungeon_party = DungeonPartyConfig(_settings)
 _settings_loaded = False
 
 _use_hard_mode = True
@@ -2812,7 +2814,7 @@ def PrepareRun() -> BehaviorTree:
         random_travel=True,
         children=[
             InventoryCheckAndMaintenance(),
-            BT.CreateParty(hero_ids=[4, 24, 25, 14], multibox_invite=True, timeout_ms=30_000, log=True),
+            _dungeon_party.create_party_node(multibox_invite=True, timeout_ms=30_000, log=True),
             BT.AbandonQuest(quest_id=QUEST_ID, multi_account=True, include_self=True, timeout_ms=10_000, log=True),
             BT.MoveAndDialog(
                 Vec2f(-24734.23, 11842.46),
@@ -3200,7 +3202,7 @@ def main() -> None:
     attach_botting_tree_support(tree)
     tree.UI.draw_window(icon_path=TEXTURE,
         main_child_dimensions=(430, 390),
-        extra_tabs=[("Statistics", _draw_statistics), ("Config", _draw_run_config)],
+        extra_tabs=[("Statistics", _draw_statistics), ("Party", _dungeon_party.draw_tab), ("Config", _draw_run_config)],
     )
 
 

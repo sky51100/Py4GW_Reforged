@@ -26,6 +26,7 @@ from Py4GWCoreLib.routines_src.behaviourtrees_src.constants.lists import (
     CONSUMABLE_UPKEEPS as ALL_CONSUMABLE_UPKEEPS,
 )
 from Py4GWCoreLib.routines_src.behaviourtrees_src.shared import BTShared
+from Sources.Sky.DungeonParty import DungeonPartyConfig
 from Sources.Sky.Support import attach_botting_tree_support
 from Sources.ApoSource.ApoBottingLib import wrappers as BT
 from Widgets.System.Messaging import get_inventory_count, reset_inventory_count, get_inventory_state, reset_inventory_state
@@ -191,6 +192,7 @@ _INVENTORY_QUERY_POLL_MS = 200
 _INVENTORY_QUERY_TIMEOUT_MS = 10_000
 
 _settings = Settings(f"{INI_PATH}/{INI_FILENAME}", "global")
+_dungeon_party = DungeonPartyConfig(_settings)
 _settings_loaded = False
 _statistics_loaded = False
 
@@ -2119,7 +2121,7 @@ def PreparePartyAndSupplies() -> BehaviorTree:
         random_travel=True,
         children=[
             StartupInventoryCheck(),
-            BT.CreateParty(multibox_invite=True, timeout_ms=30_000, log=True),
+            _dungeon_party.create_party_node(multibox_invite=True, timeout_ms=30_000, log=True),
             BT.AbandonQuest(
                 quest_id=TEKKS_QUEST_ID,
                 multi_account=True,
@@ -2794,7 +2796,7 @@ def PrepareNextBogrootRun() -> BehaviorTree:
         children=[
             BT.IsCurrentMap(map_id=GADDS_ENCAMPMENT, log=True),
             BT.IsQuestState(quest_id=TEKKS_QUEST_ID, state="active", log=True),
-            BT.CreateParty(multibox_invite=True, timeout_ms=30_000, log=True),
+            _dungeon_party.create_party_node(multibox_invite=True, timeout_ms=30_000, log=True),
             _runtime_difficulty_node(),
             _runtime_restock_node(),
             TravelToTekksStart(),
@@ -2956,6 +2958,7 @@ def main() -> None:
         main_child_dimensions=(550, 400),
         extra_tabs=[
             ("Statistics", _draw_statistics),
+            ("Party", _dungeon_party.draw_tab),
             ("Run Config", _draw_run_config),
         ],
     )

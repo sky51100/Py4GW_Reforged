@@ -23,6 +23,7 @@ from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
 from Py4GWCoreLib.routines_src.behaviourtrees_src.constants.lists import CONSET_UPKEEPS, CONSUMABLE_UPKEEPS as ALL_CONSUMABLE_UPKEEPS
 from Py4GWCoreLib.routines_src.behaviourtrees_src.shared import BTShared
 from Py4GWCoreLib.HeroAI.command_api import HeroAICommandAPI
+from Sources.Sky.DungeonParty import DungeonPartyConfig
 from Sources.Sky.Support import attach_botting_tree_support
 from Sources.ApoSource.ApoBottingLib import wrappers as BT
 from Widgets.System.Messaging import get_inventory_count, reset_inventory_count, get_inventory_state, reset_inventory_state
@@ -67,7 +68,6 @@ LITTLE_WORKSHOP_OF_HORRORS = 827  # 0x33B
 DWARVEN_BLESSING_DIALOG = 0x84
 
 DUNGEON_KEY_MODEL_ID = 25410
-OOLA_PARTY_HERO_IDS = [4, 21, 1, 15]  # Master of Whispers, Livia, Norgu, Razah
 FLUX_MATRIX_MODEL_ID = 22782
 FLUX_GOLEM_MODEL_ID = 6885  # Malfunctioning Enduring Golem
 
@@ -98,6 +98,7 @@ _INVENTORY_QUERY_POLL_MS = 200
 _INVENTORY_QUERY_TIMEOUT_MS = 10_000
 
 _settings_ini = Settings(f"{INI_PATH}/{INI_FILENAME}", "global")
+_dungeon_party = DungeonPartyConfig(_settings_ini)
 _settings_loaded = False
 _statistics_loaded = False
 
@@ -3487,8 +3488,7 @@ def PreparePartyAndSupplies() -> BehaviorTree:
         children=[
             StartupInventoryCheck(),
 
-            BT.CreateParty(
-                hero_ids=OOLA_PARTY_HERO_IDS,
+            _dungeon_party.create_party_node(
                 multibox_invite=True,
                 timeout_ms=30_000,
                 log=True,
@@ -4463,6 +4463,7 @@ def main() -> None:
         main_child_dimensions=(550, 380),
         extra_tabs=[
             ("Statistics", _draw_statistics),
+            ("Party", _dungeon_party.draw_tab),
             ("Config", _draw_run_config),
         ],
     )

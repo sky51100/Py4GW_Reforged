@@ -29,6 +29,7 @@ from Py4GWCoreLib.routines_src.behaviourtrees_src.constants.lists import (
     CONSUMABLE_UPKEEPS as ALL_CONSUMABLE_UPKEEPS,
 )
 from Py4GWCoreLib.routines_src.behaviourtrees_src.shared import BTShared
+from Sources.Sky.DungeonParty import DungeonPartyConfig
 from Sources.Sky.Support import attach_botting_tree_support
 from Sources.ApoSource.ApoBottingLib import wrappers as BT
 from Widgets.System.Messaging import (
@@ -122,6 +123,7 @@ FROSTMAW_DROP_TRACKERS: dict[str, dict[str, object]] = {
 }
 
 _settings = Settings(f"{INI_PATH}/{INI_FILENAME}", "global")
+_dungeon_party = DungeonPartyConfig(_settings)
 _settings_loaded = False
 _statistics_loaded = False
 
@@ -3146,7 +3148,7 @@ def PrepareRun() -> BehaviorTree:
         children=[
             _travel_all_accounts(SIFHALLA, "frostmaw_start"),
             InventoryCheckAndMaintenance(),
-            BT.CreateParty(multibox_invite=True, timeout_ms=30_000, log=True),
+            _dungeon_party.create_party_node(multibox_invite=True, timeout_ms=30_000, log=True),
             BT.AbandonQuest(quest_id=QUEST_ID, multi_account=True, include_self=True, timeout_ms=10_000, log=True),
             _runtime_difficulty_node(),
             _runtime_restock_node(),
@@ -3646,7 +3648,7 @@ def PrepareNextDungeonRun() -> BehaviorTree:
         children=[
             BT.IsCurrentMap(map_id=SIFHALLA, log=True),
             BT.IsQuestState(quest_id=QUEST_ID, state='active', log=True),
-            BT.CreateParty(multibox_invite=True, timeout_ms=30000, log=True),
+            _dungeon_party.create_party_node(multibox_invite=True, timeout_ms=30_000, log=True),
             _runtime_difficulty_node(),
             _runtime_restock_node(),
             TravelFrostmaw(),
@@ -3819,7 +3821,7 @@ def main() -> None:
     attach_botting_tree_support(tree)
     tree.UI.draw_window(icon_path=TEXTURE,
         main_child_dimensions=(550, 390),
-        extra_tabs=[("Statistics", _draw_statistics), ("Config", _draw_run_config)],
+        extra_tabs=[("Statistics", _draw_statistics), ("Party", _dungeon_party.draw_tab), ("Config", _draw_run_config)],
     )
 
 

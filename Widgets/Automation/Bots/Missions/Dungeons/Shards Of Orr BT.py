@@ -19,6 +19,7 @@ from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
 from Py4GWCoreLib.enums_src.Player_enums import PlayerStatus
 from Py4GWCoreLib.routines_src.behaviourtrees_src.constants.lists import CONSET_UPKEEPS, CONSUMABLE_UPKEEPS as ALL_CONSUMABLE_UPKEEPS
 from Py4GWCoreLib.routines_src.behaviourtrees_src.shared import BTShared
+from Sources.Sky.DungeonParty import DungeonPartyConfig
 from Sources.Sky.Support import attach_botting_tree_support
 from Sources.ApoSource.ApoBottingLib import wrappers as BT
 from Widgets.System.Messaging import get_inventory_count, reset_inventory_count, get_inventory_state, reset_inventory_state
@@ -126,6 +127,7 @@ _INVENTORY_QUERY_TIMEOUT_MS = 10_000
 # Global scope is intentional: run configuration and multibox statistics are
 # shared by every account using this bot.
 _settings_ini = Settings(f'{INI_PATH}/{INI_FILENAME}', 'global')
+_dungeon_party = DungeonPartyConfig(_settings_ini)
 _settings_loaded = False
 
 _use_hard_mode = True
@@ -3714,7 +3716,7 @@ def PreparePartyAndSupplies() -> BehaviorTree:
             # Keep inventory maintenance and party formation in the same ordered
             # subtree so the planner cannot form the party before maintenance.
             StartupInventoryCheck(),
-            BT.CreateParty(multibox_invite=True, timeout_ms=30_000, log=True),
+            _dungeon_party.create_party_node(multibox_invite=True, timeout_ms=30_000, log=True),
             BT.AbandonQuest(quest_id=LOST_SOULS_QUEST_ID, multi_account=True, include_self=True, timeout_ms=10000, log=True),
             _runtime_difficulty_node(),
             _runtime_restock_node(),
@@ -4676,7 +4678,7 @@ def PrepareNextDungeonRun() -> BehaviorTree:
         children=[
             BT.IsCurrentMap(map_id=VLOXS_FALL, log=True),
             BT.IsQuestState(quest_id=LOST_SOULS_QUEST_ID, state='active', log=True),
-            BT.CreateParty(multibox_invite=True, timeout_ms=30000, log=True),
+            _dungeon_party.create_party_node(multibox_invite=True, timeout_ms=30_000, log=True),
             _runtime_difficulty_node(),
             _runtime_restock_node(),
             TravelToShandra(),
@@ -4872,7 +4874,7 @@ def main() -> None:
     tree.tick()
     _tick_direct_pcon_upkeep()
     attach_botting_tree_support(tree)
-    tree.UI.draw_window(icon_path=TEXTURE, iconwidth=96, main_child_dimensions=(550, 380), extra_tabs=[('Statistics', _draw_statistics), ('Config', _draw_run_config)])
+    tree.UI.draw_window(icon_path=TEXTURE, iconwidth=96, main_child_dimensions=(550, 380), extra_tabs=[('Statistics', _draw_statistics), ('Party', _dungeon_party.draw_tab), ('Config', _draw_run_config)])
 
 
 # endregion
