@@ -1,8 +1,10 @@
-# Reputation Farmer BT - All-In-One Faction / Title Farmer (Solo build).
-# Single account + hero team only. The multibox variant lives in
-# Reputation Farmer Multibox BT.py; re-merge the two once the
-# SharedCommandType.GetBlessing dispatch in Widgets/System/Messaging.py is
-# fixed by the messaging-layer owners (elevated, not patched here).
+# Reputation Farmer Multibox BT - Faction / Title Farmer (Multibox build).
+# Split from Reputation Farmer BT.py while the SharedCommandType.GetBlessing
+# dispatch in Widgets/System/Messaging.py is broken (elevated to the
+# messaging-layer owners, not patched here). Non-faction shrine blessings fan
+# out through TargetNearestAndAutoDialog (TakeDialogWithTarget / SendDialog
+# receivers), which ARE wired, instead of the dead GetBlessing path. Re-merge
+# into the solo file once GetBlessing is fixed.
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -18,19 +20,25 @@ import PySystem
 
 from Py4GWCoreLib import GLOBAL_CACHE, HeroType, Map, Player, PyImGui
 from Py4GWCoreLib.BottingTree import BottingTree
+from Py4GWCoreLib.Listeners import Listeners
 from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
+from Py4GWCoreLib.enums_src.Multiboxing_enums import SharedCommandType
 from Py4GWCoreLib.enums_src.Title_enums import TitleID, TITLE_TIERS
 from Py4GWCoreLib.routines_src.BehaviourTrees import BT as CoreBT
 from Sources.ApoSource.ApoBottingLib import wrappers as BT
 from Sources.aC_Scripts.aC_api.Verify_Blessing import Blessings
 
-MODULE_NAME = "Reputation Farmer BT"
+MODULE_NAME = "Reputation Farmer Multibox BT"
 MODULE_ICON = "Assets/Textures/Skill_Icons/[1887] - Lightbringers Insight.jpg"
-ROUTINE_NAME = "ReputationFarmerSequence"
+ROUTINE_NAME = "ReputationFarmerMultiboxSequence"
 
 FACTION_GOAL = 10_000
 VQ_MAX_RUNS = 6
 RUN_RETRY_TIMEOUT_MS = 30 * 60 * 1000
+RESIGN_RETRY_TIMEOUT_MS = 3 * 60 * 1000
+LEADER_DEATH_GRACE_MS = 30 * 1000
+RESIGN_SUPPRESS_STALE_MS = 120 * 1000
+DIAGNOSTIC_HEARTBEAT_MS = 15 * 1000
 BLESSING_GOLD = 500
 
 # Hero team setup
@@ -90,6 +98,29 @@ class Faction(Enum):
 class Blessing:
     pos: Tuple[float, float]
     dialog_id: int = 0x84
+    # Fire-and-forget dialog when False: no effect confirmation and no
+    # "already confirmed" skip. The Deldrimor route takes only its first
+    # shrine this way (dialog and move on); routes taking several same-type
+    # shrines would need it too, since every shrine confirms against the same
+    # effect-ID tuple and shrine 1's still-active blessing would make shrine
+    # 2 look already-taken.
+    confirm: bool = True
+
+
+@dataclass
+class RouteAction:
+    """One extra step executed after a segment's kill path.
+
+    Set exactly one field per instance; list order is execution order:
+    a gadget interaction, a plain wait, an out-of-combat wait, or a loot
+    pass. Used for dungeon mechanics (door lock, boss lock, chest) on the
+    Deldrimor route; every other route leaves this empty.
+    """
+    name: str = ""
+    gadget_pos: Optional[Tuple[float, float]] = None
+    wait_ms: int = 0
+    wait_out_of_combat: bool = False
+    loot: bool = False
 
 
 @dataclass
@@ -97,6 +128,7 @@ class RouteSegment:
     name: str = ""
     blessing: Optional[Blessing] = None
     path: Sequence[Tuple[float, float]] = ()
+    actions: Sequence[RouteAction] = ()
 
 
 @dataclass
@@ -188,6 +220,9 @@ VANGUARD_ROUTE = Route(
 )
 
 # Asuran - Magus Stones / Rata Sum (Asuran title).
+# Full farm ported from "Asura title farm by Wick Divinus.py": one shrine
+# blessing per leg and the complete kill path, including the final sweep that
+# ends on the Krait Boss Warrior before the resign.
 ASURAN_ROUTE = Route(
     key="asuran",
     name="Asuran",
@@ -196,36 +231,55 @@ ASURAN_ROUTE = Route(
     outpost_id=640,      # Rata Sum
     explorable_id=569,   # Magus Stones
     exit_pos=(-6062.0, -2688.0),
-    blessing_points=[
-        Blessing((14901.87, 13126.21)),
-    ],
-    kill_path=[
-        (18825, 6180), (18447, 4537), (18331, 2108), (17526, 143),
-        (17205, -1355), (17542, -4865), (15562, -5524), (16270, -6288),
-        (17501, -5545), (18111, -8030), (18409, -8474), (18613, -11799),
-        (17154, -15669), (14250, -16744), (12186, -14139), (12540, -13440),
-        (13234, -9948), (8875, -9065), (8647, -5852), (6939, -3629),
-        (8711, -6046), (7616, -8978), (4671, -8699), (-5203, -8280),
-        (1534, -5493), (1052, -7074), (-1029, -8724), (-3439, -10339),
-        (-3024, -12586), (-742, -13786), (-2755, -14099), (-3393, -15633),
-        (-4635, -16643), (-7814, -17796), (-10109, -17520), (-9111, -17237),
-        (-10963, -15506), (-13975, -17857), (-11912, -10641), (-8760, -9933),
-        (-14030, -9780), (-12368, -7330), (-16527, -8175), (-17391, -5984),
-        (-15704, -3996), (-16609, -2607), (-16480, 2522), (-17090, 5252),
-        (-18640, 8724), (-18484, 12021), (-17180, 13093), (-15072, 14075),
-        (-11888, 15628), (-12043, 18463), (-8876, 17415), (-4770, 20353),
-        (-10970, 16860), (-9301, 15054), (-9942, 12561), (-9786, 10297),
-        (-5379, 16642), (-2828, 18210), (-4246, 16728), (-2974, 14197),
-        (-5228, 12475), (-6756, 12380), (-3468, 10837), (-3804, 8017),
-        (-3288, 7276), (-1346, 12360), (874, 14367), (3572, 13698),
-        (5899, 14205), (7407, 11867), (9541, 9027), (12639, 7537),
-        (9064, 7312), (7986, 4365), (8558, 2759), (10685, 3500),
-        (10202, 5369), (8043, 5949), (7978, 3339), (6341, 3029),
-        (5362, 3391), (7097, 92), (8943, -985), (10949, -2056),
-        (13780, -5667), (10752, 991), (8193, -841), (3284, -1599),
-        (-76, -1498), (578, 719), (1703, 3975), (316, 2489),
-        (-1018, -1235), (-3195, -1538), (-6322, -2565), (-11414, 4055),
-        (-7030, 8396), (-8689, 11227),
+    segments=[
+        RouteSegment(
+            name="Asuran Segment 1",
+            blessing=Blessing((14901.87, 13126.21)),
+            path=[
+                (18825, 6180), (18447, 4537), (18331, 2108), (17526, 143),
+                (17205, -1355), (17542, -4865), (15562, -5524), (16270, -6288),
+                (17501, -5545), (18111, -8030), (18409, -8474), (18613, -11799),
+                (17154, -15669), (14250, -16744), (12186, -14139), (12540, -13440),
+                (13234, -9948), (8875, -9065), (8647, -5852), (6939, -3629),
+                (8711, -6046), (7616, -8978), (4671, -8699), (-5203, -8280),
+                (1534, -5493), (1052, -7074), (-1029, -8724), (-3439, -10339),
+                (-3024, -12586), (-742, -13786), (-2755, -14099), (-3393, -15633),
+                (-4635, -16643), (-7814, -17796), (-10109, -17520), (-9111, -17237),
+                (-10963, -15506), (-13975, -17857), (-11912, -10641), (-8760, -9933),
+                (-14030, -9780), (-12368, -7330),
+            ],
+        ),
+        RouteSegment(
+            name="Asuran Segment 2",
+            blessing=Blessing((-9317.0, -2618.0)),
+            path=[
+                (-12368, -7330), (-16527, -8175), (-17391, -5984),
+                (-15704, -3996), (-16609, -2607), (-16480, 2522), (-17090, 5252),
+                (-18640, 8724), (-18484, 12021), (-17180, 13093), (-15072, 14075),
+                (-11888, 15628), (-12043, 18463), (-8876, 17415), (-4770, 20353),
+                (-10970, 16860), (-9301, 15054), (-9942, 12561), (-9786, 10297),
+                (-5379, 16642), (-2828, 18210), (-4246, 16728), (-2974, 14197),
+                (-5228, 12475), (-6756, 12380), (-3468, 10837), (-3804, 8017),
+                (-3288, 7276), (-1346, 12360),
+            ],
+        ),
+        RouteSegment(
+            name="Asuran Segment 3",
+            blessing=Blessing((4835.0, 440.0)),
+            path=[
+                (-1346, 12360), (874, 14367), (3572, 13698),
+                (5899, 14205), (7407, 11867), (9541, 9027), (12639, 7537),
+                (9064, 7312), (7986, 4365), (8558, 2759), (10685, 3500),
+                (10202, 5369), (8043, 5949), (7978, 3339), (6341, 3029),
+                (5362, 3391), (7097, 92), (8943, -985), (10949, -2056),
+                (13780, -5667), (10752, 991), (8193, -841), (3284, -1599),
+                (-76, -1498), (578, 719), (1703, 3975), (316, 2489),
+                (-1018, -1235), (-3195, -1538), (-6322, -2565), (-11414, 4055),
+                (-7030, 8396), (-8689, 11227),
+                # Final sweep: leftover Krait patrol and the Krait Boss Warrior.
+                (4671, -8699), (-1018, -1235), (-6322, -2565), (-8760, -9933),
+            ],
+        ),
     ],
 )
 
@@ -321,7 +375,13 @@ NORN_ROUTE = Route(
     ],
 )
 
-# Deldrimor - Depths of Tyria / Umbral Grotto (Deldrimor title).
+# Deldrimor - snowman dungeon via Sifhalla (Deldrimor title). Mirrors the
+# original "Deldrimor title farm by Wick Divinus" flow: zone in through the
+# entry dialog, clear each fight leg (VanquishNode), take the first shrine
+# fire-and-forget and skip the later shrines, loot the key drop before the
+# locked door, interact the door lock and the boss lock, wait out the boss
+# window, loot the chest -- then the run's normal end-of-loop team resign
+# fires.
 DELDRIMOR_ROUTE = Route(
     key="deldrimor",
     name="Deldrimor",
@@ -331,17 +391,60 @@ DELDRIMOR_ROUTE = Route(
     explorable_id=701,
     exit_pos=(-23884.0, 13954.0),
     entry_dialog_id=0x84,
-    blessing_points=[
-        Blessing((-14078.0, 15449.0)),
-    ],
-    kill_path=[
-        (-14804, 10703), (-15628, 9589), (-17602, 6858), (-19769, 5046),
-        (-16697.96, 1302.89), (-15090.34, 2057.10), (-14450.00, 3411.00),
-        (-13824.00, 924.00), (-13752.06, -504.66), (-12084.77, -1592.58),
-        (-12745.70, -3899.97), (-13262.00, -7346.00), (-14891.95, -10069.69),
-        (-9573.00, -10963.00), (-15756.00, -12335.00), (-17542.00, -14048.00),
-        (-13088.00, -17749.00), (-13004.20, -17304.91), (-11136.00, -18043.00),
-        (-7422.59, -18622.13),
+    segments=[
+        RouteSegment(
+            name="Deldrimor Fight Leg 1",
+            blessing=Blessing((-14078.0, 15449.0), confirm=False),
+            path=[
+                (-14804, 10703), (-15628, 9589), (-17602, 6858), (-19769, 5046),
+                (-16697.96, 1302.89), (-15090.34, 2057.10),
+            ],
+        ),
+        RouteSegment(
+            name="Deldrimor Fight Leg 2 (key drop)",
+            path=[
+                (-14450.00, 3411.00), (-13824.00, 924.00), (-13752.06, -504.66),
+                (-12084.77, -1592.58), (-12745.70, -3899.97), (-13262.00, -7346.00),
+                (-14891.95, -10069.69), (-9573.00, -10963.00), (-9703.92, -10948.97),
+            ],
+            actions=[
+                RouteAction(name="Regroup And Loot Key Drop", wait_out_of_combat=True, loot=True),
+            ],
+        ),
+        RouteSegment(
+            name="Deldrimor Locked Door",
+            path=[(-15756.00, -12335.00)],
+            actions=[
+                RouteAction(name="Door Lock", gadget_pos=(-15435.00, -12277.00)),
+                RouteAction(name="Door Opens", wait_ms=3000),
+            ],
+        ),
+        RouteSegment(
+            name="Deldrimor Fight Leg 3",
+            path=[
+                (-17542.00, -14048.00), (-13088.00, -17749.00), (-13004.20, -17304.91),
+            ],
+            actions=[
+                RouteAction(name="Regroup And Loot", wait_out_of_combat=True, loot=True),
+            ],
+        ),
+        RouteSegment(
+            name="Deldrimor Boss Trigger",
+            path=[(-11136.00, -18043.00)],
+            actions=[
+                RouteAction(name="Boss Lock", gadget_pos=(-11136.00, -18043.00)),
+                RouteAction(name="Boss Spawn", wait_ms=3000),
+            ],
+        ),
+        RouteSegment(
+            name="Deldrimor Chest",
+            path=[(-7422.59, -18622.13)],
+            actions=[
+                RouteAction(name="Boss Fight Window", wait_ms=60_000),
+                RouteAction(name="Chest", gadget_pos=(-7594.00, -18657.00)),
+                RouteAction(name="Loot Chest", loot=True),
+            ],
+        ),
     ],
 )
 # Luxon - Mount Qinkai / Aspenwood Gate (Luxon title).
@@ -492,7 +595,7 @@ botting_tree: Optional[BottingTree] = None
 initialized: bool = False
 
 selected_key: str = "vanguard"
-_multi_account: bool = False  # Solo build: multibox lives in Reputation Farmer Multibox BT.py.
+_multi_account: bool = True  # Multibox build: always on.
 _farm_all: bool = False
 _target_rank: int = 5
 _farm_to_max: bool = False
@@ -539,6 +642,46 @@ def _faction_points(route: Route) -> int:
     if route.key == "luxon":
         return _luxon_faction()
     return _title_points(route)
+
+
+def _account_points(account: object, route: Route) -> int:
+    """Live faction/title points for one shared-memory account.
+
+    Used by the account-aware goal check so a maxed leader does not stop the
+    farm while the rest of the team is still below the target.
+    """
+    try:
+        if route.key == "kurzick":
+            faction = getattr(getattr(account, "FactionData", None), "Kurzick", None)
+            return int(getattr(faction, "Current", 0) or 0)
+        if route.key == "luxon":
+            faction = getattr(getattr(account, "FactionData", None), "Luxon", None)
+            return int(getattr(faction, "Current", 0) or 0)
+        titles_data = getattr(account, "TitlesData", None)
+        for title in getattr(titles_data, "Titles", []) or []:
+            if int(getattr(title, "TitleID", 0) or 0) == int(route.title_id):
+                return int(getattr(title, "CurrentPoints", 0) or 0)
+        return 0
+    except Exception:
+        return 0
+
+
+def _all_accounts_at_goal(route: Route, threshold: int) -> bool:
+    """True only when EVERY active account is at or above the route's goal."""
+    accounts = _all_active_accounts()
+    if not accounts:
+        return False
+    return all(_account_points(account, route) >= int(threshold) for account in accounts)
+
+
+def _account_rank(account: object, route: Route) -> int:
+    """Tier index (1-based) of a single account's route title, 0 when unranked."""
+    points = _account_points(account, route)
+    rank = 0
+    for tier in TITLE_TIERS.get(int(route.title_id), []):
+        if points >= int(tier.required):
+            rank = int(tier.tier)
+    return rank
 
 
 # NPC approach helper. Bare BT.Move treats the destination NPC as a wall
@@ -660,8 +803,12 @@ def _confirmed_interaction(
     headless is already enabled, and the multibox widget broadcast is
     deduplicated, so no alt Hero AI churn.
 
-    Solo build: the leader is the only player, so this effect check IS the
-    whole party's confirmation.
+    Multibox note: this confirms only the LEADER's effect. Followers receive
+    the blessing/bounty through the SendDialogToTarget / SendDialog fan-outs,
+    whose receivers are wired in Widgets/System/Messaging.py. (The older
+    TakeBlessing multibox path used SharedCommandType.GetBlessing, whose
+    ProcessMessages case was a no-op -- elevated to the messaging-layer
+    owners, not fixed here.)
     """
     def _already_confirmed(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
         # Idempotency gate: if the route's effect is already on the leader
@@ -719,206 +866,492 @@ def _confirmed_interaction(
 
 
 # Hero team setup
-def _normalize_team_size(party_size: int) -> int:
-    if party_size <= 4:
-        return 4
-    if party_size <= 6:
-        return 6
-    return 8
 
 
-def _build_default_party_formations() -> "Dict[int, List[PartyHeroSlot]]":
-    gwen = PartyHeroSlot(hero_id=HeroType.Gwen.value, template=DEFAULT_HERO_TEMPLATES.get(HeroType.Gwen, ""))
-    vekk = PartyHeroSlot(hero_id=HeroType.Vekk.value, template=DEFAULT_HERO_TEMPLATES.get(HeroType.Vekk, ""))
-    olias = PartyHeroSlot(hero_id=HeroType.Olias.value, template=DEFAULT_HERO_TEMPLATES.get(HeroType.Olias, ""))
-    norgu = PartyHeroSlot(hero_id=HeroType.Norgu.value, template=DEFAULT_HERO_TEMPLATES.get(HeroType.Norgu, ""))
-    mow = PartyHeroSlot(hero_id=HeroType.MasterOfWhispers.value, template=DEFAULT_HERO_TEMPLATES.get(HeroType.MasterOfWhispers, ""))
-    razah = PartyHeroSlot(hero_id=HeroType.Razah.value, template=DEFAULT_HERO_TEMPLATES.get(HeroType.Razah, ""))
-    ogden = PartyHeroSlot(hero_id=HeroType.Ogden.value, template=DEFAULT_HERO_TEMPLATES.get(HeroType.Ogden, ""))
-    return {
-        4: [PartyHeroSlot(gwen.hero_id, gwen.template), PartyHeroSlot(vekk.hero_id, vekk.template), PartyHeroSlot(olias.hero_id, olias.template)],
-        6: [PartyHeroSlot(gwen.hero_id, gwen.template), PartyHeroSlot(norgu.hero_id, norgu.template), PartyHeroSlot(mow.hero_id, mow.template), PartyHeroSlot(olias.hero_id, olias.template), PartyHeroSlot(razah.hero_id, razah.template)],
-        8: [PartyHeroSlot(norgu.hero_id, norgu.template), PartyHeroSlot(gwen.hero_id, gwen.template), PartyHeroSlot(vekk.hero_id, vekk.template), PartyHeroSlot(mow.hero_id, mow.template), PartyHeroSlot(olias.hero_id, olias.template), PartyHeroSlot(razah.hero_id, razah.template), PartyHeroSlot(ogden.hero_id, ogden.template)],
-    }
 
-
-class Settings:
-    def __init__(self) -> None:
-        self.party_formations: "Dict[int, List[PartyHeroSlot]]" = _build_default_party_formations()
-        self.party_config_dirty: bool = False
-        self.party_config_status: str = ""
-
-    def get_party_slots(self, team_size: int) -> List[PartyHeroSlot]:
-        slot_count = TEAM_PRESET_SLOT_COUNTS.get(team_size, TEAM_PRESET_SLOT_COUNTS[8])
-        slots = self.party_formations.get(team_size)
-        if slots is None or len(slots) != slot_count:
-            defaults = _build_default_party_formations()
-            slots = [PartyHeroSlot(slot.hero_id, slot.template) for slot in defaults[team_size]]
-            self.party_formations[team_size] = slots
-        return slots
-
-    def reset_party_formations(self) -> None:
-        self.party_formations = _build_default_party_formations()
-        self.party_config_dirty = True
-        self.party_config_status = "Party presets reset to defaults. Save to keep them."
-
-    def load_party_formations(self) -> None:
-        self.party_formations = _build_default_party_formations()
-        if not os.path.exists(PARTY_FORMATION_CONFIG_PATH):
-            self.save_party_formations()
-            return
-        try:
-            with open(PARTY_FORMATION_CONFIG_PATH, "r", encoding="utf-8") as handle:
-                loaded = json.load(handle)
-            for team_size_str, slots in loaded.items():
-                team_size = int(team_size_str)
-                slot_count = TEAM_PRESET_SLOT_COUNTS.get(team_size, TEAM_PRESET_SLOT_COUNTS[8])
-                loaded_slots: List[PartyHeroSlot] = []
-                for slot_data in slots:
-                    loaded_slots.append(
-                        PartyHeroSlot(
-                            hero_id=int(slot_data.get("hero_id", 0)),
-                            template=str(slot_data.get("template", "")),
-                        )
-                    )
-                if len(loaded_slots) >= slot_count:
-                    self.party_formations[team_size] = loaded_slots[:slot_count]
-                else:
-                    self.party_formations[team_size] = loaded_slots + [
-                        PartyHeroSlot() for _ in range(slot_count - len(loaded_slots))
-                    ]
-        except Exception:
-            self.party_formations = _build_default_party_formations()
-            self.party_config_status = "Failed to load party formation config. Using defaults."
-            self.party_config_dirty = True
-
-    def save_party_formations(self) -> None:
-        serializable = {
-            str(team_size): [
-                {"hero_id": slot.hero_id, "template": slot.template}
-                for slot in slots
-            ]
-            for team_size, slots in self.party_formations.items()
-        }
-        try:
-            os.makedirs(os.path.dirname(PARTY_FORMATION_CONFIG_PATH), exist_ok=True)
-            with open(PARTY_FORMATION_CONFIG_PATH, "w", encoding="utf-8") as handle:
-                json.dump(serializable, handle, indent=2, sort_keys=True)
-                handle.write("\n")
-            self.party_config_dirty = False
-            self.party_config_status = "Party formation saved."
-        except Exception:
-            self.party_config_status = "Failed to save party formation."
-            self.party_config_dirty = True
-
-
-settings = Settings()
-
-
-def _hero_party_already_formed(hero_ids: List[int]) -> bool:
-    if not hero_ids:
-        return False
-    from Py4GWCoreLib import Party
+def _multibox_party_already_formed() -> bool:
+    from Py4GWCoreLib.routines_src.behaviourtrees_src.shared import (
+        _account_emails_not_on_same_map_as_local,
+        _account_is_in_local_party,
+    )
 
     try:
-        if not Map.IsOutpost():
+        if _account_emails_not_on_same_map_as_local():
             return False
-        if not Party.IsPartyLoaded():
+        sender_email = str(Player.GetAccountEmail() or "")
+        if not sender_email:
             return False
-        if int(Party.GetPartySize() or 0) <= 1:
+        if GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(sender_email) is None:
             return False
-        existing_ids: set[int] = set()
-        for hero in Party.GetHeroes() or []:
-            try:
-                hero_id = int(getattr(hero, "hero_id", 0) or 0)
-            except (TypeError, ValueError):
+        for account in GLOBAL_CACHE.ShMem.GetAllAccountData() or []:
+            receiver_email = str(getattr(account, "AccountEmail", "") or "")
+            if not receiver_email or receiver_email == sender_email:
                 continue
-            if hero_id > 0:
-                existing_ids.add(hero_id)
-        return all(int(hero_id) in existing_ids for hero_id in hero_ids)
+            if not _account_is_in_local_party(account):
+                return False
     except Exception:
         return False
+    return True
+
+
+def _multibox_party_setup(timeout_ms: int = 60_000) -> BehaviorTree:
+    def _party_intact(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        return (
+            BehaviorTree.NodeState.SUCCESS
+            if _multibox_party_already_formed()
+            else BehaviorTree.NodeState.FAILURE
+        )
+
+    return BT.Selector(
+        name="MultiboxPartySetup",
+        children=[
+            BT.Sequence(
+                name="PartyAlreadyFormed?",
+                children=[
+                    BehaviorTree(
+                        BehaviorTree.ActionNode(
+                            name="MultiboxPartyAlreadyFormed?",
+                            action_fn=_party_intact,
+                        )
+                    ),
+                    BT.LogMessage(
+                        "Multibox party already formed - skipping disband/reinvite",
+                        module_name=MODULE_NAME,
+                    ),
+                ],
+            ),
+            BT.CreateParty(multibox_invite=True, timeout_ms=timeout_ms),
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Multibox resign helpers (ported from Shards Of Orr / Sulfurous Wastes)
+# ---------------------------------------------------------------------------
+
+
+def _all_active_accounts() -> list:
+    """Return a de-duplicated list of all active shared-memory accounts."""
+    try:
+        accounts = GLOBAL_CACHE.ShMem.GetAllAccountData(sort_results=False)
+    except TypeError:
+        accounts = GLOBAL_CACHE.ShMem.GetAllAccountData()
+    except Exception:
+        accounts = []
+
+    unique: list = []
+    seen: set = set()
+    for account in accounts or []:
+        email = str(getattr(account, "AccountEmail", "") or "").strip()
+        if not email or email in seen:
+            continue
+        seen.add(email)
+        unique.append(account)
+    return unique
+
+
+def _account_map_id(account: object) -> int:
+    """Resolve the live map ID for a shared-memory account entry."""
+    agent_data = getattr(account, "AgentData", None)
+    map_data = getattr(agent_data, "Map", None)
+    return int(getattr(map_data, "MapID", 0) or 0)
+
+
+def _all_accounts_on_map(map_id: int) -> bool:
+    """True when every active account is on the given map."""
+    accounts = _all_active_accounts()
+    return bool(accounts) and all(_account_map_id(a) == int(map_id) for a in accounts)
+
+
+def _wait_for_all_accounts_on_map(
+    map_id: int,
+    *,
+    name: str,
+    timeout_ms: int = 60000,
+) -> BehaviorTree:
+    """BehaviorTree node that blocks until every active account is on map_id."""
+
+    def _check(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        if _all_accounts_on_map(map_id):
+            return BehaviorTree.NodeState.SUCCESS
+        return BehaviorTree.NodeState.RUNNING
+
+    return BehaviorTree(
+        BehaviorTree.WaitUntilNode(
+            name=name,
+            condition_fn=_check,
+            throttle_interval_ms=500,
+            timeout_ms=timeout_ms,
+        )
+    )
+
+
+def _resign_node(route: Route) -> BehaviorTree:
+    """Resign-only multibox return: the team ALWAYS goes home by resigning.
+
+    This build must never map-travel the party back to the outpost, so the
+    Shards Of Orr / Sulfurous Wastes TravelToMap fallback is intentionally
+    absent. The resign fan-out reaches every shared-memory account (a receiver
+    in an outpost ignores /resign harmlessly), so no "leader is in the
+    explorable" gate is needed either: re-issue the resign until every account
+    is back at the outpost or RESIGN_RETRY_TIMEOUT_MS expires.
+    """
+    resign_attempt = BT.Sequence(
+        name=f"Resign {route.name} Party To Outpost",
+        children=[
+            BT.Resign(
+                wait_for_map_load=True,
+                target_map_id=route.outpost_id,
+                multi_account=True,
+                timeout_ms=60000,
+                log=True,
+            ),
+            _wait_for_all_accounts_on_map(
+                route.outpost_id,
+                name=f"Wait For {route.name} Party Return To Outpost",
+            ),
+        ],
+    )
+
+    return BT.Selector(
+        name=f"Ensure Every Account Is At The {route.name} Outpost",
+        children=[
+            BehaviorTree(
+                BehaviorTree.ConditionNode(
+                    name=f"Every Account Already At {route.name} Outpost",
+                    condition_fn=lambda _node, mid=route.outpost_id: _all_accounts_on_map(mid),
+                )
+            ),
+            BehaviorTree(
+                BehaviorTree.RepeaterUntilSuccessNode(
+                    child=resign_attempt.root,
+                    timeout_ms=RESIGN_RETRY_TIMEOUT_MS,
+                    name=f"{route.name} Resign Retry",
+                )
+            ),
+        ],
+    )
+
+
+def _multibox_resign_home(route: Route) -> BehaviorTree:
+    """Resign every shared-memory account home before entering the explorable.
+
+    A multibox party must return by resigning (which reaches every account),
+    never by map-traveling (which only moves the leader). Issued at farm
+    startup (ahead of the one-time outpost travel) and at the top of every run
+    loop iteration: a no-op for accounts already at the outpost (receivers in
+    an outpost ignore /resign harmlessly), a rescue for any still inside the
+    explorable -- e.g. a Run Retry restarting mid-route.
+    """
+    return BT.Resign(
+        multi_account=True,
+        wait_for_map_load=True,
+        target_map_id=route.outpost_id,
+        timeout_ms=60000,
+        log=True,
+    )
+
+
+def _multibox_party_wipe_recovery() -> BehaviorTree:
+    """Own party-wipe recovery: on a true defeat, resign the WHOLE team home.
+
+    The stock BottingTree recovery service only calls ReturnToOutport() on the
+    local (leader) client, which leaves every alt account defeated at the wipe
+    spot. The leader then restarts the farm step and the leading BT.Travel can
+    never bring a split party back - only a full team resign can. This service
+    dispatches the same SharedCommandType.Resign fan-out that bot.Multibox.
+    ResignParty uses to every shared-memory account, waits until every account
+    is back at the route's outpost, and only then requests a planner step
+    restart.
+
+    ANY party wipe or unrecoverable leader death resigns the whole team back to
+    the outpost - these are short farms, so a retry always beats salvaging a
+    split party. Res-shrine respawns are NOT used to restart in place: that
+    leaves the leader at the shrine while the alts are elsewhere, and the next
+    BT.Travel then runs without the party. The service also no-ops while
+    `party_wipe_recovery_suppressed` is on the shared blackboard, which
+    BT.Resign sets around the normal end-of-run resign so a legitimate resign
+    is never mistaken for a wipe.
+    """
+    state: Dict[str, Any] = {
+        "active": False,
+        "mode": "",
+        "step_name": "",
+        "recovery_started_ms": 0.0,
+        "last_resign_ms": 0.0,
+        "player_was_dead": False,
+        "player_dead_pos": None,
+        "leader_dead_since_ms": 0.0,
+        "suppressed_since_ms": 0.0,
+        "last_diag_ms": 0.0,
+    }
+    resign_interval_ms = 2000.0
+
+    def _log(message: str, message_type=PySystem.Console.MessageType.Warning) -> None:
+        PySystem.Console.Log(MODULE_NAME, message, message_type)
+
+    def _resolve_step(node: BehaviorTree.Node) -> str:
+        named = {str(name) for name in (node.blackboard.get("named_planner_step_names", []) or [])}
+        current = str(node.blackboard.get("current_step_name", "") or "")
+        last_active = str(node.blackboard.get("last_active_planner_step_name", "") or "")
+        if current and (not named or current in named):
+            return current
+        if last_active and (not named or last_active in named):
+            return last_active
+        for name in node.blackboard.get("named_planner_step_names", []) or []:
+            if str(name):
+                return str(name)
+        return ""
+
+    def _detect_revive_teleport() -> bool:
+        from Py4GWCoreLib.Agent import Agent
+        from Py4GWCoreLib.enums_src.GameData_enums import Range
+        from Py4GWCoreLib.py4gwcorelib_src.Utils import Utils
+
+        player_id = Player.GetAgentID()
+        if not Agent.IsValid(player_id):
+            return False
+        current_pos = Agent.GetXY(player_id)
+        is_dead = bool(Agent.IsDead(player_id))
+        if is_dead:
+            if not state["player_was_dead"]:
+                state["player_was_dead"] = True
+                state["player_dead_pos"] = current_pos
+                return False
+            death_pos = state["player_dead_pos"]
+            if death_pos and Utils.Distance(death_pos, current_pos) > Range.Spellcast.value:
+                state["player_was_dead"] = False
+                state["player_dead_pos"] = None
+                return True
+            return False
+        if not state["player_was_dead"]:
+            return False
+        state["player_was_dead"] = False
+        death_pos = state["player_dead_pos"]
+        state["player_dead_pos"] = None
+        return bool(death_pos and Utils.Distance(death_pos, current_pos) > Range.Spellcast.value)
+
+    def _team_is_at_outpost(route: Optional[Route]) -> bool:
+        if not route or not route.outpost_id:
+            return False
+        return _all_accounts_on_map(int(route.outpost_id))
+
+    def _leader_is_at_outpost() -> bool:
+        return bool(Map.IsMapReady() and Map.IsOutpost() and GLOBAL_CACHE.Party.IsPartyLoaded())
+
+    def _begin(node: BehaviorTree.Node, mode: str) -> None:
+        state["active"] = True
+        state["mode"] = mode
+        state["step_name"] = _resolve_step(node)
+        state["recovery_started_ms"] = time.monotonic() * 1000.0
+        state["last_resign_ms"] = 0.0
+        node.blackboard["party_wipe_recovery_active"] = True
+        node.blackboard["party_wipe_recovery_mode"] = mode
+        node.blackboard["party_wipe_recovery_step_name"] = state["step_name"]
+        if mode == "leader_dead":
+            _log("Party leader has been dead past the revival grace period; resigning the whole team to the outpost.")
+        else:
+            _log("Party wipe detected; resigning the whole team to the outpost.")
+
+    def _reset(node: BehaviorTree.Node) -> None:
+        state["active"] = False
+        state["mode"] = ""
+        state["step_name"] = ""
+        state["recovery_started_ms"] = 0.0
+        state["last_resign_ms"] = 0.0
+        state["player_was_dead"] = False
+        state["player_dead_pos"] = None
+        state["leader_dead_since_ms"] = 0.0
+        node.blackboard["party_wipe_recovery_active"] = False
+        node.blackboard["party_wipe_recovery_mode"] = ""
+        node.blackboard["party_wipe_recovery_step_name"] = ""
+
+    def _request_restart(node: BehaviorTree.Node) -> bool:
+        step_name = state["step_name"] or _resolve_step(node)
+        if not step_name:
+            _log("Recovery finished, but no planner step could be resolved.")
+            return False
+        node.blackboard["restart_step_name_request"] = step_name
+        node.blackboard["PLANNER_STATUS"] = f"PLANNER: Restarting {step_name}"
+        return True
+
+    def _dispatch_full_resign() -> None:
+        sender_email = str(Player.GetAccountEmail() or "")
+        if not sender_email:
+            return
+        for account in GLOBAL_CACHE.ShMem.GetAllAccountData():
+            receiver_email = str(getattr(account, "AccountEmail", "") or "")
+            if not receiver_email:
+                continue
+            GLOBAL_CACHE.ShMem.SendMessage(
+                sender_email,
+                receiver_email,
+                SharedCommandType.Resign,
+                (0.0, 0.0, 0.0, 0.0),
+            )
+        _log("Party defeat: dispatching full multibox resign back to the outpost.")
+
+    def _tick(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        route = _route_by_key(_active_farm_key) or _route_by_key(selected_key)
+        now = time.monotonic() * 1000.0
+
+        suppressed = bool(node.blackboard.get("party_wipe_recovery_suppressed", False))
+        if suppressed:
+            if state["suppressed_since_ms"] == 0.0:
+                state["suppressed_since_ms"] = now
+            if now - state["suppressed_since_ms"] >= RESIGN_SUPPRESS_STALE_MS:
+                # A failed BT.Resign leaks this flag: the unsuppress child never
+                # runs when the resign sequence fails, which would silence wipe
+                # recovery forever. Clear it once the leak is obvious.
+                _log("party_wipe_recovery_suppressed stuck for 2+ minutes; clearing it.")
+                node.blackboard["party_wipe_recovery_suppressed"] = False
+                state["suppressed_since_ms"] = 0.0
+                suppressed = False
+            else:
+                _reset(node)
+                return BehaviorTree.NodeState.RUNNING
+        else:
+            state["suppressed_since_ms"] = 0.0
+
+        # Detect the wipe flags BEFORE any map-readiness gate: a full party
+        # wipe can leave Map.IsMapReady() False (defeat/transition state), so
+        # gating detection on it here would silently strand the dead team -
+        # the exact failure we must avoid. The stock core
+        # PartyWipeRecoveryServiceTree likewise computes wiped/defeated first.
+        from Py4GWCoreLib.Agent import Agent
+        from Py4GWCoreLib.Routines import Routines
+
+        player_id = Player.GetAgentID()
+        leader_dead = bool(Agent.IsValid(player_id) and Agent.IsDead(player_id))
+        party_wiped = bool(Routines.Checks.Party.IsPartyWiped())
+        party_defeated = bool(GLOBAL_CACHE.Party.IsPartyDefeated())
+        revived_at_shrine = _detect_revive_teleport()
+
+        if now - state["last_diag_ms"] >= DIAGNOSTIC_HEARTBEAT_MS:
+            state["last_diag_ms"] = now
+            _log(
+                f"wipe-recovery heartbeat: map={Map.GetMapID()} wiped={party_wiped} "
+                f"defeated={party_defeated} leader_dead={leader_dead} suppressed={suppressed}",
+                PySystem.Console.MessageType.Info,
+            )
+
+        if not state["active"]:
+            if not leader_dead:
+                state["leader_dead_since_ms"] = 0.0
+            elif state["leader_dead_since_ms"] == 0.0:
+                state["leader_dead_since_ms"] = now
+
+            leader_stuck = bool(
+                leader_dead
+                and not party_wiped
+                and not party_defeated
+                and state["leader_dead_since_ms"] > 0.0
+                and now - state["leader_dead_since_ms"] >= LEADER_DEATH_GRACE_MS
+            )
+
+            # ANY party wipe / defeat / res-shrine respawn / unrecoverable leader
+            # death resigns the whole team back to the outpost. These are short
+            # farms: a retry always beats salvaging a split party.
+            if not (party_wiped or party_defeated or revived_at_shrine or leader_stuck):
+                node.blackboard["party_wipe_recovery_active"] = False
+                return BehaviorTree.NodeState.RUNNING
+
+            _begin(node, "leader_dead" if leader_stuck else "defeated")
+            return BehaviorTree.NodeState.RUNNING
+
+        node.blackboard["party_wipe_recovery_active"] = True
+        node.blackboard["party_wipe_recovery_mode"] = state["mode"]
+        node.blackboard["party_wipe_recovery_step_name"] = state["step_name"]
+
+        # Every active recovery mode (defeated / leader_dead) resigns the whole
+        # team back to the outpost, re-issuing until every account is confirmed
+        # there. Never restart while alts are still scattered - a fresh
+        # BT.Travel would just repeat the split-party bug.
+        exhausted = now - state["recovery_started_ms"] >= RESIGN_RETRY_TIMEOUT_MS
+        team_home = _team_is_at_outpost(route)
+        leader_home_fallback = route is None and _leader_is_at_outpost()
+
+        if team_home or leader_home_fallback or exhausted:
+            restarted = _request_restart(node)
+            _reset(node)
+            return BehaviorTree.NodeState.SUCCESS if restarted else BehaviorTree.NodeState.FAILURE
+
+        if now - state["last_resign_ms"] >= resign_interval_ms:
+            _dispatch_full_resign()
+            state["last_resign_ms"] = now
+
+        return BehaviorTree.NodeState.RUNNING
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="MultiboxPartyWipeRecovery",
+            action_fn=_tick,
+            aftercast_ms=0,
+        )
+    )
 
 
 def _party_setup(route: Route) -> List[BehaviorTree]:
-    # Solo build: single account + hero team. The multibox party flow lives in
-    # Reputation Farmer Multibox BT.py.
-    return [SetupHeroTeam()]
+    # Multibox build: summon and invite every shared-memory account. The solo
+    # hero-team flow lives in Reputation Farmer BT.py.
+    return [_multibox_party_setup()]
 
 
-def SetupHeroTeam() -> BehaviorTree:
-    # Built lazily as a Subtree so Map.GetMaxPartySize() is read when this node
-    # TICKS (after the preceding Travel has landed us in the destination
-    # outpost), not when the parent sequence is constructed.
-    def _build_team(_node: BehaviorTree.Node) -> BehaviorTree:
-        try:
-            team_size = _normalize_team_size(Map.GetMaxPartySize())
-        except Exception:
-            team_size = 8
-        selected_slots: List[PartyHeroSlot] = []
-        seen_hero_ids = set()
-        for slot in settings.get_party_slots(team_size):
-            hero_id = int(slot.hero_id)
-            if hero_id <= 0 or hero_id in seen_hero_ids:
-                continue
-            seen_hero_ids.add(hero_id)
-            selected_slots.append(PartyHeroSlot(hero_id=hero_id, template=slot.template.strip()))
-        hero_ids = [slot.hero_id for slot in selected_slots]
-        skillbars = [(pos, slot.template) for pos, slot in enumerate(selected_slots, start=1) if slot.template]
+def _route_action_nodes(route: Route, segment: RouteSegment) -> List[BehaviorTree]:
+    """Build the BT nodes for a segment's post-path dungeon actions.
 
-        def _team_present(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-            return (
-                BehaviorTree.NodeState.SUCCESS
-                if _hero_party_already_formed(hero_ids)
-                else BehaviorTree.NodeState.FAILURE
+    One node per RouteAction, in list order. Gadget interactions target the
+    nearest gadget to the given XY and are leader-only; HeroAI suspension is
+    disabled on purpose -- the suspend/restore toggle is exactly what this
+    module's header documents as breaking the multibox movement/skill loop.
+    """
+    nodes: List[BehaviorTree] = []
+    for action in segment.actions:
+        label = action.name or f"{route.name} Segment Action"
+        if action.wait_out_of_combat:
+            nodes.append(BT.WaitUntilOutOfCombat())
+        if action.loot:
+            nodes.append(BT.LootItems())
+        if action.gadget_pos is not None:
+            nodes.append(
+                BT.Sequence(
+                    name=f"{route.name} {label}",
+                    children=[
+                        BT.MoveAndInteractWithGadget(
+                            pos=action.gadget_pos,
+                            search_distance=1500.0,
+                            suspend_hero_ai=False,
+                            log=True,
+                        ),
+                    ],
+                )
             )
-
-        # Selector mirrors the multibox pattern: the fallback branch holds the
-        # ENTIRE re-formation (CreateParty itself opens with LeaveParty), so an
-        # intact hero team is never taken apart and reloaded every cycle.
-        return BT.Selector(
-            name="HeroPartySetup",
-            children=[
-                BT.Sequence(
-                    name="HeroTeamAlreadyFormed?",
-                    children=[
-                        BehaviorTree(
-                            BehaviorTree.ActionNode(
-                                name="HeroTeamAlreadyFormed?",
-                                action_fn=_team_present,
-                            )
-                        ),
-                        BT.LogMessage(
-                            "Hero team already formed - skipping leave party",
-                            module_name=MODULE_NAME,
-                        ),
-                    ],
-                ),
-                BT.Sequence(
-                    name="Form Hero Team",
-                    children=[
-                        BT.CreateParty(hero_ids=hero_ids, log=False),
-                        BT.Wait(1000),
-                        *[BT.LoadHeroSkillbar(position, template) for position, template in skillbars],
-                        CoreBT.Party.ForceHeroState(HERO_AGGRESSIVE_MODE),
-                    ],
-                ),
-            ],
-        )
-
-    return BT.Subtree("Setup Hero Team", _build_team)
+        if action.wait_ms > 0:
+            nodes.append(BT.Wait(int(action.wait_ms)))
+    return nodes
 
 
 def _killing_loop(route: Route) -> BehaviorTree:
     """The vanquish-style farming loop for one faction run.
 
-    Mirrors the Nightfall Leveler / VQFarm convention: travel to outpost,
-    cross into the explorable map, then either run per-leg route segments
+    Mirrors the Nightfall Leveler / VQFarm convention: cross into the
+    explorable map from the outpost, then either run per-leg route segments
     (blessing + fight leg each) or collect the route's blessings and run its
     single kill path, wait out of combat, then resign back to the outpost.
+    The outpost travel is NOT part of this loop: the farm sequence performs it
+    once at startup, and every run END resigns the team back to the outpost.
     """
     children: List[BehaviorTree] = [
-        BT.Travel(target_map_id=route.outpost_id, random_travel=True, hard_mode=True),
+        # No per-run map travel: the farm sequence travels to the outpost once
+        # at startup, and each run's end-of-run _resign_node returns the team
+        # there. This home-first resign is the retry rescue, not a travel: a
+        # no-op for a team already at the outpost, and the gather-home for a
+        # Run Retry that restarts while the team is still inside the
+        # explorable.
+        _multibox_resign_home(route),
+        # Followers may still be trickling in from the end-of-run / retry
+        # resign; this pause lets the team regroup before party setup.
+        BT.Wait(10_000),
         *_party_setup(route),
     ]
 
@@ -941,20 +1374,40 @@ def _killing_loop(route: Route) -> BehaviorTree:
 
     def _take_blessing(blessing: Blessing) -> None:
         if route.key in ("kurzick", "luxon"):
+            # Faction path fans out through InteractTargetAndSendDialog ->
+            # SendDialogToTarget, whose receiver dispatch is wired.
             blessing_tree = BT.TakeBlessing(
                 blessing.pos,
                 faction=route.key,
                 multi_account=_multi_account,
             )
         else:
-            blessing_tree = BT.TakeBlessing(
-                blessing.pos,
-                multi_account=_multi_account,
+            # Non-faction path: BT.TakeBlessing's multibox fan-out uses
+            # SharedCommandType.GetBlessing, whose ProcessMessages case is a
+            # no-op in Messaging.py (elevated), so followers never received the
+            # blessing. Mirror its local auto-dialog semantics through the
+            # fan-out commands whose receivers ARE wired:
+            # TakeDialogWithTarget + SendDialog.
+            blessing_tree = BT.Sequence(
+                name=f"{route.name} Shrine Approach",
+                children=[
+                    BT.Move(blessing.pos, tolerance=150.0, log=True),
+                    BT.TargetNearestAndAutoDialog(
+                        blessing.pos,
+                        buttons=0,
+                        multi_account=True,
+                        log=True,
+                    ),
+                ],
             )
         children.append(
             _confirmed_interaction(
                 blessing_tree,
-                confirm_ids=_BLESSING_IDS_BY_ROUTE.get(route.key, ()),
+                confirm_ids=(
+                    _BLESSING_IDS_BY_ROUTE.get(route.key, ())
+                    if blessing.confirm
+                    else ()
+                ),
                 name=f"{route.name} Blessing",
             )
         )
@@ -972,6 +1425,7 @@ def _killing_loop(route: Route) -> BehaviorTree:
                         flag_heroes_to_waypoint=False,
                     )
                 )
+            children.extend(_route_action_nodes(route, segment))
     else:
         for blessing in route.blessing_points:
             _take_blessing(blessing)
@@ -986,13 +1440,7 @@ def _killing_loop(route: Route) -> BehaviorTree:
             )
 
     children.append(BT.WaitUntilOutOfCombat())
-    children.append(
-        BT.Resign(
-            wait_for_map_load=True,
-            target_map_id=route.outpost_id,
-            multi_account=_multi_account,
-        )
-    )
+    children.append(_resign_node(route))
 
     return BT.Sequence(name=f"{route.name} VQ Run", children=children)
 
@@ -1000,10 +1448,11 @@ def _killing_loop(route: Route) -> BehaviorTree:
 def _bounty_loop(route: Route) -> BehaviorTree:
     """One Nightfall bounty run (Sunspear / Lightbringer).
 
-    Mirrors the legacy bounty bots: travel to the outpost, cross into the
-    explorable map, accept the bounty from the NPC via dialog, run the kill
-    path, then wait out of combat (the next run's Travel returns to the
-    outpost, replacing the legacy resign step).
+    Mirrors the legacy bounty bots: cross into the explorable map from the
+    outpost, accept the bounty from the NPC via dialog, run the kill path,
+    then wait out of combat and resign back to the outpost. The outpost
+    travel is NOT part of this loop: the farm sequence performs it once at
+    startup, and every run END resigns the team back to the outpost.
     """
     if route.bounty_pos is None:
         return BT.LogMessage(
@@ -1012,7 +1461,16 @@ def _bounty_loop(route: Route) -> BehaviorTree:
         )
 
     children: List[BehaviorTree] = [
-        BT.Travel(target_map_id=route.outpost_id, random_travel=True, hard_mode=True),
+        # No per-run map travel: the farm sequence travels to the outpost once
+        # at startup, and each run's end-of-run _resign_node returns the team
+        # there. This home-first resign is the retry rescue, not a travel: a
+        # no-op for a team already at the outpost, and the gather-home for a
+        # Run Retry that restarts while the team is still inside the
+        # explorable.
+        _multibox_resign_home(route),
+        # Followers may still be trickling in from the end-of-run / retry
+        # resign; this pause lets the team regroup before party setup.
+        BT.Wait(10_000),
         *_party_setup(route),
     ]
     for point in route.pre_path:
@@ -1060,13 +1518,7 @@ def _bounty_loop(route: Route) -> BehaviorTree:
         )
 
     children.append(BT.WaitUntilOutOfCombat())
-    children.append(
-        BT.Resign(
-            wait_for_map_load=True,
-            target_map_id=route.outpost_id,
-            multi_account=_multi_account,
-        )
-    )
+    children.append(_resign_node(route))
 
     return BT.Sequence(name=f"{route.name} Bounty Run", children=children)
 # ---------------------------------------------------------------------------
@@ -1122,14 +1574,28 @@ def _goal_threshold(route: Route) -> Optional[int]:
 
 
 def _build_farm_sequence(route: Route) -> BehaviorTree:
+    goal_state = {"decision": ""}
+
+    def _log_goal_decision(decision: str, detail: str) -> None:
+        # Edge-triggered: the goal check runs every tick, so only log changes.
+        if goal_state["decision"] == decision:
+            return
+        goal_state["decision"] = decision
+        PySystem.Console.Log(MODULE_NAME, f"{route.name}: {detail}", PySystem.Console.MessageType.Info)
+
     def _goal_reached() -> BehaviorTree.NodeState:
         global _active_farm_key
         threshold = _goal_threshold(route)
+        points = _faction_points(route)
         if threshold is None:
+            _log_goal_decision("skip", "no goal threshold configured; farming skipped.")
             return BehaviorTree.NodeState.FAILURE
-        if _faction_points(route) >= threshold:
+        if _all_accounts_at_goal(route, threshold):
+            _log_goal_decision("skip", f"every account at goal {threshold} (leader {points}); run skipped.")
             return BehaviorTree.NodeState.SUCCESS
         _active_farm_key = route.key
+        below = sum(1 for account in _all_active_accounts() if _account_points(account, route) < int(threshold))
+        _log_goal_decision("farm", f"leader {points}/{threshold}; {below} account(s) still below goal.")
         return BehaviorTree.NodeState.FAILURE
 
     def _one_run() -> BehaviorTree:
@@ -1151,9 +1617,65 @@ def _build_farm_sequence(route: Route) -> BehaviorTree:
             )
         )
 
+    def _farm_startup() -> BehaviorTree:
+        """One-time startup ahead of the run loop: form the team, then travel.
+
+        The map travel to the route's outpost happens HERE ONLY -- once,
+        before the farm loop begins -- never per run, and it carries the WHOLE party (formed here first,
+        ahead of the travel). Every run END still resigns the team back to
+        the outpost via _resign_node, so each loop iteration starts from the
+        outpost with no travel. The goal check gates the startup: a route
+        already at its target skips everything, exactly as its runs are
+        skipped.
+        """
+        return BehaviorTree(
+            BehaviorTree.SelectorNode(
+                name=f"{route.name} Farm Startup",
+                children=[
+                    BehaviorTree(
+                        BehaviorTree.ActionNode(
+                            name="Goal Reached?",
+                            action_fn=_goal_reached,
+                        )
+                    ),
+                    BT.Sequence(
+                        name=f"{route.name} Startup Travel",
+                        children=[
+                            # Gather a scattered team home first. No map wait:
+                            # at first start the leader is NOT yet at the route
+                            # outpost (resigning from an outpost is a no-op and
+                            # never moves anyone), so waiting here for it would
+                            # only time out. The multibox fan-out itself still
+                            # completes: receivers ack the resign, and anyone
+                            # still inside an explorable does return home.
+                            BT.Resign(
+                                multi_account=True,
+                                wait_for_map_load=False,
+                                timeout_ms=60000,
+                                log=True,
+                            ),
+                            # Form the multibox party BEFORE the travel so the
+                            # party travel carries every account to the route
+                            # outpost together, instead of the leader traveling
+                            # alone and run 1 having to summon stragglers
+                            # cross-map.
+                            *_party_setup(route),
+                            BT.Travel(
+                                target_map_id=route.outpost_id,
+                                random_travel=True,
+                                hard_mode=True,
+                            ),
+                            BT.Wait(10_000),
+                        ],
+                    ),
+                ],
+            )
+        )
+
     return BT.Sequence(
         name=f"Farm {route.name}",
         children=[
+            _farm_startup(),
             BT.Repeater(name=f"Farm {route.name}", repeat_count=VQ_MAX_RUNS, children=[_one_run()]),
         ],
     )
@@ -1223,13 +1745,22 @@ def _configure_upkeep(tree: BottingTree) -> None:
         resurrection_scroll=True,
         auto_inventory_handler_enabled=True,
         consumable_upkeeps=_enabled_consumable_upkeeps(),
-        enable_party_wipe_recovery=True,
+        # The stock recovery only ReturnToOutports the leader, which strands the
+        # alt accounts after a wipe. The custom MultiboxPartyWipeRecovery service
+        # (registered in ensure_botting_tree) owns wipe recovery with a full team
+        # resign, so the stock leader-only service must stay off.
+        enable_party_wipe_recovery=False,
     )
 
 
 def ensure_botting_tree() -> BottingTree:
     global botting_tree
     if botting_tree is None:
+        # Native listener: get the leader home quickly on a defeat. On its own it
+        # is NOT enough - it only returns the local client, so the custom
+        # MultiboxPartyWipeRecovery service below is what resigns the whole team.
+        Listeners.AutoReturnOnDefeat.Enable()
+
         botting_tree = BottingTree.Create(
             MODULE_NAME,
             main_routine=get_execution_steps(),
@@ -1239,54 +1770,15 @@ def ensure_botting_tree() -> BottingTree:
             auto_loot=True,
             configure_fn=_configure_upkeep,
         )
+        # Own party-wipe recovery: on a defeat this resigns EVERY shared-memory
+        # account back to the outpost (a solo leader ReturnToOutport cannot
+        # reassemble a wiped multibox team) and only then restarts the planner
+        # step. Shrine-recoverable wipes restart in place without resigning.
+        botting_tree.AddServiceTree("MultiboxPartyWipeRecovery", _multibox_party_wipe_recovery)
         botting_tree.UI.override_draw_config(draw_settings_tab)
         botting_tree.UI.override_draw_help(_draw_help_tab)
         botting_tree.UI._draw_main_child = types.MethodType(_draw_main_child_custom, botting_tree.UI)
     return botting_tree
-
-
-def _draw_party_slot_editor(team_size: int, slot_index: int) -> None:
-    slot = settings.get_party_slots(team_size)[slot_index]
-    PyImGui.text(f"Hero {slot_index + 1}")
-    PyImGui.same_line(90.0, 8.0)
-    current_index = HERO_ID_TO_OPTION_INDEX.get(int(slot.hero_id), 0)
-    new_index = PyImGui.combo(f"##party_hero_{team_size}_{slot_index}", current_index, HERO_OPTION_LABELS)
-    if new_index != current_index:
-        hero = HERO_OPTIONS[new_index]
-        slot.hero_id = int(hero.value)
-        slot.template = "" if hero == HeroType.None_ else DEFAULT_HERO_TEMPLATES.get(hero, slot.template)
-        settings.party_config_dirty = True
-    PyImGui.text("Template")
-    PyImGui.same_line(90.0, 8.0)
-    new_template = PyImGui.input_text(f"##party_template_{team_size}_{slot_index}", slot.template)
-    if new_template != slot.template:
-        slot.template = new_template
-        settings.party_config_dirty = True
-
-
-def draw_party_tab() -> None:
-    """Hero team setup tab: pick heroes + skillbar templates per team size."""
-    if settings.party_config_dirty:
-        PyImGui.text_colored("Unsaved party changes", (1.0, 0.8, 0.2, 1.0))
-    elif settings.party_config_status:
-        PyImGui.text_colored(settings.party_config_status, (0.6, 0.9, 0.6, 1.0))
-    if PyImGui.button("Save Party Formation"):
-        settings.save_party_formations()
-    PyImGui.same_line(0.0, 8.0)
-    if PyImGui.button("Reload Saved"):
-        settings.load_party_formations()
-    PyImGui.same_line(0.0, 8.0)
-    if PyImGui.button("Reset Defaults"):
-        settings.reset_party_formations()
-    PyImGui.separator()
-    if PyImGui.begin_tab_bar("PartyFormationTabs"):
-        for team_size in TEAM_PRESET_SIZES:
-            if PyImGui.begin_tab_item(f"Team of {team_size}"):
-                for slot_index in range(TEAM_PRESET_SLOT_COUNTS[team_size]):
-                    _draw_party_slot_editor(team_size, slot_index)
-                    PyImGui.separator()
-                PyImGui.end_tab_item()
-        PyImGui.end_tab_bar()
 
 
 def draw_settings_tab() -> None:
@@ -1514,7 +2006,8 @@ def _draw_help_tab() -> None:
         "and clear their kill path. Sunspear and Lightbringer are bounty loops: each "
         "run walks to the bounty priest, accepts the bounty through the dialog, then "
         "clears the kill path. Both loop types travel to the route's outpost on hard "
-        "mode and resign back to it at the end of every run."
+        "mode once, when their farm loop starts, and resign back to it at the end "
+        "of every run."
     )
 
     _section("Party setup")
@@ -1525,8 +2018,11 @@ def _draw_help_tab() -> None:
         "missing; an intact team is left alone."
     )
     PyImGui.text_wrapped(
-        "- This is the solo build: one account plus its hero team. Multibox play "
-        "lives in the separate Reputation Farmer Multibox BT module."
+        "- This is the multibox build: the bot summons and invites every account "
+        "from shared memory, and only re-forms the party when an account is missing "
+        "or on a different map. Make sure every account is loaded before you start, "
+        "and that the Messaging widget is enabled on every account so the shared "
+        "dialog fan-outs are processed."
     )
 
     _section("Practical tips")
@@ -1598,16 +2094,21 @@ def _apply_rotation_mode(enable_all: bool) -> None:
 
 
 def _all_farmed_routes_at_target() -> bool:
-    """True when every route the current mode farms is already at the target rank.
+    """True when every account on every farmed route is already at the target rank.
 
     Auto-rotate checks all reputation routes; single mode checks just the
     selected route. When true, the "Rank {_target_rank}" selector option is
     hidden so the only forward choice is Max rank.
+
+    Account-aware: a maxed leader must not hide the rank option while the rest
+    of the team is still below the target, matching the account-aware goal
+    check in _build_farm_sequence.
     """
     routes = _reputation_routes() if _farm_all else [r for r in [_route_by_key(selected_key)] if r]
-    if not routes:
+    accounts = _all_active_accounts()
+    if not routes or not accounts:
         return False
-    return all(_current_rank(route) >= _target_rank for route in routes)
+    return all(_account_rank(account, route) >= _target_rank for route in routes for account in accounts)
 
 
 def _draw_farm_controls(id_suffix: str = "") -> None:
@@ -1768,15 +2269,11 @@ def _draw_main_child_custom(
 def main() -> None:
     global initialized
     if not initialized:
-        settings.load_party_formations()
         ensure_botting_tree()
         initialized = True
     tree = ensure_botting_tree()
     tree.tick()
-    extra_tabs: List[Tuple[str, Callable[[], None]]] = [
-        ("Statistics", _draw_statistics_tab),
-        ("Party", draw_party_tab),
-    ]
+    extra_tabs: List[Tuple[str, Callable[[], None]]] = [("Statistics", _draw_statistics_tab)]
     tree.UI.draw_window(
         icon_path=os.path.join(PySystem.Console.get_projects_path(), MODULE_ICON),
         main_child_dimensions=(520, 420),
