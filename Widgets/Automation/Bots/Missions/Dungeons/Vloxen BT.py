@@ -36,6 +36,7 @@ from Widgets.System.Messaging import (
 )
 
 TEXTURE = os.path.join(PySystem.Console.get_projects_path(), 'Assets', 'Textures', 'Module_Icons', 'vloxen.png')
+MODULE_ICON = 'Assets\\Textures\\Module_Icons\\vloxen.png'
 MODULE_NAME = 'Vloxen Excavations BT'
 INI_PATH = 'Widgets/Automation/Bots/Missions/Dungeons/Vloxen Excavations BT'
 INI_FILENAME = 'Vloxen_Excavations_BT.ini'

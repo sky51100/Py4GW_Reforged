@@ -30,11 +30,11 @@ from Py4GWCoreLib.enums import Range
 from Py4GWCoreLib.enums_src.Model_enums import ModelID
 from Widgets.System.Messaging import get_inventory_state, reset_inventory_state
 
-MODULE_NAME = 'Tunnels of the Forsaken Farm'
+MODULE_NAME = 'Tunnels of the Forsaken BT Farm'
 INI_PATH = 'Widgets/Automation/Bots/Missions/Dungeons/Tunnels of the Forsaken Farm'
 INI_FILENAME = 'Tunnels_of_the_Forsaken_Farm.ini'
-MODULE_ICON = 'Assets\\Textures\\Module_Icons\\Tunnels of the Forsaken.png'
-TEXTURE = os.path.join(PySystem.Console.get_projects_path(), 'Assets', 'Textures', 'Module_Icons', 'Tunnels of the Forsaken.png')
+MODULE_ICON = 'Assets\\Textures\\Module_Icons\\forsaken.png'
+TEXTURE = os.path.join(PySystem.Console.get_projects_path(), 'Assets', 'Textures', 'Module_Icons', 'forsaken.png')
 
 # ── Map IDs ──────────────────────────────────────────────────────────────────
 PIKEN_SQUARE = 40
