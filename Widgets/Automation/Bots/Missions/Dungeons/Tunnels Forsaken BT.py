@@ -1,1299 +1,241 @@
-import json
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
 import os
 import time
-from dataclasses import dataclass
-from typing import Callable
 
 import PySystem
 import PyImGui
 
+from Py4GWCoreLib import Agent, AgentArray, GLOBAL_CACHE, Inventory, Map, Player, Routines, SharedCommandType
 from Py4GWCoreLib.BottingTree import BottingTree
-from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
-from Py4GWCoreLib.Player import Player
-from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
-from Py4GWCoreLib.Inventory import Inventory
-from Py4GWCoreLib.py4gwcorelib_src.Console import ConsoleLog
-from Py4GWCoreLib.enums_src.Py4GW_enums import Console
-from Py4GWCoreLib.enums_src.Multiboxing_enums import SharedCommandType
-from Py4GWCoreLib.enums_src.Hero_enums import HeroType
-from Py4GWCoreLib.ImGui_src.ImGuisrc import ImGui
-
-from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
-from Py4GWCoreLib.routines_src.behaviourtrees_src.constants.lists import *
-from Py4GWCoreLib.routines_src.behaviourtrees_src.constants import *
-from Py4GWCoreLib.routines_src.behaviourtrees_src.composite import BTComposite
-from Py4GWCoreLib.routines_src.behaviourtrees_src.shared import BTShared
-from Py4GWCoreLib.routines_src.behaviourtrees_src.items import BTItems
-from Sources.ApoSource.ApoBottingLib import wrappers as BT
-from Sources.Sky.DungeonParty import DungeonPartyConfig
-from Py4GWCoreLib.enums import Range
+from Py4GWCoreLib.Item import has_active_party_summon
+from Py4GWCoreLib.Listeners import Listeners
+from Py4GWCoreLib.enums import CONSUMABLE_MODELID_TO_EFFECT_NAME
+from Py4GWCoreLib.enums_src.GameData_enums import Range
 from Py4GWCoreLib.enums_src.Model_enums import ModelID
-from Widgets.System.Messaging import get_inventory_state, reset_inventory_state
+from Py4GWCoreLib.enums_src.Player_enums import PlayerStatus
+from Py4GWCoreLib.native_src.internals.types import Vec2f
+from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
+from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
+from Py4GWCoreLib.routines_src.behaviourtrees_src.constants.lists import (
+    CONSET_UPKEEPS,
+    CONSUMABLE_UPKEEPS as ALL_CONSUMABLE_UPKEEPS,
+)
+from Py4GWCoreLib.routines_src.behaviourtrees_src.shared import BTShared
+from Sources.ApoSource.ApoBottingLib import wrappers as BT
+from Widgets.System.Messaging import get_inventory_count, reset_inventory_count, get_inventory_state, reset_inventory_state
 
-MODULE_NAME = 'Tunnels of the Forsaken BT Farm'
-INI_PATH = 'Widgets/Automation/Bots/Missions/Dungeons/Tunnels of the Forsaken Farm'
-INI_FILENAME = 'Tunnels_of_the_Forsaken_Farm.ini'
-MODULE_ICON = 'Assets\\Textures\\Module_Icons\\forsaken.png'
 TEXTURE = os.path.join(PySystem.Console.get_projects_path(), 'Assets', 'Textures', 'Module_Icons', 'forsaken.png')
+MODULE_ICON = "Assets\\Textures\\Module_Icons\\forsaken.png"
+MODULE_NAME = 'Tunnels of the Forsaken BT'
+INI_PATH = 'Widgets/Automation/Bots/Missions/Dungeons/Tunnels Of The Forsaken BT'
+INI_FILENAME = 'Tunnels_Of_The_Forsaken_BT.ini'
 
-# ── Map IDs ──────────────────────────────────────────────────────────────────
-PIKEN_SQUARE = 40
-THE_BREACH   = 102
-TUNNELS_LVL_1 = 880
-TUNNELS_LVL_2 = 881
-TUNNELS_LVL_3 = 882
+START_OUTPOST = 40  # Default 4-player start; 6-player mode selects Yak's Bend at runtime.
+SURFACE_MAPS = (99, 103, 13, 102)
+DUNGEON_MAPS = (880, 881, 882)
+QUEST_ID = 0x5B5
+GREAT_TEMPLE_OF_BALTHAZAR = 248
+ETERNAL_BLADE_MODEL_ID = 1045
 
-# ── Quest / Dialog IDs ────────────────────────────────────────────────────────
-DREAMER_AND_ZEALOT_QUEST_ID = 1461
-QUEST_ACCEPT_DIALOG         = 0x85B501
-QUEST_REWARD_DIALOG         = 0x85B507
+SUMMON_MODEL_IDS = (37810, 30209, 31155)
+PCON_UPKEEPS = tuple(
+    int(model_id)
+    for model_id in ALL_CONSUMABLE_UPKEEPS
+    if int(model_id) not in CONSET_UPKEEPS
+)
+CONSET_RESTOCK_ITEMS = tuple((int(model_id), 10) for model_id in CONSET_UPKEEPS)
+PCON_RESTOCK_ITEMS = tuple((int(model_id), 10) for model_id in PCON_UPKEEPS)
+SUMMON_RESTOCK_ITEMS = tuple((int(model_id), 10) for model_id in SUMMON_MODEL_IDS)
 
-# ── Important interaction positions ─────────────────────────────────────────
-QUEST_NPC_POS               = (-7400., -9462.)
-QUEST_REWARD_NPC_POS        = (-16098., -8626.)
-DUNGEON_CHEST_POS           = (-16066., -8370.)
-
-# ── Aggro range ($RANGE_SPELLCAST + 100 from AutoIt) ─────────────────────────
-TUNNELS_AGGRO_RANGE = Range.Spellcast.value + 100.0
-
-# ── Consumables ──────────────────────────────────────────────────────────────
-# Same generic, non-content-locked stones Shards Of Orr's own
-# UseAvailableSummoningStone() offers -- carry over only if these are actually
-# in the loadout; harmless (no-op) if not carried.
-SUMMON_MODEL_IDS = (30209, 37810, 31155)  # Tengu Summon, Legionnaire Summoning Crystal, Mysterious Summon
-PCON_UPKEEPS = tuple((int(model_id) for model_id in CONSUMABLE_UPKEEPS if int(model_id) not in CONSET_UPKEEPS))
-CONSET_RESTOCK_ITEMS: tuple[tuple[int, int], ...] = tuple(((int(model_id), 10) for model_id in CONSET_UPKEEPS))
-PCON_RESTOCK_ITEMS: tuple[tuple[int, int], ...] = tuple(((int(model_id), 10) for model_id in PCON_UPKEEPS))
-SUMMON_RESTOCK_ITEMS: tuple[tuple[int, int], ...] = tuple(((model_id, 10) for model_id in SUMMON_MODEL_IDS))
-
-# ── Inventory maintenance ────────────────────────────────────────────────────
-ID_KIT_MODEL_IDS = (int(ModelID.Identification_Kit.value), int(ModelID.Superior_Identification_Kit.value))
-SALVAGE_KIT_MODEL_IDS = (int(ModelID.Expert_Salvage_Kit.value),)
+INVENTORY_BAG_IDS = frozenset((1, 2, 3, 4))
+ID_KIT_MODEL_IDS = (int(ModelID.Superior_Identification_Kit.value),)
+SALVAGE_KIT_MODEL_IDS = (int(ModelID.Superior_Salvage_Kit.value),)
 MERCHANT_RULES_WIDGET_NAME = "MerchantRules"
 INVENTORY_PLUS_WIDGET_NAME = "InventoryPlus"
+
+# Preferred non-Europe districts for multibox start travel, in fallback order.
+# China/Japan intentionally use English (0), matching Map.TravelToDistrict().
+START_TRAVEL_PREFERENCES: tuple[tuple[str, int, int, int], ...] = (
+    ("International", -2, 1, 0),
+    ("Chinese", 3, 1, 0),
+    ("Japanese", 4, 1, 0),
+)
 INVENTORY_MAINTENANCE_RETRY_COUNT = 2
 INVENTORY_SNAPSHOT_SETTLE_MS = 2_000
+INVENTORY_TRAVEL_TIMEOUT_MS = 60_000
 INVENTORY_MERCHANT_TIMEOUT_MS = 240_000
-_INVENTORY_QUERY_POLL_MS = 200
 _INVENTORY_QUERY_TIMEOUT_MS = 10_000
+_INVENTORY_QUERY_POLL_MS = 200
+
+_SETTINGS_SECTION = "Settings"
+_STATS_SECTION = "Statistics"
+_ETERNAL_BLADE_DROPS_SECTION = "Eternal Blade Drops"
+_ETERNAL_BLADE_SNAPSHOT_SECTION = "Eternal Blade Snapshot"
+_ETERNAL_BLADE_RUN_SECTION = "Eternal Blade Run"
+_CHAR_NAMES_SECTION = "Character Names"
+_settings = Settings(f"{INI_PATH}/{INI_FILENAME}", "global")
+_settings_loaded = False
+_statistics_loaded = False
+
+_use_hard_mode = True
+_six_men = False
+_restock_conset = True
+_activate_conset = True
+_restock_pcons = True
+_activate_pcons = True
+_use_summoning_stone = True
+_auto_loot = True
+_inventory_maintenance_enabled = True
+_inventory_min_free_slots = 5
+_inventory_min_id_kits = 1
+_inventory_min_salvage_kits = 2
+
+_runtime_consumables_enabled = True
+_runtime_looting_enabled = True
+_configured_consumable_upkeeps: tuple[int, ...] | None = None
+_inventory_status_snapshot: dict[str, dict[str, object]] = {}
+
+# Direct multibox PCon runtime state.
+_PCON_DIRECT_DISPATCH_INTERVAL_MS = 650
+PCON_USAGE_LOG = False
+_pcon_direct_index = 0
+_pcon_direct_last_dispatch_ms = 0
+_pcon_direct_runtime_logged = False
+_pcon_direct_last_recipient_signature: tuple[str, ...] = ()
+_pcon_direct_morale_remote_index = 0
+_PCON_PARTY_MORALE_TARGET_BY_MODEL = {
+    int(ModelID.Four_Leaf_Clover.value): 100,
+    int(ModelID.Honeycomb.value): 110,
+}
+
+# Persistent statistics.
+_total_runs = 0
+_total_run_time = 0.0
+_fastest_run = float("inf")
+_slowest_run = 0.0
+_l1_total_time = 0.0
+_l1_fastest = float("inf")
+_l1_slowest = 0.0
+_l2_total_time = 0.0
+_l2_fastest = float("inf")
+_l2_slowest = 0.0
+_l3_total_time = 0.0
+_l3_fastest = float("inf")
+_l3_slowest = 0.0
+_surface_runs = 0
+_surface_total_time = 0.0
+_surface_fastest = float("inf")
+_surface_slowest = 0.0
+_eternal_blade_drops: dict[str, int] = {}
+_char_names: dict[str, str] = {}
+
+# Session-only statistics.
+_session_runs = 0
+_session_eternal_blades: dict[str, int] = {}
+_scramble_accounts = False
+_statistics_reset_pending = False
+
+# Active and most recently completed timings.
+_t_run_start = 0.0
+_t_l2_start = 0.0
+_t_l3_start = 0.0
+_t_surface_start = 0.0
+_current_run_time = 0.0
+_current_l1_time = 0.0
+_current_l2_time = 0.0
+_current_l3_time = 0.0
+_current_surface_time = 0.0
+
+# Elemental Keystone bundle handling.  The policy is resolved before the
+# Keystone is picked up because carrying a bundle can hide the equipped
+# weapon type reported by the game.
+_drop_keystone_for_combat: bool | None = None
+_keystone_dropped_for_combat = False
 
 initialized = False
 botting_tree: BottingTree | None = None
 
-# ── Bot settings (persisted to INI) ──────────────────────────────────────────
-_settings_ini = Settings(f'{INI_PATH}/{INI_FILENAME}', 'account')
-_dungeon_party = DungeonPartyConfig(_settings_ini)
-_SETTINGS_SECTION = 'Settings'
-_HARD_MODE_KEY = 'use_hard_mode'
-_RESTOCK_CONSET_KEY = 'restock_conset'
-_ACTIVATE_CONSET_KEY = 'activate_conset'
-_RESTOCK_PCONS_KEY = 'restock_pcons'
-_ACTIVATE_PCONS_KEY = 'activate_pcons'
-_USE_SUMMONING_STONE_KEY = 'use_summoning_stone'
-_INVENTORY_ENABLED_KEY = 'inventory_maintenance_enabled'
-_INVENTORY_MIN_FREE_SLOTS_KEY = 'inventory_min_free_slots'
-_INVENTORY_MIN_ID_KITS_KEY = 'inventory_min_id_kits'
-_INVENTORY_MIN_SALVAGE_KITS_KEY = 'inventory_min_salvage_kits'
-
-_use_hard_mode: bool = True
-_restock_conset: bool = True
-_activate_conset: bool = True
-_restock_pcons: bool = True
-_activate_pcons: bool = True
-_use_summoning_stone: bool = True
-_inventory_maintenance_enabled: bool = True
-_inventory_min_free_slots: int = 5
-_inventory_min_id_kits: int = 1
-_inventory_min_salvage_kits: int = 2
-
-_inventory_status_snapshot: dict[str, dict[str, object]] = {}
-
-# ── Party mode (Single Account with Heroes / Multiboxing) ───────────────────
-_USE_MULTIBOX_KEY = 'use_multibox_alts'
-_party_mode: int = 0      # 0 = Single Account with Heroes, 1 = Multiboxing
-_tree_party_mode: int | None = None  # party mode the current botting_tree was built for
-_heroes_setup_done: bool = False
-
-
-def _is_multibox() -> bool:
-    return _party_mode == 1
-
-
-# ── Hero config ──────────────────────────────────────────────────────────────
-@dataclass
-class _PartyHeroSlot:
-    hero_id: int = 0
-    template: str = ""
-
-
-def _humanize_hero_name(enum_name: str) -> str:
-    if enum_name == "None_":
-        return "<Empty>"
-    words: list[str] = []
-    current = enum_name[0]
-    for char in enum_name[1:]:
-        if (char.isupper() and not current[-1].isupper()) or (char.isdigit() and not current[-1].isdigit()):
-            words.append(current)
-            current = char
-        else:
-            current += char
-    words.append(current)
-    return " ".join(words)
-
-
-_HERO_OPTIONS: list[HeroType] = [HeroType.None_] + sorted(
-    [h for h in HeroType if h != HeroType.None_],
-    key=lambda h: _humanize_hero_name(h.name),
-)
-_HERO_OPTION_LABELS: list[str] = [_humanize_hero_name(h.name) for h in _HERO_OPTIONS]
-_HERO_ID_TO_OPTION_INDEX: dict[int, int] = {int(h): i for i, h in enumerate(_HERO_OPTIONS)}
-
-_HERO_ICON_FILENAMES: dict[HeroType, str] = {
-    HeroType.Norgu: "Norgu-icon.jpg",           HeroType.Goren: "Goren-icon.jpg",
-    HeroType.Tahlkora: "Tahlkora-icon.jpg",      HeroType.MasterOfWhispers: "MasterOfWhispers-icon.jpg",
-    HeroType.AcolyteJin: "AcolyteSousuke-icon.jpg", HeroType.Koss: "Koss-icon.jpg",
-    HeroType.Dunkoro: "Dunkoro-icon.jpg",        HeroType.AcolyteSousuke: "AcolyteSousuke-icon.jpg",
-    HeroType.Melonni: "Melonni-icon.jpg",        HeroType.ZhedShadowhoof: "ZhedShadowhoof-icon.jpg",
-    HeroType.GeneralMorgahn: "GeneralMorgahn-icon.jpg", HeroType.MagridTheSly: "MargridTheSly-icon.jpg",
-    HeroType.Zenmai: "Zenmai-icon.jpg",          HeroType.Olias: "Olias-icon.jpg",
-    HeroType.Razah: "Razah-icon.jpg",            HeroType.MOX: "M.O.X.-icon.jpg",
-    HeroType.KeiranThackeray: "KeiranThackeray-icon.jpg", HeroType.Jora: "Jora-icon.jpg",
-    HeroType.PyreFierceshot: "Pyre_Fierceshot-icon.jpg", HeroType.Anton: "Anton-icon.jpg",
-    HeroType.Livia: "Livia-icon.jpg",            HeroType.Hayda: "Hayda-icon.jpg",
-    HeroType.Kahmu: "Kahmu-icon.jpg",            HeroType.Gwen: "Gwen-icon.jpg",
-    HeroType.Xandra: "Xandra-icon.jpg",          HeroType.Vekk: "Vekk-icon.jpg",
-    HeroType.Ogden: "Ogden_Stonehealer-icon.jpg", HeroType.Miku: "Miku-icon.jpg",
-    HeroType.ZeiRi: "Zei_Ri-icon.jpg",
-}
-
-_DEFAULT_HERO_TEMPLATES: dict[HeroType, str] = {}  # fill with preferred templates, if any
-
-_HERO_SLOTS_COUNT = 7
-_hero_slots: list[_PartyHeroSlot] = [_PartyHeroSlot() for _ in range(_HERO_SLOTS_COUNT)]
-_hero_config_dirty: bool = False
-_hero_config_status: str = ""
-_hero_import_source_index: int = 0
-
-_BOT_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
-_HERO_CONFIG_PATH = os.path.join(_BOT_SCRIPT_DIR, f"{MODULE_NAME} Heroes.json")
-_HERO_ICONS_BASE = os.path.normpath(os.path.join(
-    PySystem.Console.get_projects_path(), "..", "Property-of-Wick-Divinus-and-Kendor",
-    "PVE Skills Unlocker", "Textures", "Skill_Icons",
-))
-
 
 def _load_settings() -> None:
-    global _use_hard_mode, _restock_conset, _activate_conset, _restock_pcons, _activate_pcons
-    global _use_summoning_stone, _inventory_maintenance_enabled
-    global _inventory_min_free_slots, _inventory_min_id_kits, _inventory_min_salvage_kits
-    global _party_mode
+    global _settings_loaded
+    global _use_hard_mode, _six_men, _restock_conset, _activate_conset
+    global _restock_pcons, _activate_pcons, _use_summoning_stone, _auto_loot
+    global _inventory_maintenance_enabled, _inventory_min_free_slots
+    global _inventory_min_id_kits, _inventory_min_salvage_kits
+    global _runtime_looting_enabled
 
-    _party_mode = 1 if _settings_ini.get_bool(_SETTINGS_SECTION, _USE_MULTIBOX_KEY, False) else 0
-    _use_hard_mode = _settings_ini.get_bool(_SETTINGS_SECTION, _HARD_MODE_KEY, True)
-    _restock_conset = _settings_ini.get_bool(_SETTINGS_SECTION, _RESTOCK_CONSET_KEY, True)
-    _activate_conset = _settings_ini.get_bool(_SETTINGS_SECTION, _ACTIVATE_CONSET_KEY, True)
-    _restock_pcons = _settings_ini.get_bool(_SETTINGS_SECTION, _RESTOCK_PCONS_KEY, True)
-    _activate_pcons = _settings_ini.get_bool(_SETTINGS_SECTION, _ACTIVATE_PCONS_KEY, True)
-    _use_summoning_stone = _settings_ini.get_bool(_SETTINGS_SECTION, _USE_SUMMONING_STONE_KEY, True)
-    _inventory_maintenance_enabled = _settings_ini.get_bool(_SETTINGS_SECTION, _INVENTORY_ENABLED_KEY, True)
-    _inventory_min_free_slots = max(0, _settings_ini.get_int(_SETTINGS_SECTION, _INVENTORY_MIN_FREE_SLOTS_KEY, 5))
-    _inventory_min_id_kits = max(0, _settings_ini.get_int(_SETTINGS_SECTION, _INVENTORY_MIN_ID_KITS_KEY, 1))
-    _inventory_min_salvage_kits = max(0, _settings_ini.get_int(_SETTINGS_SECTION, _INVENTORY_MIN_SALVAGE_KITS_KEY, 2))
+    if _settings_loaded:
+        _load_statistics()
+        return
+
+    _use_hard_mode = _settings.get_bool(_SETTINGS_SECTION, "HardMode", True)
+    _six_men = _settings.get_bool(_SETTINGS_SECTION, "SixMen", False)
+    _restock_conset = _settings.get_bool(_SETTINGS_SECTION, "RestockConset", True)
+    _activate_conset = _settings.get_bool(_SETTINGS_SECTION, "ActivateConset", True)
+    _restock_pcons = _settings.get_bool(_SETTINGS_SECTION, "RestockPcons", True)
+    _activate_pcons = _settings.get_bool(_SETTINGS_SECTION, "ActivatePcons", True)
+    _use_summoning_stone = _settings.get_bool(_SETTINGS_SECTION, "UseSummoningStone", True)
+    _auto_loot = _settings.get_bool(_SETTINGS_SECTION, "AutoLoot", True)
+    _runtime_looting_enabled = _auto_loot
+    _inventory_maintenance_enabled = _settings.get_bool(_SETTINGS_SECTION, "InventoryMaintenanceEnabled", True)
+    _inventory_min_free_slots = max(0, _settings.get_int(_SETTINGS_SECTION, "InventoryMinFreeSlots", 5))
+    _inventory_min_id_kits = max(0, _settings.get_int(_SETTINGS_SECTION, "InventoryMinIdKits", 1))
+    _inventory_min_salvage_kits = max(0, _settings.get_int(_SETTINGS_SECTION, "InventoryMinSalvageKits", 2))
+
+    _settings_loaded = True
+    _load_statistics()
 
 
 def _save_settings() -> None:
-    _settings_ini.set(_SETTINGS_SECTION, _USE_MULTIBOX_KEY, _is_multibox())
-    _settings_ini.set(_SETTINGS_SECTION, _HARD_MODE_KEY, _use_hard_mode)
-    _settings_ini.set(_SETTINGS_SECTION, _RESTOCK_CONSET_KEY, _restock_conset)
-    _settings_ini.set(_SETTINGS_SECTION, _ACTIVATE_CONSET_KEY, _activate_conset)
-    _settings_ini.set(_SETTINGS_SECTION, _RESTOCK_PCONS_KEY, _restock_pcons)
-    _settings_ini.set(_SETTINGS_SECTION, _ACTIVATE_PCONS_KEY, _activate_pcons)
-    _settings_ini.set(_SETTINGS_SECTION, _USE_SUMMONING_STONE_KEY, _use_summoning_stone)
-    _settings_ini.set(_SETTINGS_SECTION, _INVENTORY_ENABLED_KEY, _inventory_maintenance_enabled)
-    _settings_ini.set(_SETTINGS_SECTION, _INVENTORY_MIN_FREE_SLOTS_KEY, _inventory_min_free_slots)
-    _settings_ini.set(_SETTINGS_SECTION, _INVENTORY_MIN_ID_KITS_KEY, _inventory_min_id_kits)
-    _settings_ini.set(_SETTINGS_SECTION, _INVENTORY_MIN_SALVAGE_KITS_KEY, _inventory_min_salvage_kits)
+    _settings.set(_SETTINGS_SECTION, "HardMode", _use_hard_mode)
+    _settings.set(_SETTINGS_SECTION, "SixMen", _six_men)
+    _settings.set(_SETTINGS_SECTION, "RestockConset", _restock_conset)
+    _settings.set(_SETTINGS_SECTION, "ActivateConset", _activate_conset)
+    _settings.set(_SETTINGS_SECTION, "RestockPcons", _restock_pcons)
+    _settings.set(_SETTINGS_SECTION, "ActivatePcons", _activate_pcons)
+    _settings.set(_SETTINGS_SECTION, "UseSummoningStone", _use_summoning_stone)
+    _settings.set(_SETTINGS_SECTION, "AutoLoot", _auto_loot)
+    _settings.set(_SETTINGS_SECTION, "InventoryMaintenanceEnabled", _inventory_maintenance_enabled)
+    _settings.set(_SETTINGS_SECTION, "InventoryMinFreeSlots", _inventory_min_free_slots)
+    _settings.set(_SETTINGS_SECTION, "InventoryMinIdKits", _inventory_min_id_kits)
+    _settings.set(_SETTINGS_SECTION, "InventoryMinSalvageKits", _inventory_min_salvage_kits)
 
 
-def _enabled_consumable_upkeeps() -> tuple[int, ...]:
-    """Consumables that must be continuously maintained. Summoning stones are
-    excluded -- they're one-shot items, handled separately by
-    UseAvailableSummoningStone(), not the continuous upkeep service."""
-    enabled: list[int] = []
-    if _activate_conset:
-        enabled.extend(CONSET_UPKEEPS)
-    if _activate_pcons:
-        enabled.extend(PCON_UPKEEPS)
-    return tuple(dict.fromkeys((int(model_id) for model_id in enabled)))
+def _account_key(email: str) -> str:
+    return str(email).replace("@", "_at_").replace(".", "_")
 
 
-def _runtime_restock_node() -> BehaviorTree:
-    def _build(_node: BehaviorTree.Node) -> BehaviorTree:
-        items: list[tuple[int, int]] = []
-        if _restock_conset:
-            items.extend(CONSET_RESTOCK_ITEMS)
-        if _restock_pcons:
-            items.extend(PCON_RESTOCK_ITEMS)
-        if _use_summoning_stone:
-            items.extend(SUMMON_RESTOCK_ITEMS)
-        if not items:
-            return BT.Succeeder('RestockDisabled')
-        return BT.RestockItemsFromList(tuple(items), allow_missing=True)
-
-    return BT.Subtree(name='Restock Selected Consumables', subtree_fn=_build)
+def _display_email(key: str) -> str:
+    return str(key).replace("_at_", "@").replace("_", ".")
 
 
-def UseAvailableSummoningStone() -> BehaviorTree:
-    """Use the first available summoning stone once. Kept outside the continuous
-    consumable upkeep service since these are one-shot items, not something to
-    keep re-buffing."""
-    if not _use_summoning_stone:
-        return BT.Succeeder('SummoningStoneDisabled')
-
-    stone_attempts = [
-        BT.Sequence(
-            name=f'Use Summoning Stone {model_id}',
-            children=[BTItems.HasItemQuantity(int(model_id), 1), BTItems.UseConsumable(int(model_id))],
-        )
-        for model_id in SUMMON_MODEL_IDS
-    ]
-    return BT.Selector(name='Use Available Summoning Stone', children=stone_attempts + [BT.Succeeder('NoSummoningStoneAvailable')])
+def _known_account_keys() -> list[str]:
+    return sorted(
+        key
+        for key in (set(_eternal_blade_drops) | set(_session_eternal_blades))
+        if key and key != "local"
+    )
 
 
-def _draw_bot_config() -> None:
-    global _party_mode
-    global _use_hard_mode
-    global _restock_conset, _activate_conset
-    global _restock_pcons, _activate_pcons
-    global _use_summoning_stone
-    global _inventory_maintenance_enabled
-    global _inventory_min_free_slots, _inventory_min_id_kits, _inventory_min_salvage_kits
+def _account_label(key: str) -> str:
+    if not _scramble_accounts:
+        return _char_names.get(key) or _display_email(key)
 
-    changed = False
-    upkeep_changed = False
-
-    PyImGui.text('Party Mode')
-    new_mode = PyImGui.radio_button('Single Account with Heroes', _party_mode, 0)
-    PyImGui.same_line(0, 16)
-    new_mode = PyImGui.radio_button('Multiboxing', new_mode, 1)
-    if new_mode != _party_mode:
-        _party_mode = int(new_mode)
-        _save_settings()
-        _rebuild_tree_for_party_mode()
-
-    if _is_multibox():
-        PyImGui.text_colored('Multibox: alt accounts are summoned and invited automatically.', (0.6, 0.9, 1.0, 1.0))
-    else:
-        PyImGui.text_colored('Single account: heroes selected on the Party tab are loaded automatically when CreateParty runs.', (0.7, 1.0, 0.7, 1.0))
-
-    PyImGui.separator()
-
-    value = PyImGui.checkbox('Hard Mode', _use_hard_mode)
-    if value != _use_hard_mode:
-        _use_hard_mode = value
-        changed = True
-
-    PyImGui.separator()
-    PyImGui.text('Conset')
-
-    value = PyImGui.checkbox('Restock conset from storage', _restock_conset)
-    if value != _restock_conset:
-        _restock_conset = value
-        changed = True
-
-    value = PyImGui.checkbox('Activate / maintain conset', _activate_conset)
-    if value != _activate_conset:
-        _activate_conset = value
-        changed = True
-        upkeep_changed = True
-
-    PyImGui.separator()
-    PyImGui.text('Personal consumables')
-
-    value = PyImGui.checkbox('Restock pcons from storage', _restock_pcons)
-    if value != _restock_pcons:
-        _restock_pcons = value
-        changed = True
-
-    value = PyImGui.checkbox('Activate / maintain pcons', _activate_pcons)
-    if value != _activate_pcons:
-        _activate_pcons = value
-        changed = True
-        upkeep_changed = True
-
-    PyImGui.separator()
-    PyImGui.text('Summoning stones')
-
-    value = PyImGui.checkbox('Use summoning stones', _use_summoning_stone)
-    if value != _use_summoning_stone:
-        _use_summoning_stone = value
-        changed = True
-
-    PyImGui.separator()
-    PyImGui.text('Inventory maintenance')
-
-    value = PyImGui.checkbox('Run MerchantRules when inventory is low', _inventory_maintenance_enabled)
-    if value != _inventory_maintenance_enabled:
-        _inventory_maintenance_enabled = value
-        changed = True
-
-    if _inventory_maintenance_enabled:
-        value = max(0, int(PyImGui.input_int('Minimum free slots', _inventory_min_free_slots)))
-        if value != _inventory_min_free_slots:
-            _inventory_min_free_slots = value
-            changed = True
-
-        value = max(0, int(PyImGui.input_int('Minimum ID kits (0 = disabled)', _inventory_min_id_kits)))
-        if value != _inventory_min_id_kits:
-            _inventory_min_id_kits = value
-            changed = True
-
-        value = max(0, int(PyImGui.input_int('Minimum salvage kits (0 = disabled)', _inventory_min_salvage_kits)))
-        if value != _inventory_min_salvage_kits:
-            _inventory_min_salvage_kits = value
-            changed = True
-
-        PyImGui.text_wrapped(
-            'Checked when every account returns to Piken Square. If any active account '
-            'falls below a threshold, MerchantRules runs on ALL active accounts together.'
-        )
-
-    if changed:
-        _save_settings()
-
-    if upkeep_changed and botting_tree is not None:
-        _apply_upkeep_config(botting_tree)
+    keys = _known_account_keys()
+    index = keys.index(key) + 1 if key in keys else 0
+    return f"Player {index}"
 
 
-def _draw_help_page() -> None:
-    PyImGui.text('Tunnels of the Forsaken Farm')
-    PyImGui.separator()
-    PyImGui.text('Requirements')
-    PyImGui.separator()
-    PyImGui.text('- Single Account with Heroes, or Multiboxing with real alt accounts;')
-    PyImGui.text('  set in the Bot Config tab (Multiboxing needs at least one follower account,')
-    PyImGui.text('  Single Account can use heroes selected on the Party tab).')
-    PyImGui.text('- Althea the Healer must have been unlocked in a previous run.')
-    PyImGui.text('- No consumables required.')
-    PyImGui.text('- Hard Mode toggle available in the Bot Config tab.')
-    PyImGui.separator()
-    PyImGui.text('Tested Setup')
-    PyImGui.separator()
-    PyImGui.text('- Tested in Normal Mode only.')
-    PyImGui.text('- Tested with: TaO Ranger, Panic Mesmer, Inept Mesmer, SoS Healer.')
-    PyImGui.separator()
-    PyImGui.text('Route')
-    PyImGui.separator()
-    PyImGui.text('- Travels to Piken Square, enters The Breach, then clears all 3 floors.')
-    PyImGui.text('- Accepts and rewards The Dreamer and the Zealot quest automatically.')
-    PyImGui.text('- Abandons and re-takes the quest at the start of each run.')
-    PyImGui.separator()
-    PyImGui.text('Credits')
-    PyImGui.separator()
-    PyImGui.text('- Original Author: GWAU2 BotsHub (Kronos, TDawg)')
-    PyImGui.text('- Py4GW port by Northbound')
-
-
-# ── Hero config I/O ───────────────────────────────────────────────────────────
-
-def _load_hero_config() -> None:
-    global _hero_slots, _hero_config_dirty, _hero_config_status
-    if not os.path.exists(_HERO_CONFIG_PATH):
-        _hero_config_status = ""
-        return
+def _statistics_accounts() -> list[object]:
     try:
-        with open(_HERO_CONFIG_PATH, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-        _hero_slots = _parse_hero_config_entries(raw)
-        _hero_config_dirty = False
-        _hero_config_status = "Loaded."
-    except Exception as exc:
-        _hero_config_status = f"Load error: {exc}"
-
-
-def _save_hero_config() -> None:
-    global _hero_config_dirty, _hero_config_status
-    payload = [{"hero_id": int(s.hero_id), "template": s.template} for s in _hero_slots]
-    try:
-        os.makedirs(os.path.dirname(_HERO_CONFIG_PATH), exist_ok=True)
-        with open(_HERO_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-        _hero_config_dirty = False
-        _hero_config_status = "Saved."
-    except Exception as exc:
-        _hero_config_status = f"Save error: {exc}"
-
-
-def _reset_hero_config() -> None:
-    global _hero_slots, _hero_config_dirty, _hero_config_status
-    _hero_slots = [_PartyHeroSlot() for _ in range(_HERO_SLOTS_COUNT)]
-    _hero_config_dirty = True
-    _hero_config_status = "Reset to empty."
-
-
-def _parse_hero_config_entries(raw: object) -> list[_PartyHeroSlot]:
-    slots: list[_PartyHeroSlot] = []
-    for i in range(_HERO_SLOTS_COUNT):
-        entry = raw[i] if isinstance(raw, list) and i < len(raw) else {}
-        hero_id = int(entry.get("hero_id", 0) or 0)
-        if hero_id not in _HERO_ID_TO_OPTION_INDEX:
-            hero_id = 0
-        slots.append(_PartyHeroSlot(hero_id=hero_id, template=str(entry.get("template", "") or "")))
-    return slots
-
-
-def _list_importable_hero_configs() -> list[str]:
-    try:
-        files = [
-            os.path.join(_BOT_SCRIPT_DIR, e)
-            for e in os.listdir(_BOT_SCRIPT_DIR)
-            if e.endswith(" Heroes.json") and os.path.isfile(os.path.join(_BOT_SCRIPT_DIR, e))
-        ]
-        files.sort(key=lambda p: os.path.basename(p).lower())
-        return files
-    except OSError:
-        return []
-
-
-def _hero_import_label(path: str) -> str:
-    name = os.path.splitext(os.path.basename(path))[0]
-    return name[:-7] if name.endswith(" Heroes") else name
-
-
-def _import_hero_config(path: str) -> None:
-    global _hero_slots, _hero_config_dirty, _hero_config_status
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-        _hero_slots = _parse_hero_config_entries(raw)
-        _hero_config_dirty = True
-        _save_hero_config()
-        _hero_config_status = f"Imported from {_hero_import_label(path)} and saved."
-    except Exception as exc:
-        _hero_config_status = f"Import error: {exc}"
-
-
-def _get_hero_icon_path(hero_id: int) -> str | None:
-    try:
-        hero_type = HeroType(hero_id)
-    except ValueError:
-        return None
-    filename = _HERO_ICON_FILENAMES.get(hero_type)
-    if not filename:
-        return None
-    path = os.path.join(_HERO_ICONS_BASE, filename)
-    return path if os.path.exists(path) else None
-
-
-def _draw_hero_icon(hero_id: int, size: int = 24) -> None:
-    path = _get_hero_icon_path(hero_id)
-    if path:
-        try:
-            cx, cy = PyImGui.get_cursor_screen_pos()
-            ImGui.DrawTextureInDrawList(pos=(float(cx), float(cy)), size=(float(size), float(size)), texture_path=path)
-        except Exception:
-            try:
-                ImGui.DrawTexture(texture_path=path, width=size, height=size)
-            except Exception:
-                pass
-    PyImGui.dummy((int(size), int(size)))
-
-
-def _draw_hero_combo(label: str, hero_id: int) -> int:
-    current_index = _HERO_ID_TO_OPTION_INDEX.get(hero_id, 0)
-    preview = _HERO_OPTION_LABELS[current_index]
-    if PyImGui.begin_combo(label, preview, PyImGui.ImGuiComboFlags.NoFlag):
-        for index, hero in enumerate(_HERO_OPTIONS):
-            if hero != HeroType.None_:
-                _draw_hero_icon(int(hero), size=20)
-            else:
-                PyImGui.dummy((20, 20))
-            PyImGui.same_line(0.0, 8.0)
-            if PyImGui.selectable(f"{_HERO_OPTION_LABELS[index]}##{label}_{index}", index == current_index, 0, [0.0, 0.0]):
-                current_index = index
-        PyImGui.end_combo()
-    return int(_HERO_OPTIONS[current_index])
-
-
-def _draw_hero_slot_editor(slot_index: int) -> None:
-    global _hero_config_dirty
-    slot = _hero_slots[slot_index]
-    combo_label_width = 70.0
-
-    PyImGui.text(f"Hero {slot_index + 1}")
-    PyImGui.same_line(combo_label_width, 8.0)
-    _draw_hero_icon(slot.hero_id, size=24)
-    PyImGui.same_line(0.0, 8.0)
-    PyImGui.set_next_item_width(PyImGui.get_content_region_avail()[0])
-    new_hero_id = _draw_hero_combo(f"##hero_{slot_index}", slot.hero_id)
-    if new_hero_id != slot.hero_id:
-        slot.hero_id = new_hero_id
-        if slot.hero_id == HeroType.None_.value:
-            slot.template = ""
-        elif not slot.template.strip():
-            try:
-                hero_type = HeroType(slot.hero_id)
-            except ValueError:
-                hero_type = HeroType.None_
-            slot.template = _DEFAULT_HERO_TEMPLATES.get(hero_type, "")
-        _hero_config_dirty = True
-
-    PyImGui.text("Template")
-    PyImGui.same_line(0.0, 8.0)
-    if PyImGui.small_button(f"Clear##slot_{slot_index}"):
-        if slot.hero_id != HeroType.None_.value or slot.template:
-            slot.hero_id = HeroType.None_.value
-            slot.template = ""
-            _hero_config_dirty = True
-    PyImGui.set_next_item_width(PyImGui.get_content_region_avail()[0])
-    new_template = PyImGui.input_text(f"##template_{slot_index}", slot.template)
-    if new_template != slot.template:
-        slot.template = new_template
-        _hero_config_dirty = True
-
-
-def _draw_hero_settings_tab() -> None:
-    global _hero_import_source_index
-    PyImGui.text("Configure up to 7 heroes for Single Account mode.")
-    PyImGui.push_style_color(PyImGui.ImGuiCol.Text, (0.7, 0.7, 0.7, 1.0))
-    PyImGui.text("Heroes are added in order; duplicates and empty slots are skipped.")
-    PyImGui.pop_style_color(1)
-    PyImGui.spacing()
-
-    if _hero_config_dirty:
-        PyImGui.push_style_color(PyImGui.ImGuiCol.Text, (1.0, 0.8, 0.2, 1.0))
-        PyImGui.text("Unsaved changes")
-        PyImGui.pop_style_color(1)
-    elif _hero_config_status:
-        PyImGui.push_style_color(PyImGui.ImGuiCol.Text, (0.6, 0.9, 0.6, 1.0))
-        PyImGui.text(_hero_config_status)
-        PyImGui.pop_style_color(1)
-
-    if PyImGui.button("Save", 100, 26):
-        _save_hero_config()
-    PyImGui.same_line(0, 8)
-    if PyImGui.button("Reload", 100, 26):
-        _load_hero_config()
-    PyImGui.same_line(0, 8)
-    if PyImGui.button("Reset", 100, 26):
-        _reset_hero_config()
-
-    import_paths = _list_importable_hero_configs()
-    if import_paths:
-        if _hero_import_source_index >= len(import_paths):
-            _hero_import_source_index = 0
-        import_labels = [_hero_import_label(p) for p in import_paths]
-        _hero_import_source_index = PyImGui.combo("Import Team From", _hero_import_source_index, import_labels)
-        if PyImGui.button("Import Team", 120, 26):
-            _import_hero_config(import_paths[_hero_import_source_index])
-    else:
-        PyImGui.push_style_color(PyImGui.ImGuiCol.Text, (0.7, 0.7, 0.7, 1.0))
-        PyImGui.text("Import Team: save another title bot hero lineup first.")
-        PyImGui.pop_style_color(1)
-
-    PyImGui.separator()
-    # Fixed height, not -1 ("fill remaining space in the current window"): the outer
-    # bot window is WindowFlags.AlwaysAutoResize, so a child sized relative to the
-    # window it's helping to size creates a feedback loop -- each frame's measured
-    # content height feeds the next frame's window height, compounding into a
-    # continuous shrink. A fixed height breaks the loop.
-    if PyImGui.begin_child("HeroSlotsChild", (0, 380), True):
-        for i in range(_HERO_SLOTS_COUNT):
-            _draw_hero_slot_editor(i)
-            if i < _HERO_SLOTS_COUNT - 1:
-                PyImGui.separator()
-    PyImGui.end_child()
-
-
-def _party_wipe_revive_in_place_node() -> BehaviorTree:
-    """Restart the in-progress planner step after a party wipe.
-
-    Tunnels of the Forsaken auto-revives the party at an in-instance shrine at
-    the start of the current floor instead of returning them to an outpost, so
-    the BottingTree's stock party-wipe recovery service (which waits on
-    Map.IsOutpost()) never fires and the planner just keeps ticking the step
-    from wherever it left off. This watches the death/defeat flags directly:
-    once they clear after a wipe, it requests a restart of whichever named
-    step (e.g. 'Floor 2') was active when the wipe happened, via the same
-    'restart_step_name_request' blackboard key the stock service uses.
-
-    GW's "defeated" flag also flips momentarily when the party legitimately
-    Resigns (e.g. after clearing Floor 3), which would otherwise be
-    misdetected as a wipe and force-restart a dungeon step from Piken Square.
-    A genuine shrine revive never changes map, while a Resign always leaves
-    the dungeon, so the map id at defeat-cleared time gates the restart.
-    """
-    state: dict = {'active': False, 'step_name': '', 'map_id': 0}
-
-    def _tick(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
-        from Py4GWCoreLib.Routines import Routines
-        from Py4GWCoreLib.Map import Map
-
-        if not Map.IsMapReady():
-            # Mid map-transition; state isn't reliable, don't act on it.
-            return BehaviorTree.NodeState.RUNNING
-
-        is_defeated = bool(
-            Routines.Checks.Party.IsPartyWiped()
-            or GLOBAL_CACHE.Party.IsPartyDefeated()
-        )
-
-        if not state['active']:
-            if not is_defeated:
-                return BehaviorTree.NodeState.RUNNING
-            state['active'] = True
-            state['step_name'] = str(node.blackboard.get('current_step_name', '') or '')
-            state['map_id'] = Map.GetMapID()
-            return BehaviorTree.NodeState.RUNNING
-
-        if is_defeated:
-            return BehaviorTree.NodeState.RUNNING
-
-        if state['step_name'] and Map.GetMapID() == state['map_id']:
-            node.blackboard['restart_step_name_request'] = state['step_name']
-        state['active'] = False
-        state['step_name'] = ''
-        state['map_id'] = 0
-        return BehaviorTree.NodeState.SUCCESS
-
-    return BehaviorTree(
-        BehaviorTree.ActionNode(
-            name='PartyWipeReviveInPlace',
-            action_fn=_tick,
-            aftercast_ms=0,
-        )
-    )
-
-
-def _apply_upkeep_config(tree: BottingTree) -> None:
-    tree.Config.ConfigureUpkeep(
-        auto_inventory_handler_enabled=True,
-        consumable_upkeeps=_enabled_consumable_upkeeps(),
-        # The stock party-wipe recovery service waits for a return to an
-        # outpost before restarting a step, but this dungeon auto-revives
-        # the party at an in-instance shrine instead. Use our own
-        # _party_wipe_revive_in_place_node service below instead.
-        enable_party_wipe_recovery=False,
-        heroai_state_logging=False,
-    )
-
-
-def _rebuild_tree_for_party_mode() -> None:
-    """Drop the cached BottingTree so ensure_botting_tree() rebuilds it for the new
-    party mode."""
-    global botting_tree, _tree_party_mode, _heroes_setup_done
-    if botting_tree is not None:
-        try:
-            if botting_tree.IsStarted():
-                botting_tree.Stop()
-        except Exception:
-            pass
-    botting_tree = None
-    _tree_party_mode = None
-    _heroes_setup_done = False
-
-
-def ensure_botting_tree() -> BottingTree:
-    global botting_tree, _tree_party_mode
-
-    if botting_tree is not None and _tree_party_mode != _party_mode:
-        _rebuild_tree_for_party_mode()
-
-    if botting_tree is None:
-        multi_account = _is_multibox()
-        botting_tree = BottingTree.Create(
-            MODULE_NAME,
-            main_routine=get_execution_steps(),
-            routine_name='MultiAccountSequence',
-            repeat=True,
-            multi_account=multi_account,
-            isolation_enabled=not multi_account,
-            configure_fn=_apply_upkeep_config,
-        )
-        botting_tree.AddServiceTree('PartyWipeReviveInPlace', _party_wipe_revive_in_place_node)
-        botting_tree.UI.override_draw_help(_draw_help_page)
-        _tree_party_mode = _party_mode
-
-    return botting_tree
-
-
-def _abandon_quest_node() -> BehaviorTree:
-    """Abandon the Dreamer and the Zealot quest so it can be re-taken next loop.
-    Skips silently if DREAMER_AND_ZEALOT_QUEST_ID has not been filled in yet."""
-    def _action() -> BehaviorTree.NodeState:
-        if DREAMER_AND_ZEALOT_QUEST_ID > 0:
-            from Py4GWCoreLib.Quest import Quest
-            Quest.AbandonQuest(DREAMER_AND_ZEALOT_QUEST_ID)
-        return BehaviorTree.NodeState.SUCCESS
-
-    return BehaviorTree(
-        BehaviorTree.ActionNode(
-            name='AbandonDreamerAndZealot',
-            action_fn=_action,
-            aftercast_ms=250,
-        )
-    )
-
-
-def _local_inventory_state() -> tuple[int, int, int, int]:
-    occupied, capacity = Inventory.GetInventorySpace()
-    id_kits = sum(int(GLOBAL_CACHE.Inventory.GetModelCount(model_id)) for model_id in ID_KIT_MODEL_IDS)
-    salvage_kits = sum(int(GLOBAL_CACHE.Inventory.GetModelCount(model_id)) for model_id in SALVAGE_KIT_MODEL_IDS)
-    return int(occupied), int(capacity), int(id_kits), int(salvage_kits)
-
-
-def _inventory_target_accounts() -> list[tuple[str, str]]:
-    """Return every active account as (email, display label), including self."""
-    targets: list[tuple[str, str]] = []
-    seen: set[str] = set()
-
-    for account in _all_active_accounts():
-        email = str(getattr(account, "AccountEmail", "") or "").strip()
-        if not email or email in seen:
-            continue
-        seen.add(email)
-        agent_data = getattr(account, "AgentData", None)
-        character_name = str(getattr(agent_data, "CharacterName", "") or "").strip()
-        targets.append((email, character_name or email))
-
-    local_email = str(Player.GetAccountEmail() or "").strip()
-    if local_email and local_email not in seen:
-        local_name = str(Player.GetName() or "").strip()
-        targets.append((local_email, local_name or local_email))
-
-    return targets
-
-
-def _inventory_recipient_emails() -> list[str]:
-    return [email for email, _label in _inventory_target_accounts()]
-
-
-def _build_inventory_status(email: str, label: str, state: tuple[int, int, int, int] | None) -> dict[str, object]:
-    if state is None:
-        occupied = capacity = id_kits = salvage_kits = -1
-    else:
-        occupied, capacity, id_kits, salvage_kits = (int(value) for value in state)
-
-    available = capacity > 0 and occupied >= 0 and occupied <= capacity
-    free_slots = max(0, capacity - occupied) if available else 0
-
-    return {
-        "email": str(email),
-        "label": str(label),
-        "available": available,
-        "capacity": capacity,
-        "occupied": occupied,
-        "free_slots": free_slots,
-        "id_kits": id_kits,
-        "salvage_kits": salvage_kits,
-    }
-
-
-def _inventory_account_statuses() -> list[dict[str, object]]:
-    statuses: list[dict[str, object]] = []
-    for raw_status in _inventory_status_snapshot.values():
-        status = dict(raw_status)
-        account_issues: list[str] = []
-
-        if not bool(status.get("available", False)):
-            account_issues.append("inventory query unavailable")
-        else:
-            free_slots = int(status.get("free_slots", 0) or 0)
-            id_kits = int(status.get("id_kits", 0) or 0)
-            salvage_kits = int(status.get("salvage_kits", 0) or 0)
-
-            if _inventory_min_free_slots > 0 and free_slots < _inventory_min_free_slots:
-                account_issues.append(f"free slots {free_slots}/{_inventory_min_free_slots}")
-            if _inventory_min_id_kits > 0 and id_kits < _inventory_min_id_kits:
-                account_issues.append(f"ID kits {id_kits}/{_inventory_min_id_kits}")
-            if _inventory_min_salvage_kits > 0 and salvage_kits < _inventory_min_salvage_kits:
-                account_issues.append(f"salvage kits {salvage_kits}/{_inventory_min_salvage_kits}")
-
-        status["issues"] = account_issues
-        statuses.append(status)
-
-    return statuses
-
-
-def _inventory_maintenance_issues() -> list[str]:
-    statuses = _inventory_account_statuses()
-    if not statuses:
-        return ["No active account inventory query result is available."]
-    return [f"{status['label']}: {', '.join(status['issues'])}" for status in statuses if status["issues"]]
-
-
-def _log_inventory_statuses(statuses: list[dict[str, object]]) -> None:
-    if not statuses:
-        ConsoleLog(MODULE_NAME, "[Inventory] No active account inventory query result is available.", Console.MessageType.Warning, True)
-        return
-
-    for status in statuses:
-        issues = list(status["issues"])
-        result = "MAINTENANCE" if issues else "OK"
-        if bool(status.get("available", False)):
-            message = (
-                f"[Inventory] {status['label']}: free={status['free_slots']}/{status['capacity']}, "
-                f"occupied={status['occupied']}, ID kits={status['id_kits']}, "
-                f"Expert salvage kits={status['salvage_kits']} -> {result}"
-            )
-        else:
-            message = f"[Inventory] {status['label']}: local inventory query unavailable -> {result}"
-        ConsoleLog(MODULE_NAME, message, Console.MessageType.Warning if issues else Console.MessageType.Info, True)
-
-
-def _query_all_inventory_states_node(name: str, *, timeout_ms: int = _INVENTORY_QUERY_TIMEOUT_MS) -> BehaviorTree:
-    """Query real inventory state locally on every active Guild Wars client."""
-    state: dict[str, object] = {"started": False, "request_id": "", "sender_email": "", "pending": {}, "results": {}, "started_at": 0.0}
-
-    def _reset() -> None:
-        state["started"] = False
-        state["request_id"] = ""
-        state["sender_email"] = ""
-        state["pending"] = {}
-        state["results"] = {}
-        state["started_at"] = 0.0
-
-    def _finish() -> BehaviorTree.NodeState:
-        global _inventory_status_snapshot
-        _inventory_status_snapshot = dict(state["results"])
-        _reset()
-        return BehaviorTree.NodeState.SUCCESS
-
-    def _start() -> None:
-        request_id = f"totf_inventory_state_{int(time.monotonic() * 1000)}"
-        sender_email = str(Player.GetAccountEmail() or "").strip()
-        targets = _inventory_target_accounts()
-
-        results: dict[str, dict[str, object]] = {}
-        pending: dict[str, str] = {}
-
-        for email, label in targets:
-            if email == sender_email:
-                try:
-                    local_state = _local_inventory_state()
-                except Exception as exc:
-                    ConsoleLog(MODULE_NAME, f"[Inventory] Local inventory query failed on {label}: {exc}", Console.MessageType.Error, True)
-                    local_state = None
-                results[email] = _build_inventory_status(email, label, local_state)
-                continue
-
-            if not sender_email:
-                results[email] = _build_inventory_status(email, label, None)
-                continue
-
-            reset_inventory_state(email, request_id)
-            GLOBAL_CACHE.ShMem.SendMessage(
-                sender_email, email, SharedCommandType.InventoryQuery,
-                (
-                    float(ID_KIT_MODEL_IDS[0] if len(ID_KIT_MODEL_IDS) > 0 else 0),
-                    float(ID_KIT_MODEL_IDS[1] if len(ID_KIT_MODEL_IDS) > 1 else 0),
-                    float(SALVAGE_KIT_MODEL_IDS[0] if SALVAGE_KIT_MODEL_IDS else 0),
-                    0.0,
-                ),
-                ("report_inventory_state", request_id, "", ""),
-            )
-            pending[email] = label
-
-        state["started"] = True
-        state["request_id"] = request_id
-        state["sender_email"] = sender_email
-        state["pending"] = pending
-        state["results"] = results
-        state["started_at"] = time.monotonic()
-
-        ConsoleLog(MODULE_NAME, f"[Inventory] Requested real inventory state from {len(targets)} active account(s).", Console.MessageType.Info, True)
-
-    def _tick(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        try:
-            if bool(node.blackboard.get("USER_INTERRUPT_ACTIVE", False)):
-                _reset()
-                return BehaviorTree.NodeState.FAILURE
-
-            if not bool(state["started"]):
-                _start()
-
-            pending: dict[str, str] = state["pending"]
-            request_id = str(state["request_id"])
-
-            for email in list(pending):
-                reply = get_inventory_state(email, request_id)
-                if reply is None:
-                    continue
-                label = pending.pop(email)
-                state["results"][email] = _build_inventory_status(email, label, reply)
-
-            if not pending:
-                return _finish()
-
-            elapsed_ms = int((time.monotonic() - float(state["started_at"])) * 1000.0)
-            if elapsed_ms < max(0, int(timeout_ms)):
-                return BehaviorTree.NodeState.RUNNING
-
-            for email, label in list(pending.items()):
-                state["results"][email] = _build_inventory_status(email, label, None)
-                ConsoleLog(MODULE_NAME, f"[Inventory] Real inventory query timed out for {label}.", Console.MessageType.Warning, True)
-            pending.clear()
-            return _finish()
-
-        except Exception as exc:
-            ConsoleLog(MODULE_NAME, f"[Inventory] Multibox inventory-state query failed: {exc}", Console.MessageType.Error, True)
-            return _finish()
-
-    return BehaviorTree(BehaviorTree.ActionNode(name=name, action_fn=_tick, aftercast_ms=_INVENTORY_QUERY_POLL_MS))
-
-
-def _inventory_maintenance_trigger_node() -> BehaviorTree:
-    def _log(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        statuses = _inventory_account_statuses()
-        trigger_labels = [str(status["label"]) for status in statuses if status["issues"]]
-        recipients = _inventory_recipient_emails()
-        trigger_text = ", ".join(trigger_labels) if trigger_labels else "inventory verification"
-        recipient_text = ", ".join(str(status["label"]) for status in statuses if str(status["email"]) in recipients)
-        ConsoleLog(
-            MODULE_NAME,
-            f"[Inventory] Maintenance triggered by: {trigger_text}. MerchantRules will run on ALL {len(recipients)} active account(s)"
-            + (f": {recipient_text}." if recipient_text else "."),
-            Console.MessageType.Warning,
-            True,
-        )
-        return BehaviorTree.NodeState.SUCCESS
-
-    return BehaviorTree(BehaviorTree.ActionNode(name="Log Collective Inventory Maintenance Trigger", action_fn=_log, aftercast_ms=0))
-
-
-def _inventory_is_healthy_node(name: str, *, log_success: bool = True) -> BehaviorTree:
-    def _check(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        statuses = _inventory_account_statuses()
-        _log_inventory_statuses(statuses)
-
-        if not statuses:
-            ConsoleLog(MODULE_NAME, "Inventory maintenance required - no active account inventory snapshot is available.", Console.MessageType.Warning, True)
-            return BehaviorTree.NodeState.FAILURE
-
-        issues = [f"{status['label']}: {', '.join(status['issues'])}" for status in statuses if status["issues"]]
-        if issues:
-            ConsoleLog(MODULE_NAME, "Inventory maintenance required - " + "; ".join(issues), Console.MessageType.Warning, True)
-            return BehaviorTree.NodeState.FAILURE
-
-        if log_success:
-            ConsoleLog(MODULE_NAME, "Inventory check passed on every active account.", Console.MessageType.Info, True)
-        return BehaviorTree.NodeState.SUCCESS
-
-    return BehaviorTree(BehaviorTree.ConditionNode(name=name, condition_fn=_check))
-
-
-def _send_widget_state(widget_name: str, *, enabled: bool, refs_key: str) -> BehaviorTree:
-    return BTShared.SendAndWait(
-        command=SharedCommandType.EnableWidget if enabled else SharedCommandType.DisableWidget,
-        extra_data=(widget_name, "", "", ""),
-        include_self=True,
-        refs_blackboard_key=refs_key,
-        timeout_ms=20000,
-        poll_interval_ms=100,
-        log=True,
-    )
-
-
-def _set_local_auto_inventory_handler(enabled: bool) -> BehaviorTree:
-    def _set(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        if botting_tree is None:
-            return BehaviorTree.NodeState.SUCCESS
-        fn = getattr(botting_tree, "SetAutoInventoryHandlerEnabled", None)
-        if fn is None:
-            return BehaviorTree.NodeState.SUCCESS
-        try:
-            fn(enabled)
-        except Exception:
-            return BehaviorTree.NodeState.SUCCESS
-        return BehaviorTree.NodeState.SUCCESS
-
-    return BehaviorTree(BehaviorTree.ActionNode(name="Enable Local Auto Inventory Handler" if enabled else "Disable Local Auto Inventory Handler", action_fn=_set, aftercast_ms=0))
-
-
-def _restore_inventoryplus_after_merchant(attempt_key: str) -> BehaviorTree:
-    return BT.Sequence(
-        name="Restore InventoryPlus After MerchantRules",
-        children=[
-            _send_widget_state(INVENTORY_PLUS_WIDGET_NAME, enabled=True, refs_key=f"{attempt_key}_enable_inventoryplus_refs"),
-            _set_local_auto_inventory_handler(True),
-        ],
-    )
-
-
-def _run_merchant_rules(attempt_key: str) -> BehaviorTree:
-    def _build(node: BehaviorTree.Node) -> BehaviorTree:
-        recipients = _inventory_recipient_emails()
-        if not recipients:
-            ConsoleLog(MODULE_NAME, "[Inventory] MerchantRules aborted: no active account recipients.", Console.MessageType.Error, True)
-            return BehaviorTree(BehaviorTree.FailerNode(name="No Active MerchantRules Recipients"))
-
-        request_id = f"totf_inventory_{attempt_key}_{int(time.monotonic() * 1000)}"
-        ConsoleLog(MODULE_NAME, f"[Inventory] Dispatching MerchantRules to all {len(recipients)} active account(s).", Console.MessageType.Info, True)
-        execute = BTShared.SendAndWait(
-            command=SharedCommandType.MerchantRules,
-            params=(3.0, 0.0, 0.0, 0.0),
-            extra_data=(request_id, "", "0", "0"),
-            recipients=recipients,
-            include_self=True,
-            refs_blackboard_key=f"{attempt_key}_merchant_rules_refs",
-            timeout_ms=INVENTORY_MERCHANT_TIMEOUT_MS,
-            poll_interval_ms=250,
-            log=True,
-        )
-
-        return BT.Selector(
-            name="Execute MerchantRules And Restore InventoryPlus",
-            children=[
-                BT.Sequence(name="MerchantRules Completed", children=[execute, _restore_inventoryplus_after_merchant(attempt_key)]),
-                BT.Sequence(name="Restore InventoryPlus After MerchantRules Failure", children=[_restore_inventoryplus_after_merchant(f"{attempt_key}_failure"), BehaviorTree(BehaviorTree.FailerNode(name="Propagate MerchantRules Failure"))]),
-            ],
-        )
-
-    return BT.Subtree(name="Run MerchantRules On All Active Accounts", subtree_fn=_build)
-
-
-def _inventory_maintenance_attempt(attempt_number: int) -> BehaviorTree:
-    attempt_key = f"inventory_attempt_{attempt_number}"
-    return BT.Sequence(
-        name=f"Inventory Maintenance Attempt {attempt_number}",
-        children=[
-            BT.LogMessage(message=f"Inventory maintenance attempt {attempt_number}/{INVENTORY_MAINTENANCE_RETRY_COUNT}.", module_name=MODULE_NAME),
-            _set_local_auto_inventory_handler(False),
-            _send_widget_state(INVENTORY_PLUS_WIDGET_NAME, enabled=False, refs_key=f"{attempt_key}_disable_inventoryplus_refs"),
-            _send_widget_state(MERCHANT_RULES_WIDGET_NAME, enabled=True, refs_key=f"{attempt_key}_enable_merchant_rules_refs"),
-            BT.Wait(1_000),
-            _run_merchant_rules(attempt_key),
-            BT.Wait(INVENTORY_SNAPSHOT_SETTLE_MS),
-            _query_all_inventory_states_node(name=f"Refresh Real Inventories After Attempt {attempt_number}"),
-            _inventory_is_healthy_node(f"Verify Inventory After Attempt {attempt_number}", log_success=True),
-        ],
-    )
-
-
-def _stop_for_inventory_failure_node() -> BehaviorTree:
-    stopped = False
-
-    def _stop(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        nonlocal stopped
-        if not stopped:
-            stopped = True
-            issues = _inventory_maintenance_issues()
-            issue_text = "; ".join(issues) if issues else "unknown verification error"
-            ConsoleLog(MODULE_NAME, f"Inventory maintenance failed twice. The bot was paused safely. Remaining issue(s): {issue_text}", Console.MessageType.Error, True)
-
-            if botting_tree is not None:
-                fn = getattr(botting_tree, "SetAutoInventoryHandlerEnabled", None)
-                if callable(fn):
-                    try:
-                        fn(True)
-                    except Exception:
-                        pass
-
-            sender_email = str(Player.GetAccountEmail() or "").strip()
-            for account in _all_active_accounts():
-                receiver_email = str(getattr(account, "AccountEmail", "") or "").strip()
-                if not sender_email or not receiver_email:
-                    continue
-                GLOBAL_CACHE.ShMem.SendMessage(sender_email, receiver_email, SharedCommandType.EnableWidget, (0.0, 0.0, 0.0, 0.0), (INVENTORY_PLUS_WIDGET_NAME, "", "", ""))
-
-            if botting_tree is not None:
-                fn = getattr(botting_tree, "Pause", None)
-                if callable(fn):
-                    try:
-                        fn(True)
-                    except Exception:
-                        pass
-
-        return BehaviorTree.NodeState.RUNNING
-
-    return BehaviorTree(BehaviorTree.ActionNode(name="Pause Bot After Inventory Maintenance Failure", action_fn=_stop, aftercast_ms=0))
-
-
-def InventoryCheckAndMaintenance() -> BehaviorTree:
-    """Query every active account's real inventory; if anyone is below threshold, run
-    MerchantRules across the whole party. Ported from LBSS's
-    _inventory_check_and_maintenance_node(), itself ported from Shards Of Orr's
-    InventoryCheckAndMaintenance(). Shards Of Orr is multibox-only and unconditionally
-    leaves party before running merchant, then re-forms it. Tunnels also supports
-    Single Account (heroes), where leaving party would eject the heroes for no reason,
-    so the leave/re-invite pair is skipped there and only used in Multiboxing."""
-    disabled = BehaviorTree(BehaviorTree.ConditionNode(name="Inventory Maintenance Disabled", condition_fn=lambda node: not _inventory_maintenance_enabled))
-
-    maintenance_attempts = [_inventory_maintenance_attempt(n) for n in range(1, INVENTORY_MAINTENANCE_RETRY_COUNT + 1)]
-    maintenance_attempts.append(_stop_for_inventory_failure_node())
-
-    maintenance_children: list[BehaviorTree | BehaviorTree.Node] = [_inventory_maintenance_trigger_node()]
-    if _is_multibox():
-        maintenance_children.append(BT.LeaveParty())
-    maintenance_children.append(BT.Wait(INVENTORY_SNAPSHOT_SETTLE_MS))
-    maintenance_children.append(BT.Selector(name="Retry Inventory Maintenance At Outpost", children=maintenance_attempts))
-    if _is_multibox():
-        maintenance_children.append(_multibox_party_setup_node())
-
-    enabled_flow = BT.Sequence(
-        name="Enabled Inventory Check And Maintenance",
-        children=[
-            _query_all_inventory_states_node(name="Query Real Inventory State On Every Active Account"),
-            BT.Selector(
-                name="Check Inventory Thresholds",
-                children=[
-                    _inventory_is_healthy_node("Inventory Thresholds Already Satisfied", log_success=True),
-                    BT.Sequence(name="Run Inventory Maintenance", children=maintenance_children),
-                ],
-            ),
-        ],
-    )
-
-    return _map_guarded_step(
-        'Inventory Check And Maintenance Map Guard',
-        PIKEN_SQUARE,
-        BT.Selector(name="Inventory Check And Maintenance", children=[disabled, enabled_flow]),
-    )
-
-
-def _setup_heroes_node() -> BehaviorTree:
-    """Build the single-account party from the shared Party tab selection.
-
-    Empty Party slots result in no heroes being loaded.  The selected hero IDs
-    are read lazily when CreateParty executes, matching the other dungeon BTs.
-    """
-    return _dungeon_party.create_party_node(
-        multibox_invite=False,
-        timeout_ms=30_000,
-        log=True,
-        name="Create Single Account Party From Party Tab",
-    )
-
-def _multibox_party_setup_node() -> BehaviorTree:
-    """Summon/invite alt accounts and load any heroes selected on the Party tab."""
-    return _dungeon_party.create_party_node(
-        multibox_invite=True,
-        timeout_ms=30_000,
-        log=True,
-        name="Create Multibox Party From Party Tab",
-    )
-
-
-def _maybe_setup_party_node() -> BehaviorTree:
-    """One-time party setup: heroes for Single Account mode, alt accounts for
-    Multiboxing. Heroes only need adding once -- unlike CreateParty (safe/idempotent
-    to re-run every loop, which is how alts recover from a real-world disconnect),
-    re-kicking and re-adding heroes every loop would be pure waste."""
-
-    def _check_skip() -> bool:
-        return _heroes_setup_done
-
-    def _mark_done() -> BehaviorTree.NodeState:
-        global _heroes_setup_done
-        _heroes_setup_done = True
-        return BehaviorTree.NodeState.SUCCESS
-
-    def _build_setup(node: BehaviorTree.Node) -> BehaviorTree:
-        return _multibox_party_setup_node() if _is_multibox() else _setup_heroes_node()
-
-    return BehaviorTree(
-        BehaviorTree.SelectorNode(
-            name="MaybeSetupParty",
-            children=[
-                BehaviorTree.ConditionNode(_check_skip, name="AlreadySetup"),
-                BehaviorTree.SequenceNode(
-                    name="DoSetup",
-                    children=[
-                        BehaviorTree.SubtreeNode(_build_setup, name="SetupSubtree"),
-                        BehaviorTree.ActionNode(_mark_done, name="MarkDone"),
-                    ],
-                ),
-            ],
-        )
-    )
-
-
-def InitializeBot() -> BehaviorTree:
-    bot = ensure_botting_tree()
-    return BT.Sequence(
-        name='Initialize Bot',
-        map_id_or_name=PIKEN_SQUARE,
-        random_travel=True,
-        hard_mode=_use_hard_mode,
-        children=[
-            bot.Config.Aggressive(multi_account=_is_multibox(), account_isolation=not _is_multibox()),
-            _maybe_setup_party_node(),
-            _runtime_restock_node(),
-            _abandon_quest_node(),
-        ],
-    )
-
-
-def _map_guarded_step(
-    name: str,
-    map_id: int,
-    child: BehaviorTree,
-    skip_if_in_maps: tuple[int, ...] = (),
-) -> BehaviorTree:
-    """Run a named step only on its expected map, or accept it as already done when a
-    later map is already loaded. Ported from Shards Of Orr's _map_guarded_point.
-
-    Named planner steps can be resumed directly from the BottingTree UI's "Start At"
-    dropdown — without this gate, resuming e.g. "Floor 3" while still at Piken Square
-    would call VanquishNode/MoveAndExitMap with Tunnels-Level-3 coordinates from the
-    wrong map instead of failing loudly. Like Shards Of Orr's version, this only
-    protects steps whose prerequisites are already true; it doesn't travel anywhere
-    itself, so a resume point still has to be picked responsibly.
-    """
-    branches: list[BehaviorTree] = [
-        BT.Sequence(name=f'{name} - Active Map', children=[BT.IsCurrentMap(map_id=map_id, log=False), child])
-    ]
-    for later_map_id in skip_if_in_maps:
-        branches.append(
-            BT.Sequence(
-                name=f'{name} - Later Map {later_map_id}',
-                children=[BT.IsCurrentMap(map_id=later_map_id, log=False), BT.Succeeder(f'{name}AlreadyPassed')],
-            )
-        )
-    if len(branches) == 1:
-        return branches[0]
-    return BT.Selector(name=name, children=branches)
-
-
-def _vanquish_point_steps(
-    prefix: str,
-    map_id: int,
-    points: list[object],
-    *,
-    clear_area_radius: float = TUNNELS_AGGRO_RANGE,
-    skip_if_in_maps: tuple[int, ...] = (),
-) -> list[tuple[str, Callable[[], BehaviorTree]]]:
-    """One named planner step per route point. Ported from Shards Of Orr's
-    _vanquish_point_steps. Points may be plain (x, y) tuples or
-    {'pos': (x, y), 'clear_area_radius': override} dicts, matching what
-    BT.VanquishNode itself already accepts per-point (used by Floor 2's
-    crowded-room overrides)."""
-    steps: list[tuple[str, Callable[[], BehaviorTree]]] = []
-    for index, point in enumerate(points, start=1):
-        name = f"{prefix} - Point {index:02d}"
-        point_pos = point['pos'] if isinstance(point, dict) else point
-        point_radius = point['clear_area_radius'] if isinstance(point, dict) else clear_area_radius
-
-        def _build(point_pos=point_pos, point_radius=point_radius, name=name) -> BehaviorTree:
-            return _map_guarded_step(
-                name,
-                map_id,
-                BT.VanquishNode([point_pos], clear_area_radius=point_radius, name=name),
-                skip_if_in_maps=skip_if_in_maps,
-            )
-
-        steps.append((name, _build))
-    return steps
-
-
-def _all_active_accounts() -> list[object]:
-    from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
-
-    try:
-        accounts = GLOBAL_CACHE.ShMem.GetAllAccountData(sort_results=False)
+        accounts = GLOBAL_CACHE.ShMem.GetAllAccountData(sort_results=False, include_isolated=True)
     except TypeError:
-        accounts = GLOBAL_CACHE.ShMem.GetAllAccountData()
+        try:
+            accounts = GLOBAL_CACHE.ShMem.GetAllAccountData(sort_results=False)
+        except TypeError:
+            accounts = GLOBAL_CACHE.ShMem.GetAllAccountData()
     except Exception:
         accounts = []
 
@@ -1308,282 +250,2711 @@ def _all_active_accounts() -> list[object]:
     return unique
 
 
-def _account_map_id(account: object) -> int:
-    agent_data = getattr(account, "AgentData", None)
-    map_data = getattr(agent_data, "Map", None)
-    return int(getattr(map_data, "MapID", 0) or 0)
+def _refresh_character_names() -> bool:
+    changed = False
+
+    local_email = str(Player.GetAccountEmail() or "").strip()
+    local_name = str(Player.GetName() or "").strip()
+    if local_email and local_name:
+        key = _account_key(local_email)
+        if _char_names.get(key) != local_name:
+            _char_names[key] = local_name
+            changed = True
+
+    for account in _statistics_accounts():
+        email = str(getattr(account, "AccountEmail", "") or "").strip()
+        agent_data = getattr(account, "AgentData", None)
+        character_name = str(getattr(agent_data, "CharacterName", "") or "").strip()
+        if not email or not character_name:
+            continue
+
+        key = _account_key(email)
+        if _char_names.get(key) != character_name:
+            _char_names[key] = character_name
+            changed = True
+
+    return changed
 
 
-def _all_accounts_on_map(map_id: int) -> bool:
-    accounts = _all_active_accounts()
-    return bool(accounts) and all(_account_map_id(a) == int(map_id) for a in accounts)
+def _load_statistics() -> None:
+    global _statistics_loaded
+    global _total_runs, _total_run_time, _fastest_run, _slowest_run
+    global _l1_total_time, _l1_fastest, _l1_slowest
+    global _l2_total_time, _l2_fastest, _l2_slowest
+    global _l3_total_time, _l3_fastest, _l3_slowest
+    global _surface_runs, _surface_total_time, _surface_fastest, _surface_slowest
+
+    if _statistics_loaded:
+        return
+
+    _total_runs = _settings.get_int(_STATS_SECTION, "total_runs", 0)
+    _total_run_time = _settings.get_float(_STATS_SECTION, "total_run_time", 0.0)
+    fastest = _settings.get_float(_STATS_SECTION, "fastest_run", 0.0)
+    _fastest_run = float("inf") if fastest <= 0.0 else fastest
+    _slowest_run = _settings.get_float(_STATS_SECTION, "slowest_run", 0.0)
+
+    _l1_total_time = _settings.get_float(_STATS_SECTION, "l1_total_time", 0.0)
+    fastest = _settings.get_float(_STATS_SECTION, "l1_fastest", 0.0)
+    _l1_fastest = float("inf") if fastest <= 0.0 else fastest
+    _l1_slowest = _settings.get_float(_STATS_SECTION, "l1_slowest", 0.0)
+
+    _l2_total_time = _settings.get_float(_STATS_SECTION, "l2_total_time", 0.0)
+    fastest = _settings.get_float(_STATS_SECTION, "l2_fastest", 0.0)
+    _l2_fastest = float("inf") if fastest <= 0.0 else fastest
+    _l2_slowest = _settings.get_float(_STATS_SECTION, "l2_slowest", 0.0)
+
+    _l3_total_time = _settings.get_float(_STATS_SECTION, "l3_total_time", 0.0)
+    fastest = _settings.get_float(_STATS_SECTION, "l3_fastest", 0.0)
+    _l3_fastest = float("inf") if fastest <= 0.0 else fastest
+    _l3_slowest = _settings.get_float(_STATS_SECTION, "l3_slowest", 0.0)
+
+    _surface_runs = _settings.get_int(_STATS_SECTION, "surface_runs", 0)
+    _surface_total_time = _settings.get_float(_STATS_SECTION, "surface_total_time", 0.0)
+    fastest = _settings.get_float(_STATS_SECTION, "surface_fastest", 0.0)
+    _surface_fastest = float("inf") if fastest <= 0.0 else fastest
+    _surface_slowest = _settings.get_float(_STATS_SECTION, "surface_slowest", 0.0)
+
+    for key in _settings.items(_ETERNAL_BLADE_DROPS_SECTION).keys():
+        if key and key != "local":
+            _eternal_blade_drops[key] = _settings.get_int(_ETERNAL_BLADE_DROPS_SECTION, key, 0)
+
+    for seed_section in (_ETERNAL_BLADE_SNAPSHOT_SECTION, _ETERNAL_BLADE_RUN_SECTION):
+        for key in _settings.items(seed_section).keys():
+            if key and key != "local":
+                _eternal_blade_drops.setdefault(key, 0)
+
+    for key in _settings.items(_CHAR_NAMES_SECTION).keys():
+        if key and key != "local":
+            name = str(_settings.get_str(_CHAR_NAMES_SECTION, key, "") or "").strip()
+            if name:
+                _char_names[key] = name
+
+    _statistics_loaded = True
 
 
-def _wait_for_all_accounts_on_map(map_id: int, *, name: str, timeout_ms: int = 60000) -> BehaviorTree:
-    def _check(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        if _all_accounts_on_map(map_id):
+def _save_statistics() -> None:
+    _settings.set(_STATS_SECTION, "total_runs", _total_runs)
+    _settings.set(_STATS_SECTION, "total_run_time", _total_run_time)
+    _settings.set(_STATS_SECTION, "fastest_run", 0.0 if _fastest_run == float("inf") else _fastest_run)
+    _settings.set(_STATS_SECTION, "slowest_run", _slowest_run)
+
+    for floor, total, fastest, slowest in (
+        ("l1", _l1_total_time, _l1_fastest, _l1_slowest),
+        ("l2", _l2_total_time, _l2_fastest, _l2_slowest),
+        ("l3", _l3_total_time, _l3_fastest, _l3_slowest),
+    ):
+        _settings.set(_STATS_SECTION, f"{floor}_total_time", total)
+        _settings.set(_STATS_SECTION, f"{floor}_fastest", 0.0 if fastest == float("inf") else fastest)
+        _settings.set(_STATS_SECTION, f"{floor}_slowest", slowest)
+
+    _settings.set(_STATS_SECTION, "surface_runs", _surface_runs)
+    _settings.set(_STATS_SECTION, "surface_total_time", _surface_total_time)
+    _settings.set(_STATS_SECTION, "surface_fastest", 0.0 if _surface_fastest == float("inf") else _surface_fastest)
+    _settings.set(_STATS_SECTION, "surface_slowest", _surface_slowest)
+
+    for key, total in _eternal_blade_drops.items():
+        if key and key != "local":
+            _settings.set(_ETERNAL_BLADE_DROPS_SECTION, key, total)
+
+    for key, name in _char_names.items():
+        if key and key != "local":
+            _settings.set(_CHAR_NAMES_SECTION, key, name)
+
+
+def _statistics_action_node(name: str, action: Callable[[], None]) -> BehaviorTree:
+    def _run(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        try:
+            action()
+        except Exception as exc:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"[Statistics] {name} failed: {exc}",
+                PySystem.Console.MessageType.Warning,
+            )
+        return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(BehaviorTree.ActionNode(name=name, action_fn=_run, aftercast_ms=0))
+
+
+def _mark_surface_start_node() -> BehaviorTree:
+    """Start the 6-man surface timer after Yak's Bend has been exited."""
+    def _mark() -> None:
+        global _t_surface_start, _current_surface_time
+        _t_surface_start = time.monotonic()
+        _current_surface_time = 0.0
+        PySystem.Console.Log(
+            MODULE_NAME,
+            "[Statistics] Yak's Bend -> Tunnels timer started.",
+            PySystem.Console.MessageType.Info,
+        )
+
+    return _statistics_action_node("Mark Yak To Tunnels Start", _mark)
+
+
+def _record_surface_end_node() -> BehaviorTree:
+    """Stop and store the 6-man surface timer once Tunnels level 1 is loaded."""
+    def _record() -> None:
+        global _t_surface_start, _current_surface_time
+        global _surface_runs, _surface_total_time, _surface_fastest, _surface_slowest
+
+        if _t_surface_start <= 0.0:
+            return
+
+        elapsed = max(0.0, time.monotonic() - _t_surface_start)
+        _current_surface_time = elapsed
+        _t_surface_start = 0.0
+        _surface_runs += 1
+        _surface_total_time += elapsed
+        _surface_fastest = min(_surface_fastest, elapsed)
+        _surface_slowest = max(_surface_slowest, elapsed)
+        _save_statistics()
+        PySystem.Console.Log(
+            MODULE_NAME,
+            f"[Statistics] Yak's Bend -> Tunnels: {elapsed:.0f}s",
+            PySystem.Console.MessageType.Success,
+        )
+
+    return _statistics_action_node("Record Yak To Tunnels Time", _record)
+
+
+def _mark_run_start_node() -> BehaviorTree:
+    def _mark() -> None:
+        global _t_run_start, _t_l2_start, _t_l3_start
+        global _current_run_time, _current_l1_time, _current_l2_time, _current_l3_time
+
+        _t_run_start = time.monotonic()
+        _t_l2_start = 0.0
+        _t_l3_start = 0.0
+        _current_run_time = 0.0
+        _current_l1_time = 0.0
+        _current_l2_time = 0.0
+        _current_l3_time = 0.0
+
+    return _statistics_action_node("Mark Run Start", _mark)
+
+
+def _mark_l2_start_node() -> BehaviorTree:
+    def _mark() -> None:
+        global _t_l2_start, _current_l1_time
+        now = time.monotonic()
+        _t_l2_start = now
+        _current_l1_time = now - _t_run_start if _t_run_start > 0.0 else 0.0
+
+    return _statistics_action_node("Mark Level 2 Start", _mark)
+
+
+def _mark_l3_start_node() -> BehaviorTree:
+    def _mark() -> None:
+        global _t_l3_start, _current_l2_time
+        now = time.monotonic()
+        _t_l3_start = now
+        _current_l2_time = now - _t_l2_start if _t_l2_start > 0.0 else 0.0
+
+    return _statistics_action_node("Mark Level 3 Start", _mark)
+
+
+def _record_run_end_node() -> BehaviorTree:
+    def _record() -> None:
+        global _total_runs, _session_runs
+        global _total_run_time, _fastest_run, _slowest_run
+        global _l1_total_time, _l1_fastest, _l1_slowest
+        global _l2_total_time, _l2_fastest, _l2_slowest
+        global _l3_total_time, _l3_fastest, _l3_slowest
+        global _current_run_time, _current_l1_time, _current_l2_time, _current_l3_time
+        global _t_run_start, _t_l2_start, _t_l3_start
+
+        now = time.monotonic()
+        timings_valid = (
+            _t_run_start > 0.0
+            and _t_l2_start > _t_run_start
+            and _t_l3_start > _t_l2_start
+        )
+
+        if timings_valid:
+            run_time = now - _t_run_start
+            l1_time = _t_l2_start - _t_run_start
+            l2_time = _t_l3_start - _t_l2_start
+            l3_time = now - _t_l3_start
+
+            _current_run_time = run_time
+            _current_l1_time = l1_time
+            _current_l2_time = l2_time
+            _current_l3_time = l3_time
+
+            _total_run_time += run_time
+            _fastest_run = min(_fastest_run, run_time)
+            _slowest_run = max(_slowest_run, run_time)
+
+            _l1_total_time += l1_time
+            _l1_fastest = min(_l1_fastest, l1_time)
+            _l1_slowest = max(_l1_slowest, l1_time)
+
+            _l2_total_time += l2_time
+            _l2_fastest = min(_l2_fastest, l2_time)
+            _l2_slowest = max(_l2_slowest, l2_time)
+
+            _l3_total_time += l3_time
+            _l3_fastest = min(_l3_fastest, l3_time)
+            _l3_slowest = max(_l3_slowest, l3_time)
+
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"[Statistics] Run complete - Total {run_time:.0f}s | L1 {l1_time:.0f}s | L2 {l2_time:.0f}s | L3 {l3_time:.0f}s",
+                PySystem.Console.MessageType.Success,
+            )
+
+        _total_runs += 1
+        _session_runs += 1
+        _t_run_start = 0.0
+        _t_l2_start = 0.0
+        _t_l3_start = 0.0
+        _save_statistics()
+
+    return _statistics_action_node("Record Successful Run", _record)
+
+
+def _accumulate_eternal_blade_drop(account_key: str, count: int) -> None:
+    _eternal_blade_drops.setdefault(account_key, 0)
+    if count <= 0:
+        return
+    _eternal_blade_drops[account_key] += int(count)
+    _session_eternal_blades[account_key] = _session_eternal_blades.get(account_key, 0) + int(count)
+
+
+def _local_eternal_blade_count() -> int:
+    return int(GLOBAL_CACHE.Inventory.GetModelCount(ETERNAL_BLADE_MODEL_ID))
+
+
+def _shared_eternal_blade_count(account: object) -> int | None:
+    """Read the mirrored Eternal Blade count for one shared-memory account.
+
+    InventoryQuery remains available as a fallback, but the normal statistics
+    path should not depend on every remote client processing a request in time.
+    """
+    inventory_bags = getattr(account, "InventoryBags", None)
+    if inventory_bags is None:
+        return None
+
+    try:
+        bags = list(inventory_bags.iter_bags())
+    except Exception:
+        return None
+
+    # An account whose inventory mirror has not been published yet normally has
+    # no bags at all.  Once the bag structures exist, an empty inventory is a
+    # valid count of zero.
+    if not bags:
+        return None
+
+    total = 0
+    saw_slots_container = False
+    try:
+        for bag in bags:
+            slots = getattr(bag, "Slots", None)
+            if slots is None:
+                continue
+            saw_slots_container = True
+            for slot in slots:
+                model_id = int(getattr(slot, "ModelID", 0) or 0)
+                if model_id != int(ETERNAL_BLADE_MODEL_ID):
+                    continue
+                total += max(0, int(getattr(slot, "Quantity", 0) or 0))
+    except Exception:
+        return None
+
+    return total if saw_slots_container else None
+
+
+def _inventory_statistics_node(*, after_chest: bool) -> BehaviorTree:
+    node_name = "Record Eternal Blade After Final Chest" if after_chest else "Snapshot Eternal Blades At Dungeon Entry"
+    state: dict[str, object] = {
+        "started": False,
+        "local_email": "",
+        "account_keys": [],
+        "pending": {},
+        "request_started_at": 0.0,
+        "local_email_wait_started_at": 0.0,
+        "mirror_count": 0,
+    }
+
+    def _reset() -> None:
+        state.update(
+            started=False,
+            local_email="",
+            account_keys=[],
+            pending={},
+            request_started_at=0.0,
+            local_email_wait_started_at=0.0,
+            mirror_count=0,
+        )
+
+    def _start() -> bool:
+        _load_statistics()
+        _refresh_character_names()
+
+        local_email = str(Player.GetAccountEmail() or "").strip()
+        if not local_email:
+            return False
+
+        local_key = _account_key(local_email)
+        section = _ETERNAL_BLADE_RUN_SECTION if after_chest else _ETERNAL_BLADE_SNAPSHOT_SECTION
+        _settings.set(section, local_key, _local_eternal_blade_count())
+
+        account_keys = [local_key]
+        pending: dict[str, dict[str, str]] = {}
+        mirror_count = 0
+
+        for account in _statistics_accounts():
+            email = str(getattr(account, "AccountEmail", "") or "").strip()
+            if not email or email == local_email:
+                continue
+
+            key = _account_key(email)
+            if key not in account_keys:
+                account_keys.append(key)
+
+            mirrored_count = _shared_eternal_blade_count(account)
+            if mirrored_count is not None:
+                _settings.set(section, key, int(mirrored_count))
+                mirror_count += 1
+                continue
+
+            # Mirror unavailable: keep the existing InventoryQuery protocol as a
+            # fallback, but launch every remote request together so the timeout is
+            # global rather than 10 seconds per account.
+            reset_inventory_count(email, ETERNAL_BLADE_MODEL_ID, ETERNAL_BLADE_MODEL_ID)
+            _settings.set(section, key, -1)
+            GLOBAL_CACHE.ShMem.SendMessage(
+                local_email,
+                email,
+                SharedCommandType.InventoryQuery,
+                (float(ETERNAL_BLADE_MODEL_ID), float(ETERNAL_BLADE_MODEL_ID), 0.0, 0.0),
+                ("report_inventory_count",),
+            )
+            pending[email] = {"email": email, "key": key, "section": section}
+
+        for key in account_keys:
+            _eternal_blade_drops.setdefault(key, 0)
+
+        state["started"] = True
+        state["local_email"] = local_email
+        state["account_keys"] = account_keys
+        state["pending"] = pending
+        state["mirror_count"] = mirror_count
+        state["request_started_at"] = time.monotonic() if pending else 0.0
+        state["local_email_wait_started_at"] = 0.0
+
+        if pending:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"[Statistics] Eternal Blade snapshot: {mirror_count} remote account(s) read from shared inventory; {len(pending)} IPC fallback request(s) sent in parallel.",
+                PySystem.Console.MessageType.Info,
+            )
+        return True
+
+    def _finish() -> None:
+        if not after_chest:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"[Statistics] Dungeon-entry Eternal Blade snapshot completed for {len(state['account_keys'])} account(s).",
+                PySystem.Console.MessageType.Info,
+            )
+            _save_statistics()
+            return
+
+        total_drops = 0
+        for key in state["account_keys"]:
+            account_key = str(key)
+            before = _settings.get_int(_ETERNAL_BLADE_SNAPSHOT_SECTION, account_key, -1)
+            after = _settings.get_int(_ETERNAL_BLADE_RUN_SECTION, account_key, -1)
+            delta = max(0, after - before) if before >= 0 and after >= 0 else 0
+            _accumulate_eternal_blade_drop(account_key, delta)
+            total_drops += delta
+
+        _save_statistics()
+        PySystem.Console.Log(
+            MODULE_NAME,
+            f"[Statistics] Final chest recorded - Eternal Blade {total_drops}",
+            PySystem.Console.MessageType.Success,
+        )
+
+    def _tick(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        try:
+            if bool(node.blackboard.get("USER_INTERRUPT_ACTIVE", False)):
+                _reset()
+                return BehaviorTree.NodeState.FAILURE
+
+            if not bool(state["started"]):
+                if not _start():
+                    now = time.monotonic()
+                    wait_started = float(state["local_email_wait_started_at"] or 0.0)
+                    if wait_started <= 0.0:
+                        state["local_email_wait_started_at"] = now
+                        return BehaviorTree.NodeState.RUNNING
+                    if (now - wait_started) * 1000.0 < _INVENTORY_QUERY_TIMEOUT_MS:
+                        return BehaviorTree.NodeState.RUNNING
+
+                    PySystem.Console.Log(
+                        MODULE_NAME,
+                        "[Statistics] Local account email unavailable; skipping this statistics snapshot.",
+                        PySystem.Console.MessageType.Warning,
+                    )
+                    _reset()
+                    return BehaviorTree.NodeState.SUCCESS
+
+            pending: dict[str, dict[str, str]] = state["pending"]
+            for email in list(pending):
+                request = pending[email]
+                count = int(get_inventory_count(email, ETERNAL_BLADE_MODEL_ID, ETERNAL_BLADE_MODEL_ID))
+                if count < 0:
+                    continue
+                _settings.set(str(request["section"]), str(request["key"]), count)
+                pending.pop(email, None)
+
+            if pending:
+                elapsed_ms = (time.monotonic() - float(state["request_started_at"] or 0.0)) * 1000.0
+                if elapsed_ms < _INVENTORY_QUERY_TIMEOUT_MS:
+                    return BehaviorTree.NodeState.RUNNING
+
+                for email, request in list(pending.items()):
+                    PySystem.Console.Log(
+                        MODULE_NAME,
+                        f"[Statistics] Eternal Blade inventory fallback timed out on {_account_label(str(request['key']))}.",
+                        PySystem.Console.MessageType.Warning,
+                    )
+                    pending.pop(email, None)
+
+            _finish()
+            _reset()
             return BehaviorTree.NodeState.SUCCESS
+        except Exception as exc:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"[Statistics] {node_name} failed: {exc}",
+                PySystem.Console.MessageType.Warning,
+            )
+            _reset()
+            return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name=node_name,
+            action_fn=_tick,
+            aftercast_ms=_INVENTORY_QUERY_POLL_MS,
+        )
+    )
+
+def _reset_total_overview_and_timings() -> None:
+    global _total_runs, _total_run_time, _fastest_run, _slowest_run
+    global _l1_total_time, _l1_fastest, _l1_slowest
+    global _l2_total_time, _l2_fastest, _l2_slowest
+    global _l3_total_time, _l3_fastest, _l3_slowest
+    global _surface_runs, _surface_total_time, _surface_fastest, _surface_slowest
+    global _current_run_time, _current_l1_time, _current_l2_time, _current_l3_time
+    global _current_surface_time, _t_surface_start
+
+    _total_runs = 0
+    _total_run_time = 0.0
+    _fastest_run = float("inf")
+    _slowest_run = 0.0
+    _l1_total_time = 0.0
+    _l1_fastest = float("inf")
+    _l1_slowest = 0.0
+    _l2_total_time = 0.0
+    _l2_fastest = float("inf")
+    _l2_slowest = 0.0
+    _l3_total_time = 0.0
+    _l3_fastest = float("inf")
+    _l3_slowest = 0.0
+    _surface_runs = 0
+    _surface_total_time = 0.0
+    _surface_fastest = float("inf")
+    _surface_slowest = 0.0
+
+    _current_run_time = 0.0
+    _current_l1_time = 0.0
+    _current_l2_time = 0.0
+    _current_l3_time = 0.0
+    _current_surface_time = 0.0
+    _t_surface_start = 0.0
+
+    keys = set(_eternal_blade_drops) | set(_settings.items(_ETERNAL_BLADE_DROPS_SECTION).keys())
+    for key in keys:
+        if not key or key == "local":
+            continue
+        _eternal_blade_drops[key] = 0
+        _settings.set(_ETERNAL_BLADE_DROPS_SECTION, key, 0)
+
+    _save_statistics()
+    PySystem.Console.Log(
+        MODULE_NAME,
+        "[Statistics] Total Overview and Run Timings reset to zero.",
+        PySystem.Console.MessageType.Success,
+    )
+
+
+def _consumables_allowed() -> bool:
+    return (
+        _runtime_consumables_enabled
+        and Map.IsMapReady()
+        and not Map.IsMapLoading()
+        and Map.GetMapID() in DUNGEON_MAPS
+    )
+
+
+def _enabled_consumable_upkeeps() -> tuple[int, ...]:
+    """Return Core-managed conset upkeeps; PCons use the direct dispatcher."""
+    if not _runtime_consumables_enabled:
+        return ()
+    enabled: list[int] = []
+    if _activate_conset:
+        enabled.extend(int(model_id) for model_id in CONSET_UPKEEPS)
+    return tuple(dict.fromkeys(enabled))
+
+def _pcon_effect_name(model_id: int) -> str:
+    model_id = int(model_id)
+    overrides = {
+        int(ModelID.Blue_Rock_Candy.value): "Blue_Rock_Candy_Rush",
+        int(ModelID.Green_Rock_Candy.value): "Green_Rock_Candy_Rush",
+        int(ModelID.Red_Rock_Candy.value): "Red_Rock_Candy_Rush",
+        int(ModelID.Birthday_Cupcake.value): "Birthday_Cupcake_skill",
+        int(ModelID.Bowl_Of_Skalefin_Soup.value): "Skale_Vigor",
+        int(ModelID.Candy_Apple.value): "Candy_Apple_skill",
+        int(ModelID.Candy_Corn.value): "Candy_Corn_skill",
+        int(ModelID.Drake_Kabob.value): "Drake_Skin",
+        int(ModelID.Golden_Egg.value): "Golden_Egg_skill",
+        int(ModelID.Pahnai_Salad.value): "Pahnai_Salad_item_effect",
+        int(ModelID.Slice_Of_Pumpkin_Pie.value): "Pie_Induced_Ecstasy",
+        int(ModelID.War_Supplies.value): "Well_Supplied",
+    }
+    if model_id in overrides:
+        return overrides[model_id]
+    return str(CONSUMABLE_MODELID_TO_EFFECT_NAME.get(model_id, "") or "")
+
+
+def _pcon_account_map_tuple(account: object) -> tuple[int, int, int, int]:
+    map_obj = getattr(getattr(account, "AgentData", None), "Map", None)
+    return (
+        int(getattr(account, "MapID", 0) or getattr(map_obj, "MapID", 0) or 0),
+        int(getattr(account, "MapRegion", 0) or getattr(map_obj, "Region", 0) or 0),
+        int(getattr(account, "MapDistrict", 0) or getattr(map_obj, "District", 0) or 0),
+        int(getattr(account, "MapLanguage", 0) or getattr(map_obj, "Language", 0) or 0),
+    )
+
+
+def _pcon_account_party_id(account: object) -> int:
+    return int(getattr(getattr(account, "AgentPartyData", None), "PartyID", 0) or 0)
+
+
+def _direct_pcon_party_emails() -> list[str]:
+    local_email = str(Player.GetAccountEmail() or "").strip()
+    if not local_email:
+        return []
+    try:
+        local_account = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(local_email)
+    except Exception:
+        local_account = None
+    try:
+        accounts = list(GLOBAL_CACHE.ShMem.GetAllAccountData(sort_results=False) or [])
+    except TypeError:
+        accounts = list(GLOBAL_CACHE.ShMem.GetAllAccountData() or [])
+    except Exception:
+        accounts = []
+
+    local_party_id = _pcon_account_party_id(local_account) if local_account is not None else 0
+    local_map = _pcon_account_map_tuple(local_account) if local_account is not None else None
+    result: list[str] = []
+    seen: set[str] = set()
+    for account in accounts:
+        email = str(getattr(account, "AccountEmail", "") or "").strip()
+        if not email or email in seen:
+            continue
+        if bool(getattr(account, "IsHero", False)) or bool(getattr(account, "IsNPC", False)):
+            continue
+        account_party_id = _pcon_account_party_id(account)
+        same_party = local_party_id > 0 and account_party_id == local_party_id
+        same_map_fallback = (
+            local_party_id <= 0
+            and local_map is not None
+            and _pcon_account_map_tuple(account) == local_map
+        )
+        if not same_party and not same_map_fallback:
+            continue
+        seen.add(email)
+        result.append(email)
+    if local_email not in seen:
+        result.append(local_email)
+    return result
+
+
+def _reset_direct_pcon_runtime() -> None:
+    global _pcon_direct_index, _pcon_direct_last_dispatch_ms
+    global _pcon_direct_runtime_logged, _pcon_direct_last_recipient_signature
+    global _pcon_direct_morale_remote_index
+    _pcon_direct_index = 0
+    _pcon_direct_last_dispatch_ms = 0
+    _pcon_direct_runtime_logged = False
+    _pcon_direct_last_recipient_signature = ()
+    _pcon_direct_morale_remote_index = 0
+
+
+def _bot_is_started() -> bool:
+    if botting_tree is None:
+        return False
+    try:
+        fn = getattr(botting_tree, "IsStarted", None)
+        if callable(fn):
+            return bool(fn())
+    except Exception:
+        pass
+    return bool(getattr(botting_tree, "started", False))
+
+
+def _shared_party_min_morale_for_direct_pcons() -> int | None:
+    try:
+        entries = GLOBAL_CACHE.ShMem.GetSharedPartyMorale() or []
+    except Exception:
+        return None
+    values: list[int] = []
+    for entry in entries:
+        try:
+            morale = int(entry[1] or 0)
+        except (TypeError, ValueError, IndexError):
+            continue
+        if morale > 0:
+            values.append(morale)
+    return min(values) if values else None
+
+
+def _dispatch_party_morale_pcon(model_id: int, recipients: list[str], sender_email: str) -> None:
+    global _pcon_direct_morale_remote_index
+    target_morale = _PCON_PARTY_MORALE_TARGET_BY_MODEL.get(int(model_id))
+    if target_morale is None:
+        return
+    party_min_morale = _shared_party_min_morale_for_direct_pcons()
+    if party_min_morale is None or party_min_morale >= int(target_morale):
+        return
+
+    local_agent_id = int(Player.GetAgentID() or 0)
+    local_is_dead = bool(local_agent_id and Agent.IsDead(local_agent_id))
+    if not local_is_dead and GLOBAL_CACHE.Inventory.GetModelCount(int(model_id)) > 0:
+        item_id = int(GLOBAL_CACHE.Item.GetItemIdFromModelID(int(model_id)) or 0)
+        if item_id > 0:
+            GLOBAL_CACHE.Inventory.UseItem(item_id)
+            if PCON_USAGE_LOG:
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    f"[PCons] Party morale use: model={int(model_id)}, morale={party_min_morale} -> target={int(target_morale)}.",
+                    PySystem.Console.MessageType.Info,
+                )
+            return
+
+    remote_recipients = [email for email in recipients if email and email != sender_email]
+    if not remote_recipients:
+        return
+    receiver_email = remote_recipients[_pcon_direct_morale_remote_index % len(remote_recipients)]
+    _pcon_direct_morale_remote_index = (_pcon_direct_morale_remote_index + 1) % max(1, len(remote_recipients))
+    try:
+        GLOBAL_CACHE.ShMem.SendMessage(
+            sender_email,
+            receiver_email,
+            SharedCommandType.PCon,
+            (int(model_id), 0, 0, 0),
+        )
+    except Exception:
+        return
+
+
+def _tick_direct_pcon_upkeep() -> None:
+    global _pcon_direct_index, _pcon_direct_last_dispatch_ms
+    global _pcon_direct_runtime_logged, _pcon_direct_last_recipient_signature
+
+    if not _bot_is_started() or not _activate_pcons or not _consumables_allowed():
+        if _pcon_direct_runtime_logged or _pcon_direct_last_dispatch_ms:
+            _reset_direct_pcon_runtime()
+        return
+    if not PCON_UPKEEPS:
+        return
+
+    now_ms = int(time.monotonic() * 1000.0)
+    if now_ms - int(_pcon_direct_last_dispatch_ms) < _PCON_DIRECT_DISPATCH_INTERVAL_MS:
+        return
+    _pcon_direct_last_dispatch_ms = now_ms
+
+    recipients = _direct_pcon_party_emails()
+    if not recipients:
+        return
+    recipient_signature = tuple(sorted(recipients))
+    if not _pcon_direct_runtime_logged or recipient_signature != _pcon_direct_last_recipient_signature:
+        _pcon_direct_runtime_logged = True
+        _pcon_direct_last_recipient_signature = recipient_signature
+        PySystem.Console.Log(
+            MODULE_NAME,
+            f"[PCons] Direct multibox upkeep active: models={len(PCON_UPKEEPS)}, accounts={len(recipients)}.",
+            PySystem.Console.MessageType.Info,
+        )
+
+    model_id = int(PCON_UPKEEPS[_pcon_direct_index % len(PCON_UPKEEPS)])
+    _pcon_direct_index = (_pcon_direct_index + 1) % len(PCON_UPKEEPS)
+    sender_email = str(Player.GetAccountEmail() or "").strip()
+    if not sender_email:
+        return
+    if model_id in _PCON_PARTY_MORALE_TARGET_BY_MODEL:
+        _dispatch_party_morale_pcon(model_id, recipients, sender_email)
+        return
+
+    effect_name = _pcon_effect_name(model_id)
+    effect_id = int(GLOBAL_CACHE.Skill.GetID(effect_name) or 0) if effect_name else 0
+    if effect_id <= 0:
+        return
+    local_agent_id = int(Player.GetAgentID() or 0)
+    local_is_dead = bool(local_agent_id and Agent.IsDead(local_agent_id))
+    local_has_effect = bool(local_agent_id and GLOBAL_CACHE.Effects.HasEffect(local_agent_id, effect_id))
+    if not local_is_dead and not local_has_effect and GLOBAL_CACHE.Inventory.GetModelCount(model_id) > 0:
+        item_id = int(GLOBAL_CACHE.Item.GetItemIdFromModelID(model_id) or 0)
+        if item_id > 0:
+            GLOBAL_CACHE.Inventory.UseItem(item_id)
+            if PCON_USAGE_LOG:
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    f"[PCons] Local use: model={model_id}, effect={effect_id} ({effect_name}).",
+                    PySystem.Console.MessageType.Info,
+                )
+
+    params = (model_id, effect_id, 0, 0)
+    for receiver_email in recipients:
+        if not receiver_email or receiver_email == sender_email:
+            continue
+        try:
+            GLOBAL_CACHE.ShMem.SendMessage(
+                sender_email,
+                receiver_email,
+                SharedCommandType.PCon,
+                params,
+            )
+        except Exception:
+            continue
+
+
+
+def _configure_runtime_upkeeps(
+    *,
+    consumables_enabled: bool | None = None,
+    looting_enabled: bool | None = None,
+) -> None:
+    global _runtime_consumables_enabled, _runtime_looting_enabled
+    global _configured_consumable_upkeeps
+
+    previous_runtime_enabled = _runtime_consumables_enabled
+    if consumables_enabled is not None:
+        _runtime_consumables_enabled = bool(consumables_enabled)
+    if looting_enabled is not None:
+        _runtime_looting_enabled = bool(looting_enabled)
+    if previous_runtime_enabled != _runtime_consumables_enabled:
+        _reset_direct_pcon_runtime()
+
+    if botting_tree is None:
+        return
+    enabled_consumables = _enabled_consumable_upkeeps()
+    botting_tree.Config.ConfigureUpkeep(
+        looting_enabled=_runtime_looting_enabled,
+        resurrection_scroll=True,
+        auto_inventory_handler_enabled=True,
+        consumable_upkeeps=enabled_consumables,
+        enable_party_wipe_recovery=True,
+        enable_nearest_shrine_recovery=True,
+        heroai_state_logging=False,
+    )
+    botting_tree.AddServiceTree(
+        "SummoningStoneRecoveryService",
+        SummoningStoneRecoveryService,
+    )
+    _configured_consumable_upkeeps = enabled_consumables
+
+
+def _sync_runtime_upkeeps() -> None:
+    if _enabled_consumable_upkeeps() != _configured_consumable_upkeeps:
+        _configure_runtime_upkeeps()
+
+
+def _runtime_consumable_upkeep_node(enabled: bool) -> BehaviorTree:
+    """Enable or suspend conset and direct PCon upkeep at runtime."""
+    def _apply(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        if botting_tree is None:
+            return BehaviorTree.NodeState.FAILURE
+        if _runtime_consumables_enabled != bool(enabled):
+            _configure_runtime_upkeeps(consumables_enabled=enabled)
+            PySystem.Console.Log(
+                MODULE_NAME,
+                "Consumable upkeep resumed for the dungeon run." if enabled else "Consumable upkeep suspended during the end-of-dungeon sequence.",
+                PySystem.Console.MessageType.Info,
+            )
+        return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Resume Consumable Upkeep" if enabled else "Suspend Consumable Upkeep",
+            action_fn=_apply,
+            aftercast_ms=0,
+        )
+    )
+
+
+def _runtime_difficulty_node() -> BehaviorTree:
+    return BT.Subtree(
+        name="Apply Selected Difficulty",
+        subtree_fn=lambda _node: BT.SetHardMode(_use_hard_mode, log=True),
+    )
+
+
+def _runtime_restock_node() -> BehaviorTree:
+    def _build(_node: BehaviorTree.Node) -> BehaviorTree:
+        items: list[tuple[int, int]] = []
+        if _restock_conset:
+            items.extend(CONSET_RESTOCK_ITEMS)
+        if _restock_pcons:
+            items.extend(PCON_RESTOCK_ITEMS)
+        if _use_summoning_stone:
+            items.extend(SUMMON_RESTOCK_ITEMS)
+        if not items:
+            return BT.Succeeder("Restock Disabled")
+        return BT.RestockItemsFromList(tuple(items), allow_missing=True)
+    return BT.Subtree(name="Restock Selected Supplies", subtree_fn=_build)
+
+
+def _inventory_accounts() -> list[object]:
+    try:
+        accounts = GLOBAL_CACHE.ShMem.GetAllAccountData(sort_results=False)
+    except TypeError:
+        accounts = GLOBAL_CACHE.ShMem.GetAllAccountData()
+    except Exception:
+        accounts = []
+    unique: list[object] = []
+    seen: set[str] = set()
+    for account in accounts or []:
+        email = str(getattr(account, "AccountEmail", "") or "").strip()
+        if not email or email in seen:
+            continue
+        seen.add(email)
+        unique.append(account)
+    return unique
+
+
+def _shared_account_label(account: object) -> str:
+    agent_data = getattr(account, "AgentData", None)
+    character_name = str(getattr(agent_data, "CharacterName", "") or "").strip()
+    return character_name or str(getattr(account, "AccountEmail", "") or "Unknown account")
+
+
+def _inventory_target_accounts() -> list[tuple[str, str]]:
+    targets: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for account in _inventory_accounts():
+        email = str(getattr(account, "AccountEmail", "") or "").strip()
+        if email and email not in seen:
+            seen.add(email)
+            targets.append((email, _shared_account_label(account)))
+    local_email = str(Player.GetAccountEmail() or "").strip()
+    if local_email and local_email not in seen:
+        targets.append((local_email, str(Player.GetName() or local_email)))
+    return targets
+
+
+def _inventory_recipient_emails() -> list[str]:
+    return [email for email, _label in _inventory_target_accounts()]
+
+
+def _local_inventory_state() -> tuple[int, int, int, int]:
+    occupied, capacity = Inventory.GetInventorySpace()
+    id_kits = sum(int(GLOBAL_CACHE.Inventory.GetModelCount(mid)) for mid in ID_KIT_MODEL_IDS)
+    salvage_kits = sum(int(GLOBAL_CACHE.Inventory.GetModelCount(mid)) for mid in SALVAGE_KIT_MODEL_IDS)
+    return int(occupied), int(capacity), int(id_kits), int(salvage_kits)
+
+
+def _build_inventory_status(
+    email: str,
+    label: str,
+    state: tuple[int, int, int, int] | None,
+) -> dict[str, object]:
+    if state is None:
+        occupied = capacity = id_kits = salvage_kits = -1
+    else:
+        occupied, capacity, id_kits, salvage_kits = (int(v) for v in state)
+    available = capacity > 0 and 0 <= occupied <= capacity
+    free_slots = max(0, capacity - occupied) if available else 0
+    issues: list[str] = []
+    if not available:
+        issues.append("inventory query unavailable")
+    else:
+        if _inventory_min_free_slots > 0 and free_slots < _inventory_min_free_slots:
+            issues.append(f"free slots {free_slots}/{_inventory_min_free_slots}")
+        if _inventory_min_id_kits > 0 and id_kits < _inventory_min_id_kits:
+            issues.append(f"ID kits {id_kits}/{_inventory_min_id_kits}")
+        if _inventory_min_salvage_kits > 0 and salvage_kits < _inventory_min_salvage_kits:
+            issues.append(f"salvage kits {salvage_kits}/{_inventory_min_salvage_kits}")
+    return {
+        "email": email,
+        "label": label,
+        "available": available,
+        "occupied": occupied,
+        "capacity": capacity,
+        "free_slots": free_slots,
+        "id_kits": id_kits,
+        "salvage_kits": salvage_kits,
+        "issues": issues,
+    }
+
+
+def _query_all_inventory_states_node(name: str) -> BehaviorTree:
+    state: dict[str, object] = {
+        "started": False,
+        "request_id": "",
+        "pending": {},
+        "results": {},
+        "started_at": 0.0,
+    }
+
+    def _reset() -> None:
+        state.update(started=False, request_id="", pending={}, results={}, started_at=0.0)
+
+    def _finish() -> BehaviorTree.NodeState:
+        global _inventory_status_snapshot
+        _inventory_status_snapshot = dict(state["results"])
+        _reset()
+        return BehaviorTree.NodeState.SUCCESS
+
+    def _start() -> None:
+        request_id = f"{MODULE_NAME}_inventory_{int(time.monotonic() * 1000)}"
+        sender_email = str(Player.GetAccountEmail() or "").strip()
+        pending: dict[str, str] = {}
+        results: dict[str, dict[str, object]] = {}
+        for email, label in _inventory_target_accounts():
+            if email == sender_email:
+                try:
+                    local_state = _local_inventory_state()
+                except Exception:
+                    local_state = None
+                results[email] = _build_inventory_status(email, label, local_state)
+                continue
+            if not sender_email:
+                results[email] = _build_inventory_status(email, label, None)
+                continue
+            reset_inventory_state(email, request_id)
+            GLOBAL_CACHE.ShMem.SendMessage(
+                sender_email,
+                email,
+                SharedCommandType.InventoryQuery,
+                (
+                    float(ID_KIT_MODEL_IDS[0] if ID_KIT_MODEL_IDS else 0),
+                    0.0,
+                    float(SALVAGE_KIT_MODEL_IDS[0] if SALVAGE_KIT_MODEL_IDS else 0),
+                    0.0,
+                ),
+                ("report_inventory_state", request_id, "", ""),
+            )
+            pending[email] = label
+        state["started"] = True
+        state["request_id"] = request_id
+        state["pending"] = pending
+        state["results"] = results
+        state["started_at"] = time.monotonic()
+
+    def _tick(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        if bool(node.blackboard.get("USER_INTERRUPT_ACTIVE", False)):
+            _reset()
+            return BehaviorTree.NodeState.FAILURE
+        if not bool(state["started"]):
+            _start()
+        pending: dict[str, str] = state["pending"]
+        request_id = str(state["request_id"])
+        for email in list(pending):
+            reply = get_inventory_state(email, request_id)
+            if reply is None:
+                continue
+            label = pending.pop(email)
+            state["results"][email] = _build_inventory_status(email, label, reply)
+        if not pending:
+            return _finish()
+        if (time.monotonic() - float(state["started_at"])) * 1000.0 < _INVENTORY_QUERY_TIMEOUT_MS:
+            return BehaviorTree.NodeState.RUNNING
+        for email, label in list(pending.items()):
+            state["results"][email] = _build_inventory_status(email, label, None)
+        pending.clear()
+        return _finish()
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name=name,
+            action_fn=_tick,
+            aftercast_ms=_INVENTORY_QUERY_POLL_MS,
+        )
+    )
+
+
+def _inventory_is_healthy_node(name: str) -> BehaviorTree:
+    def _check(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        statuses = list(_inventory_status_snapshot.values())
+        if not statuses:
+            return BehaviorTree.NodeState.FAILURE
+        issues: list[str] = []
+        for status in statuses:
+            if status["issues"]:
+                issues.append(f"{status['label']}: {', '.join(status['issues'])}")
+        if issues:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                "[Inventory] Maintenance required - " + "; ".join(issues),
+                PySystem.Console.MessageType.Warning,
+            )
+            return BehaviorTree.NodeState.FAILURE
+        return BehaviorTree.NodeState.SUCCESS
+    return BehaviorTree(BehaviorTree.ConditionNode(name=name, condition_fn=_check))
+
+
+def _send_widget_state(widget_name: str, enabled: bool, refs_key: str) -> BehaviorTree:
+    return BTShared.SendAndWait(
+        command=SharedCommandType.EnableWidget if enabled else SharedCommandType.DisableWidget,
+        extra_data=(widget_name, "", "", ""),
+        include_self=True,
+        refs_blackboard_key=refs_key,
+        timeout_ms=20_000,
+        poll_interval_ms=100,
+        log=True,
+    )
+
+
+def _merchant_stock_request_spec() -> str:
+    targets: list[str] = []
+    if _inventory_min_id_kits > 0 and ID_KIT_MODEL_IDS:
+        targets.append(f"{ID_KIT_MODEL_IDS[0]}:{_inventory_min_id_kits}")
+    if _inventory_min_salvage_kits > 0 and SALVAGE_KIT_MODEL_IDS:
+        targets.append(f"{SALVAGE_KIT_MODEL_IDS[0]}:{_inventory_min_salvage_kits}")
+    return "stock:" + ",".join(targets) if targets else ""
+
+
+def _run_merchant_rules(attempt_key: str) -> BehaviorTree:
+    def _build(_node: BehaviorTree.Node) -> BehaviorTree:
+        recipients = _inventory_recipient_emails()
+        if not recipients:
+            return BehaviorTree(BehaviorTree.FailerNode(name="No MerchantRules Recipients"))
+        request_id = f"{MODULE_NAME}_merchant_{attempt_key}_{int(time.monotonic() * 1000)}"
+        return BTShared.SendAndWait(
+            command=SharedCommandType.MerchantRules,
+            params=(3.0, 0.0, 0.0, 0.0),
+            extra_data=(request_id, _merchant_stock_request_spec(), "0", "0"),
+            recipients=recipients,
+            include_self=True,
+            refs_blackboard_key=f"{attempt_key}_merchant_refs",
+            timeout_ms=INVENTORY_MERCHANT_TIMEOUT_MS,
+            poll_interval_ms=250,
+            log=True,
+        )
+    return BT.Subtree(name="Run MerchantRules On All Accounts", subtree_fn=_build)
+
+
+def _travel_all_accounts(map_id: int, refs_key: str) -> BehaviorTree:
+    attempts: list[BehaviorTree] = []
+    for label, region, district, language in START_TRAVEL_PREFERENCES:
+        attempts.append(
+            BT.Sequence(
+                name=f"Travel To {label} District",
+                children=[
+                    BTShared.SendAndWait(
+                        command=SharedCommandType.TravelToMap,
+                        params=(
+                            float(map_id),
+                            float(region),
+                            float(district),
+                            float(language),
+                        ),
+                        include_self=True,
+                        refs_blackboard_key=f"{refs_key}_{label.lower()}",
+                        timeout_ms=INVENTORY_TRAVEL_TIMEOUT_MS,
+                        poll_interval_ms=250,
+                        log=True,
+                    )
+                ],
+            )
+        )
+
+    return BT.Selector(
+        name="Travel To Preferred Non-Europe District",
+        children=attempts,
+    )
+
+
+def InventoryCheckAndMaintenance() -> BehaviorTree:
+    disabled = BehaviorTree(
+        BehaviorTree.ConditionNode(
+            name="Inventory Maintenance Disabled",
+            condition_fn=lambda _node: not _inventory_maintenance_enabled,
+        )
+    )
+    attempts: list[BehaviorTree] = []
+    for attempt in range(1, INVENTORY_MAINTENANCE_RETRY_COUNT + 1):
+        key = f"inventory_attempt_{attempt}"
+        attempts.append(
+            BT.Sequence(
+                name=f"Inventory Maintenance Attempt {attempt}",
+                children=[
+                    _send_widget_state(INVENTORY_PLUS_WIDGET_NAME, False, f"{key}_inventoryplus_off"),
+                    _send_widget_state(MERCHANT_RULES_WIDGET_NAME, True, f"{key}_merchant_on"),
+                    _run_merchant_rules(key),
+                    _send_widget_state(INVENTORY_PLUS_WIDGET_NAME, True, f"{key}_inventoryplus_on"),
+                    BT.Wait(INVENTORY_SNAPSHOT_SETTLE_MS),
+                    _query_all_inventory_states_node(f"Refresh Inventory Attempt {attempt}"),
+                    _inventory_is_healthy_node(f"Inventory Healthy After Attempt {attempt}"),
+                ],
+            )
+        )
+
+    enabled = BT.Sequence(
+        name="Inventory Check And Maintenance",
+        children=[
+            _query_all_inventory_states_node("Query Inventory On All Accounts"),
+            BT.Selector(
+                name="Inventory Threshold Decision",
+                children=[
+                    _inventory_is_healthy_node("Inventory Already Healthy"),
+                    BT.Sequence(
+                        name="Run MerchantRules Maintenance",
+                        children=[
+                            BT.LeaveParty(),
+                            BT.Selector(name="MerchantRules Attempts", children=attempts),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    )
+    return BT.Selector(name="Optional Inventory Maintenance", children=[disabled, enabled])
+
+
+def UseAvailableSummoningStone(level_key: str) -> BehaviorTree:
+    """Broadcast a best-effort summoning-stone request to every active account."""
+    def _dispatch(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        if not _use_summoning_stone or not _consumables_allowed():
+            return BehaviorTree.NodeState.SUCCESS
+        sender_email = str(Player.GetAccountEmail() or "").strip()
+        recipients = _inventory_recipient_emails()
+        if not sender_email or not recipients:
+            return BehaviorTree.NodeState.SUCCESS
+        for receiver_email in recipients:
+            try:
+                GLOBAL_CACHE.ShMem.SendMessage(
+                    sender_email,
+                    receiver_email,
+                    SharedCommandType.UseSummoningStone,
+                    (0.0, 0.0, 0.0, 0.0),
+                    ("", "", "", ""),
+                )
+            except Exception:
+                continue
+        return BehaviorTree.NodeState.SUCCESS
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name=f"Use Summoning Stone {level_key} (Multibox Non Blocking)",
+            action_fn=_dispatch,
+            aftercast_ms=0,
+        )
+    )
+
+
+def SummoningStoneRecoveryService() -> BehaviorTree:
+    """Best-effort replacement summon when the active party summon dies mid-floor.
+
+    The regular level-start summoning calls remain authoritative.  This service only
+    becomes armed after it has actually seen a living summoning-stone ally on the
+    current dungeon map.  If that ally disappears without a map transition, accounts
+    are asked one at a time to try UseSummoningStone until a replacement appears.
+    Messaging performs the final per-client guards (active summon / Summoning Sickness).
+    """
+    ATTEMPT_INTERVAL_MS = 3_000.0
+    RETRY_CYCLE_DELAY_MS = 15_000.0
+
+    state: dict[str, object] = {
+        "map_id": 0,
+        "saw_active_summon": False,
+        "recovering": False,
+        "targets": [],
+        "target_index": 0,
+        "next_attempt_ms": 0.0,
+    }
+
+    def _reset_for_map(map_id: int) -> None:
+        state["map_id"] = int(map_id)
+        state["saw_active_summon"] = False
+        state["recovering"] = False
+        state["targets"] = []
+        state["target_index"] = 0
+        state["next_attempt_ms"] = 0.0
+
+    def _refresh_targets() -> list[tuple[str, str]]:
+        targets: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for email, label in _inventory_target_accounts():
+            email = str(email or "").strip()
+            if not email or email in seen:
+                continue
+            seen.add(email)
+            targets.append((email, str(label or email)))
+        state["targets"] = targets
+        return targets
+
+    def _tick(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        if not _use_summoning_stone or not _consumables_allowed():
+            return BehaviorTree.NodeState.RUNNING
+        if not Map.IsMapReady() or Map.IsMapLoading() or not Map.IsExplorable():
+            return BehaviorTree.NodeState.RUNNING
+
+        map_id = int(Map.GetMapID() or 0)
+        if map_id not in DUNGEON_MAPS:
+            return BehaviorTree.NodeState.RUNNING
+        if map_id != int(state["map_id"] or 0):
+            # A floor transition intentionally removes the old summon.  Do not treat
+            # that as a death: Level1/2/3 Start already performs the normal summon.
+            _reset_for_map(map_id)
+            return BehaviorTree.NodeState.RUNNING
+
+        player_id = int(Player.GetAgentID() or 0)
+        if player_id <= 0 or not Agent.IsValid(player_id) or Agent.IsDead(player_id):
+            return BehaviorTree.NodeState.RUNNING
+        if Routines.Checks.Party.IsPartyWiped():
+            return BehaviorTree.NodeState.RUNNING
+
+        try:
+            summon_alive = bool(has_active_party_summon(GLOBAL_CACHE.Party.GetOthers()))
+        except Exception:
+            summon_alive = False
+
+        if summon_alive:
+            if bool(state["recovering"]):
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    "[Summoning] Replacement summon detected; recovery stopped.",
+                    PySystem.Console.MessageType.Success,
+                )
+            state["saw_active_summon"] = True
+            state["recovering"] = False
+            state["targets"] = []
+            state["target_index"] = 0
+            state["next_attempt_ms"] = 0.0
+            return BehaviorTree.NodeState.RUNNING
+
+        # Do not replace the explicit level-start summon.  Recovery only starts after
+        # a real summon has been observed alive on this same floor.
+        if not bool(state["saw_active_summon"]):
+            return BehaviorTree.NodeState.RUNNING
+
+        now_ms = time.monotonic() * 1000.0
+        if not bool(state["recovering"]):
+            state["recovering"] = True
+            state["target_index"] = 0
+            state["next_attempt_ms"] = now_ms
+            _refresh_targets()
+            PySystem.Console.Log(
+                MODULE_NAME,
+                "[Summoning] Active party summon was lost; trying replacement stones account by account.",
+                PySystem.Console.MessageType.Warning,
+            )
+
+        if now_ms < float(state["next_attempt_ms"] or 0.0):
+            return BehaviorTree.NodeState.RUNNING
+
+        targets: list[tuple[str, str]] = list(state["targets"] or [])
+        if not targets:
+            targets = _refresh_targets()
+            if not targets:
+                state["next_attempt_ms"] = now_ms + RETRY_CYCLE_DELAY_MS
+                return BehaviorTree.NodeState.RUNNING
+
+        target_index = int(state["target_index"] or 0)
+        if target_index >= len(targets):
+            # Nobody produced a summon during this pass (no stone, sickness, etc.).
+            # Wait before trying the accounts again instead of spamming messages.
+            state["target_index"] = 0
+            state["targets"] = _refresh_targets()
+            state["next_attempt_ms"] = now_ms + RETRY_CYCLE_DELAY_MS
+            return BehaviorTree.NodeState.RUNNING
+
+        sender_email = str(Player.GetAccountEmail() or "").strip()
+        if not sender_email:
+            state["next_attempt_ms"] = now_ms + ATTEMPT_INTERVAL_MS
+            return BehaviorTree.NodeState.RUNNING
+
+        receiver_email, label = targets[target_index]
+        state["target_index"] = target_index + 1
+        state["next_attempt_ms"] = now_ms + ATTEMPT_INTERVAL_MS
+
+        try:
+            GLOBAL_CACHE.ShMem.SendMessage(
+                sender_email,
+                receiver_email,
+                SharedCommandType.UseSummoningStone,
+                (0.0, 0.0, 0.0, 0.0),
+            )
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"[Summoning] Asking {label} to try a replacement summoning stone.",
+                PySystem.Console.MessageType.Info,
+            )
+        except Exception as exc:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"[Summoning] Replacement request failed for {label}: {exc}",
+                PySystem.Console.MessageType.Warning,
+            )
+
         return BehaviorTree.NodeState.RUNNING
 
-    return BehaviorTree(BehaviorTree.WaitUntilNode(name=name, condition_fn=_check, throttle_interval_ms=500, timeout_ms=timeout_ms))
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Summoning Stone Recovery Service",
+            action_fn=_tick,
+            aftercast_ms=500,
+        )
+    )
 
 
-def TheBreachApproach() -> list[tuple[str, Callable[[], BehaviorTree]]]:
-    # Walk through Piken Square to the portal, then clear The Breach to the
-    # Tunnels entrance.
-    breach_route: list[object] = [
-        (21264., 3562.),
-        (18837., -919.),
-        (19213., -4201.),
-        (18004., -1686.),
+
+def _on_map_or_skip(
+    name: str,
+    map_id: int,
+    child: BehaviorTree,
+    skip_if_maps: Sequence[int]=(),
+) -> BehaviorTree:
+    run_here = BT.Sequence(
+        name=f"{name} - Current Map",
+        children=[BT.IsCurrentMap(map_id=map_id, log=False), child],
+    )
+    if not skip_if_maps:
+        return run_here
+    skip = BT.Sequence(
+        name=f"{name} - Already Past",
+        children=[
+            BT.Selector(
+                name=f"{name} - Later Map",
+                children=[BT.IsCurrentMap(map_id=int(mid), log=False) for mid in skip_if_maps],
+            ),
+            BT.Succeeder(f"Skip {name}"),
+        ],
+    )
+    return BT.Selector(name=name, children=[run_here, skip])
+
+
+def _draw_run_config() -> None:
+    global _use_hard_mode, _six_men, _restock_conset, _activate_conset
+    global _restock_pcons, _activate_pcons, _use_summoning_stone, _auto_loot
+    global _inventory_maintenance_enabled, _inventory_min_free_slots
+    global _inventory_min_id_kits, _inventory_min_salvage_kits
+
+    _load_settings()
+    changed = False
+    upkeep_changed = False
+
+    for label, variable_name, affects_upkeep in (
+        ("Hard Mode (HM)", "_use_hard_mode", False),
+        ("6 men (Start from Yak's Bend)", "_six_men", False),
+        ("Restock conset from storage", "_restock_conset", False),
+        ("Activate / maintain conset", "_activate_conset", True),
+        ("Restock pcons from storage", "_restock_pcons", False),
+        ("Activate / maintain pcons", "_activate_pcons", True),
+        ("Use summoning stones", "_use_summoning_stone", False),
+        ("Auto Loot", "_auto_loot", True),
+    ):
+        old = bool(globals()[variable_name])
+        new = PyImGui.checkbox(label, old)
+        if new != old:
+            globals()[variable_name] = new
+            changed = True
+            upkeep_changed = upkeep_changed or affects_upkeep
+
+    PyImGui.separator()
+    new = PyImGui.checkbox("Run MerchantRules when inventory is low", _inventory_maintenance_enabled)
+    if new != _inventory_maintenance_enabled:
+        _inventory_maintenance_enabled = new
+        changed = True
+
+    if _inventory_maintenance_enabled:
+        value = max(0, int(PyImGui.input_int("Minimum free slots", _inventory_min_free_slots)))
+        if value != _inventory_min_free_slots:
+            _inventory_min_free_slots = value
+            changed = True
+        value = max(0, int(PyImGui.input_int("Minimum Superior ID kits", _inventory_min_id_kits)))
+        if value != _inventory_min_id_kits:
+            _inventory_min_id_kits = value
+            changed = True
+        value = max(0, int(PyImGui.input_int("Minimum Superior salvage kits", _inventory_min_salvage_kits)))
+        if value != _inventory_min_salvage_kits:
+            _inventory_min_salvage_kits = value
+            changed = True
+
+    if changed:
+        _save_settings()
+    if upkeep_changed:
+        _configure_runtime_upkeeps(looting_enabled=_auto_loot)
+
+
+def _draw_statistics() -> None:
+    from Py4GWCoreLib import Color
+
+    global _scramble_accounts, _statistics_reset_pending
+
+    _load_statistics()
+    if _refresh_character_names():
+        _save_statistics()
+
+    gold = Color(255, 210, 80, 255).to_tuple_normalized()
+    cyan = Color(80, 210, 255, 255).to_tuple_normalized()
+    live = Color(100, 180, 255, 255).to_tuple_normalized()
+
+    def _fmt_time(seconds: float) -> str:
+        if seconds <= 0.0 or seconds == float("inf"):
+            return "--:--"
+        minutes, remaining = divmod(int(seconds), 60)
+        return f"{minutes:02d}:{remaining:02d}"
+
+    def _avg_time(total: float, count: int | None = None) -> str:
+        sample_count = _total_runs if count is None else int(count)
+        return _fmt_time(total / sample_count) if sample_count > 0 else "--:--"
+
+    def _drop_rate(runs: int, drops: int) -> str:
+        return f"{drops / runs * 100.0:.1f}%" if runs > 0 and drops > 0 else "-"
+
+    table_flags = (
+        PyImGui.TableFlags.Borders
+        | PyImGui.TableFlags.RowBg
+        | PyImGui.TableFlags.SizingFixedFit
+        | PyImGui.TableFlags.NoHostExtendX
+    )
+    header_color = 26 | (38 << 8) | (51 << 16) | (255 << 24)
+    column_width = 92.0
+    row_height = 22.0
+
+    def _header_row(labels: tuple[str, ...]) -> None:
+        PyImGui.table_next_row(0, row_height)
+        PyImGui.table_set_bg_color(2, header_color, -1)
+        for index, label in enumerate(labels):
+            PyImGui.table_set_column_index(index)
+            PyImGui.text(label)
+
+    PyImGui.text_colored("Tunnels of the Forsaken Statistics", gold)
+    PyImGui.separator()
+    PyImGui.spacing()
+
+    _scramble_accounts = PyImGui.checkbox("Hide Account Names", _scramble_accounts)
+
+    session_eternal = sum(_session_eternal_blades.values())
+    total_eternal = sum(_eternal_blade_drops.values())
+
+    PyImGui.text_colored("Session Overview", cyan)
+    if PyImGui.begin_table("##forsaken_bt_session", 3, table_flags):
+        for label in ("Runs", "Eternal Blade", "Drop Rate"):
+            PyImGui.table_setup_column(label, PyImGui.TableColumnFlags.WidthFixed, column_width)
+        _header_row(("Runs", "Eternal Blade", "Drop Rate"))
+        values = (
+            _session_runs,
+            session_eternal,
+            _drop_rate(_session_runs, session_eternal),
+        )
+        PyImGui.table_next_row(0, row_height)
+        for index, value in enumerate(values):
+            PyImGui.table_set_column_index(index)
+            PyImGui.text(str(value))
+        PyImGui.end_table()
+
+    PyImGui.spacing()
+    PyImGui.text_colored("Total Overview", cyan)
+    if PyImGui.begin_table("##forsaken_bt_all_time", 3, table_flags):
+        for label in ("Runs", "Eternal Blade", "Drop Rate"):
+            PyImGui.table_setup_column(label, PyImGui.TableColumnFlags.WidthFixed, column_width)
+        _header_row(("Runs", "Eternal Blade", "Drop Rate"))
+        values = (
+            _total_runs,
+            total_eternal,
+            _drop_rate(_total_runs, total_eternal),
+        )
+        PyImGui.table_next_row(0, row_height)
+        for index, value in enumerate(values):
+            PyImGui.table_set_column_index(index)
+            PyImGui.text(str(value))
+        PyImGui.end_table()
+
+    PyImGui.spacing()
+    PyImGui.text_colored("Run Timings", cyan)
+    if PyImGui.begin_table("##forsaken_bt_timings", 5, table_flags):
+        for label in ("Floor", "Current", "Avg", "Best", "Worst"):
+            PyImGui.table_setup_column(label, PyImGui.TableColumnFlags.WidthFixed, 72.0)
+        _header_row(("Floor", "Current", "Avg", "Best", "Worst"))
+
+        now = time.monotonic()
+        run_active = _t_run_start > 0.0
+        l1_active = run_active and _t_l2_start <= 0.0
+        l2_active = _t_l2_start > 0.0 and _t_l3_start <= 0.0
+        l3_active = _t_l3_start > 0.0
+        surface_active = _t_surface_start > 0.0
+
+        timing_rows = (
+            ("Yak -> Dungeon", now - _t_surface_start if surface_active else _current_surface_time, surface_active, _surface_total_time, _surface_fastest, _surface_slowest, _surface_runs),
+            ("Overall", now - _t_run_start if run_active else _current_run_time, run_active, _total_run_time, _fastest_run, _slowest_run, _total_runs),
+            ("Floor 1", now - _t_run_start if l1_active else _current_l1_time, l1_active, _l1_total_time, _l1_fastest, _l1_slowest, _total_runs),
+            ("Floor 2", now - _t_l2_start if l2_active else _current_l2_time, l2_active, _l2_total_time, _l2_fastest, _l2_slowest, _total_runs),
+            ("Floor 3", now - _t_l3_start if l3_active else _current_l3_time, l3_active, _l3_total_time, _l3_fastest, _l3_slowest, _total_runs),
+        )
+
+        for label, current, is_live, total, fastest, slowest, sample_count in timing_rows:
+            PyImGui.table_next_row(0, row_height)
+            PyImGui.table_set_column_index(0)
+            PyImGui.text(label)
+            PyImGui.table_set_column_index(1)
+            if is_live:
+                PyImGui.text_colored(_fmt_time(current), live)
+            else:
+                PyImGui.text(_fmt_time(current))
+            PyImGui.table_set_column_index(2)
+            PyImGui.text(_avg_time(total, sample_count))
+            PyImGui.table_set_column_index(3)
+            PyImGui.text(_fmt_time(fastest))
+            PyImGui.table_set_column_index(4)
+            PyImGui.text(_fmt_time(slowest))
+
+        PyImGui.end_table()
+
+    PyImGui.spacing()
+    if not _statistics_reset_pending:
+        if PyImGui.button("Reset Total Overview & Run Timings"):
+            _statistics_reset_pending = True
+    else:
+        PyImGui.text_colored("Reset all-time totals and timing history?", gold)
+        if PyImGui.button("Confirm Reset"):
+            _reset_total_overview_and_timings()
+            _statistics_reset_pending = False
+        PyImGui.same_line(0.0, 8.0)
+        if PyImGui.button("Cancel"):
+            _statistics_reset_pending = False
+
+    PyImGui.spacing()
+    PyImGui.text_colored("Eternal Blade Drops", cyan)
+    if PyImGui.begin_table("##forsaken_bt_eternal_blade_drops", 4, table_flags):
+        PyImGui.table_setup_column("Account", PyImGui.TableColumnFlags.WidthStretch)
+        for label in ("Session", "All Time", "Drop Rate"):
+            PyImGui.table_setup_column(label, PyImGui.TableColumnFlags.WidthFixed, column_width)
+        _header_row(("Account", "Session", "All Time", "Drop Rate"))
+
+        keys = sorted(set(_session_eternal_blades) | set(_eternal_blade_drops))
+        session_total = 0
+        all_time_total = 0
+        for key in keys:
+            session_count = _session_eternal_blades.get(key, 0)
+            all_time_count = _eternal_blade_drops.get(key, 0)
+            session_total += session_count
+            all_time_total += all_time_count
+
+            PyImGui.table_next_row(0, row_height)
+            PyImGui.table_set_column_index(0)
+            PyImGui.text(_account_label(key))
+            PyImGui.table_set_column_index(1)
+            PyImGui.text(str(session_count))
+            PyImGui.table_set_column_index(2)
+            PyImGui.text(str(all_time_count))
+            PyImGui.table_set_column_index(3)
+            PyImGui.text(_drop_rate(_total_runs, all_time_count))
+
+        PyImGui.table_next_row(0, row_height)
+        PyImGui.table_set_column_index(0)
+        PyImGui.text_colored("Total", gold)
+        PyImGui.table_set_column_index(1)
+        PyImGui.text_colored(str(session_total), gold)
+        PyImGui.table_set_column_index(2)
+        PyImGui.text_colored(str(all_time_total), gold)
+        PyImGui.table_set_column_index(3)
+        PyImGui.text_colored(_drop_rate(_total_runs, all_time_total), gold)
+        PyImGui.end_table()
+
+
+# region Elemental Keystone bundle handling
+
+_MARTIAL_PRIMARY_PROFESSIONS = {"Warrior", "Ranger", "Assassin", "Dervish", "Paragon"}
+
+
+def _is_holding_bundle() -> bool:
+    try:
+        return bool(Agent.IsHoldingItem(Player.GetAgentID()))
+    except Exception:
+        return False
+
+
+def _resolve_keystone_combat_policy() -> bool:
+    """Return True when the leader must drop the Elemental Keystone for combat."""
+    global _drop_keystone_for_combat
+
+    if _drop_keystone_for_combat is not None:
+        return _drop_keystone_for_combat
+
+    player_id = int(Player.GetAgentID() or 0)
+    weapon_name = "Unknown"
+
+    try:
+        _, weapon_name = Agent.GetWeaponType(player_id)
+    except Exception:
+        weapon_name = "Unknown"
+
+    try:
+        is_martial = bool(Agent.IsMartial(player_id))
+    except Exception:
+        is_martial = False
+
+    try:
+        is_caster = bool(Agent.IsCaster(player_id))
+    except Exception:
+        is_caster = False
+
+    if is_martial:
+        _drop_keystone_for_combat = True
+        reason = f"martial weapon detected: {weapon_name}"
+    elif is_caster:
+        _drop_keystone_for_combat = False
+        reason = f"caster weapon detected: {weapon_name}"
+    else:
+        try:
+            primary_profession, _ = Agent.GetProfessionNames(player_id)
+        except Exception:
+            primary_profession = ""
+
+        if primary_profession in _MARTIAL_PRIMARY_PROFESSIONS:
+            _drop_keystone_for_combat = True
+            reason = f"martial primary profession detected: {primary_profession}"
+        elif primary_profession:
+            _drop_keystone_for_combat = False
+            reason = f"caster primary profession detected: {primary_profession}"
+        else:
+            # Safe fallback: never risk entering combat with an unknown build
+            # while the Keystone is occupying the weapon slot.
+            _drop_keystone_for_combat = True
+            reason = "weapon and profession are unknown; safe fallback"
+
+    PySystem.Console.Log(
+        MODULE_NAME,
+        f"Elemental Keystone combat policy: {('DROP' if _drop_keystone_for_combat else 'KEEP')} ({reason}).",
+        PySystem.Console.MessageType.Info,
+    )
+    return _drop_keystone_for_combat
+
+
+def ResetKeystoneCombatPolicy() -> BehaviorTree:
+    def _reset(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        global _drop_keystone_for_combat, _keystone_dropped_for_combat
+        _drop_keystone_for_combat = None
+        _keystone_dropped_for_combat = False
+        return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Reset Elemental Keystone Combat Policy",
+            action_fn=_reset,
+            aftercast_ms=0,
+        )
+    )
+
+
+def ResolveKeystoneCombatPolicy() -> BehaviorTree:
+    def _resolve(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        _resolve_keystone_combat_policy()
+        return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Resolve Elemental Keystone Combat Policy",
+            action_fn=_resolve,
+            aftercast_ms=0,
+        )
+    )
+
+
+def _set_keystone_dropped_node(value: bool) -> BehaviorTree:
+    def _set(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        global _keystone_dropped_for_combat
+        _keystone_dropped_for_combat = bool(value)
+        return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Mark Elemental Keystone Dropped" if value else "Clear Elemental Keystone Dropped",
+            action_fn=_set,
+            aftercast_ms=0,
+        )
+    )
+
+
+def DropKeystoneForCombat(log: bool=False) -> BehaviorTree:
+    """Drop the Keystone only for martial combat; casters keep carrying it."""
+
+    def _build(_node: BehaviorTree.Node) -> BehaviorTree:
+        if not _resolve_keystone_combat_policy():
+            return BT.Succeeder("Keep Keystone For Caster Combat")
+        if not _is_holding_bundle():
+            return BT.Succeeder("No Keystone Bundle To Drop")
+        return BT.Sequence(
+            name="Drop Elemental Keystone For Combat",
+            children=[
+                BT.DropBundle(log=log),
+                _set_keystone_dropped_node(True),
+            ],
+        )
+
+    return BT.Subtree(name="Drop Keystone For Combat If Required", subtree_fn=_build)
+
+
+def _enemy_in_keystone_combat_range(radius: float=Range.Earshot.value) -> bool:
+    """Return True when a living enemy is within the Keystone combat-drop radius."""
+    try:
+        player_id = int(Player.GetAgentID() or 0)
+        if player_id <= 0:
+            return False
+
+        px, py = Agent.GetXY(player_id)
+        radius_sq = float(radius) * float(radius)
+
+        for candidate in AgentArray.GetEnemyArray() or []:
+            agent_id = int(candidate or 0)
+            if agent_id <= 0:
+                continue
+            try:
+                if Agent.IsDead(agent_id):
+                    continue
+                x, y = Agent.GetXY(agent_id)
+            except Exception:
+                continue
+
+            dx = float(x) - float(px)
+            dy = float(y) - float(py)
+            if dx * dx + dy * dy <= radius_sq:
+                return True
+
+        return False
+    except Exception:
+        return False
+
+
+def KeystoneAwareVanquish(point: Vec2f, name: str) -> BehaviorTree:
+    """Run one Vanquish point and drop a martial Keystone only when combat enters Earshot."""
+
+    def _create_vanquish_tree() -> BehaviorTree:
+        return BT.VanquishNode(
+            [point],
+            name=name,
+            clear_area_radius=Range.Earshot.value,
+            pause_on_combat=True,
+            log=False,
+        )
+
+    vanquish_tree = _create_vanquish_tree()
+    drop_tree: BehaviorTree | None = None
+
+    def _tick(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        nonlocal vanquish_tree, drop_tree
+
+        # Keep carrying the Keystone while travelling.  For martial builds, only
+        # release it once a live enemy actually enters the same Earshot radius
+        # used by this Vanquish point.
+        if (
+            _resolve_keystone_combat_policy()
+            and _is_holding_bundle()
+            and _enemy_in_keystone_combat_range(Range.Earshot.value)
+        ):
+            if drop_tree is None:
+                drop_tree = DropKeystoneForCombat(log=True)
+
+            drop_tree.blackboard = node.blackboard
+            drop_result = BehaviorTree.Node._normalize_state(drop_tree.tick())
+            if drop_result == BehaviorTree.NodeState.RUNNING:
+                return BehaviorTree.NodeState.RUNNING
+            if drop_result == BehaviorTree.NodeState.FAILURE:
+                drop_tree = None
+                return BehaviorTree.NodeState.FAILURE
+            drop_tree = None
+
+        vanquish_tree.blackboard = node.blackboard
+        result = BehaviorTree.Node._normalize_state(vanquish_tree.tick())
+        if result != BehaviorTree.NodeState.RUNNING:
+            # Rebuild the internal node so a planner/wipe restart can execute the
+            # point again instead of inheriting a completed child state.
+            vanquish_tree = _create_vanquish_tree()
+            drop_tree = None
+        return result
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name=f"{name} - Keystone Aware",
+            action_fn=_tick,
+            aftercast_ms=100,
+        )
+    )
+
+
+def _find_ground_keystone() -> int | None:
+    """Return a nearby pickup-compatible Elemental Keystone, 0 if absent, None on scan failure."""
+    try:
+        local_player_id = int(Player.GetAgentID() or 0)
+        if local_player_id <= 0:
+            return 0
+        px, py = Agent.GetXY(local_player_id)
+        search_radius = 7500.0
+        search_radius_sq = search_radius * search_radius
+
+        for candidate in AgentArray.GetItemArray() or []:
+            agent_id = int(candidate or 0)
+            if agent_id <= 0 or not Agent.GetItemAgentByID(agent_id):
+                continue
+            owner_id = int(Agent.GetItemAgentOwnerID(agent_id) or 0)
+            if owner_id not in (0, local_player_id):
+                continue
+            item_id = int(Agent.GetItemAgentItemID(agent_id) or 0)
+            if item_id <= 0:
+                continue
+            if int(GLOBAL_CACHE.Item.GetModelID(item_id) or 0) != int(ELEMENTAL_KEYSTONE_MODEL_ID):
+                continue
+
+            x, y = Agent.GetXY(agent_id)
+            dx = float(x) - float(px)
+            dy = float(y) - float(py)
+            if dx * dx + dy * dy <= search_radius_sq:
+                return agent_id
+
+        return 0
+    except Exception:
+        return None
+
+
+def PickupKeystone(*, allow_missing_after_drop: bool = False) -> BehaviorTree:
+    """Recover a dropped/new Keystone, optionally accepting a door-consumed bundle."""
+    PICKUP_TIMEOUT_MS = 5_000
+    RETRY_DELAY_MS = 1_000
+    PICKUP_SEARCH_RADIUS = 7500.0
+
+    def _create_pickup_tree() -> BehaviorTree:
+        return BT.PickupGroundItemByModelID(
+            model_ids=(ELEMENTAL_KEYSTONE_MODEL_ID,),
+            max_distance=PICKUP_SEARCH_RADIUS,
+            timeout_ms=PICKUP_TIMEOUT_MS,
+            allow_unassigned=True,
+            interaction_interval_ms=1_000,
+            aftercast_ms=100,
+            log=False,
+        )
+
+    pickup_tree = _create_pickup_tree()
+    started_at = 0.0
+    retry_at = 0.0
+    search_started = False
+
+    def _reset_state() -> None:
+        nonlocal pickup_tree, started_at, retry_at, search_started
+        pickup_tree = _create_pickup_tree()
+        started_at = 0.0
+        retry_at = 0.0
+        search_started = False
+
+    def _tick(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        nonlocal pickup_tree, started_at, retry_at, search_started
+        global _keystone_dropped_for_combat
+
+        now = time.monotonic()
+
+        if _is_holding_bundle():
+            _keystone_dropped_for_combat = False
+            _reset_state()
+            return BehaviorTree.NodeState.SUCCESS
+
+        ground_keystone = _find_ground_keystone()
+        if ground_keystone == 0 and (allow_missing_after_drop or not _keystone_dropped_for_combat):
+            # Before the quest drop exists, absence is expected.  On the final
+            # Level 1 door points, the Keystone can also be consumed by the door
+            # after it was dropped; that disappearance must not block the route.
+            if allow_missing_after_drop and _keystone_dropped_for_combat:
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    "Elemental Keystone is no longer on the ground; assuming the door consumed it and continuing.",
+                    PySystem.Console.MessageType.Info,
+                )
+                _keystone_dropped_for_combat = False
+            _reset_state()
+            return BehaviorTree.NodeState.SUCCESS
+
+        # If a preliminary scan itself failed, or we know we dropped the bundle,
+        # let the established pickup routine search/retry until it is recovered.
+        if started_at <= 0.0:
+            started_at = now
+
+        if not search_started:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                "Looking for the Elemental Keystone...",
+                PySystem.Console.MessageType.Info,
+            )
+            search_started = True
+
+        if (now - started_at) * 1000.0 >= PICKUP_TIMEOUT_MS:
+            # After a shrine wipe the bundle can disappear entirely.  Do not fail
+            # the planner and restart this Keystone point forever: clear the stale
+            # dropped-state and accept the point so the route can continue.
+            _keystone_dropped_for_combat = False
+            PySystem.Console.Log(
+                MODULE_NAME,
+                "Elemental Keystone not recovered after 5s; continuing to the next route point.",
+                PySystem.Console.MessageType.Warning,
+            )
+            _reset_state()
+            return BehaviorTree.NodeState.SUCCESS
+
+        if now < retry_at:
+            return BehaviorTree.NodeState.RUNNING
+
+        pickup_tree.blackboard = node.blackboard
+        result = BehaviorTree.Node._normalize_state(pickup_tree.tick())
+
+        if result == BehaviorTree.NodeState.RUNNING:
+            return BehaviorTree.NodeState.RUNNING
+
+        if result == BehaviorTree.NodeState.SUCCESS and _is_holding_bundle():
+            _keystone_dropped_for_combat = False
+            _reset_state()
+            return BehaviorTree.NodeState.SUCCESS
+
+        pickup_tree = _create_pickup_tree()
+        pickup_tree.blackboard = node.blackboard
+        retry_at = now + RETRY_DELAY_MS / 1000.0
+        return BehaviorTree.NodeState.RUNNING
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Pick Up Elemental Keystone",
+            action_fn=_tick,
+            aftercast_ms=100,
+        )
+    )
+
+
+def _keystone_point_steps(
+    prefix: str,
+    map_id: int,
+    points: Sequence[Vec2f],
+    *,
+    skip_if_in_maps: Sequence[int]=(),
+) -> list[tuple[str, Callable[[], BehaviorTree]]]:
+    """Expose Keystone-route points individually and handle the martial bundle cycle."""
+    steps: list[tuple[str, Callable[[], BehaviorTree]]] = []
+
+    final_door_point_start = max(1, len(points) - 1)
+
+    for index, point in enumerate(points, start=1):
+        name = f"{prefix} - Point {index:02d}"
+        allow_missing_after_drop = index >= final_door_point_start
+
+        def _build(
+            point: Vec2f=point,
+            name: str=name,
+            allow_missing_after_drop: bool=allow_missing_after_drop,
+        ) -> BehaviorTree:
+            run = BT.Sequence(
+                name=name,
+                children=[
+                    BottingTree.EnableCombatTree(),
+                    KeystoneAwareVanquish(point, f"{name} Combat"),
+                    PickupKeystone(allow_missing_after_drop=allow_missing_after_drop),
+                ],
+            )
+            return _map_guarded_point(
+                name=name,
+                map_id=map_id,
+                child=run,
+                skip_if_in_maps=skip_if_in_maps,
+            )
+
+        steps.append((name, _build))
+
+    return steps
+
+
+# endregion
+
+
+PIKEN_SQUARE = 40
+YAKS_BEND = 134
+TRAVELERS_VALE = 99
+ASCALON_FOOTHILLS = 103
+DIESSA_LOWLANDS = 13
+THE_BREACH = 102
+TUNNELS_L1 = 880
+TUNNELS_L2 = 881
+TUNNELS_L3 = 882
+ELEMENTAL_KEYSTONE_MODEL_ID = 38301
+BOSS_KEY_MODEL_ID = 25416
+
+# Standard Piken route.
+BREACH_ROUTE = [Vec2f(21250.00, 3550.00), Vec2f(18850.00, -900.00), Vec2f(19200.00, -4200.00), Vec2f(18000.00, -1700.00)]
+
+# Alternate 6-man route: Yak's Bend -> Traveler's Vale -> Ascalon Foothills
+# -> Diessa Lowlands -> The Breach -> Tunnels of the Forsaken.
+YAKS_BEND_EXIT = Vec2f(-50.0, 50.0)
+TRAVELERS_VALE_ROUTE = [
+    Vec2f(8314, -665),
+    Vec2f(10992, -1368),
+    Vec2f(10422, -4573),
+    Vec2f(10861, -8173),
+    Vec2f(10378, -12168),
+    Vec2f(9148, -15153),
+    Vec2f(9772, -17054),
+    Vec2f(11364, -17119),
+]
+ASCALON_FOOTHILLS_ROUTE = [
+    Vec2f(-6007, 6342),
+    Vec2f(-7967, 4382),
+    Vec2f(-5576, 1599),
+    Vec2f(-2048, 2226),
+    Vec2f(-844, 3446),
+    Vec2f(-972, 5100),
+    Vec2f(730, 5662),
+    Vec2f(2528, 7284),
+    Vec2f(4134, 6272),
+    Vec2f(6247, 2887),
+    Vec2f(3337, -3168),
+    Vec2f(7257, -5301),
+    Vec2f(7443, -7201),
+]
+DIESSA_LOWLANDS_ROUTE = [
+    Vec2f(-20468, 13104),
+    Vec2f(-17761, 10229),
+    Vec2f(-17154, 7964),
+    Vec2f(-14188, 4980),
+    Vec2f(-12684, 6347),
+    Vec2f(-9787, 5387),
+    Vec2f(-5969, 5601),
+    Vec2f(-1754, 4700),
+    Vec2f(-439, 1678),
+    Vec2f(6697, 1119),
+    Vec2f(9574, -7291),
+    Vec2f(11012, -10887),
+    Vec2f(16213, -10721),
+    Vec2f(20583, -13167),
+    Vec2f(21988, -15070),
+    Vec2f(24345, -15138),
+]
+SIX_MEN_BREACH_ROUTE = [
+    Vec2f(-16044, 3993),
+    Vec2f(-13150, 6208),
+    Vec2f(-11685, 10031),
+    Vec2f(-4167, 8636),
+    Vec2f(-747, 3961),
+    Vec2f(7971, 5118),
+    Vec2f(9434, 3312),
+    Vec2f(14556, 1437),
+    Vec2f(17414, 2100),
+    Vec2f(17711, -186),
+    Vec2f(19609, -4005),
+    Vec2f(18695, -2976),
+    Vec2f(17688, -1284),
+]
+L1_OPENING = [Vec2f(-13102.00, -6841.00), Vec2f(-11660.00, -7585.00), Vec2f(-7836.00, -9115.00)]
+L1_KEY_ROUTE = [Vec2f(-9672.00, -3286.00), Vec2f(-11186.00, -1788.00), Vec2f(-10727.00, -304.00), Vec2f(-8618.00, 3132.00),]
+L2_ROUTE = [Vec2f(-2196.00, 12191.00), Vec2f(1228.00, 16292.00), Vec2f(-764.00, 17454.00), Vec2f(-643.00, 20296.00), Vec2f(-2584.00, 21152.00), Vec2f(-3558.00, 21554.00), Vec2f(-3788.00, 21873.00), Vec2f(-6974.00, 20808.00), Vec2f(-9017.00, 21345.00), Vec2f(-9967,21872),Vec2f(-11685,21978),  Vec2f(-16238.00, 17982.00), Vec2f(-16724.00, 15846.00), Vec2f(-13865.00, 17135.00), Vec2f(-12848.00, 18506.00), Vec2f(-10956.00, 19044.00), Vec2f(-9889.00, 18907.00), Vec2f(-8953.00, 18720.00), Vec2f(-7921.00, 18913.00), Vec2f(-7456.00, 18718.00), Vec2f(-6272.00, 17188.00), Vec2f(-5910.00, 14892.00), Vec2f(-7177.00, 13320.00), Vec2f(-10482.00, 14259.00), Vec2f(-10816.00, 15686.00), Vec2f(-12402.00, 15310.00), Vec2f(-14553.00, 12670.00), Vec2f(-16047.00, 10162.00), Vec2f(-16759.00, 7708.00), Vec2f(-16748.00, 5350.00)]
+L3_ROUTE_A = [Vec2f(-11162.00, 3309.00), Vec2f(-10127.00, 2505.00), Vec2f(-17353.00, -952.00), Vec2f(-16397.00, -3496.00), Vec2f(-15176.00, -3768.00), Vec2f(-13875.00, -4543.00), Vec2f(-14111.00, -6232.00), Vec2f(-13875.00, -4543.00), Vec2f(-12599.00, -5454.00), Vec2f(-10724.00, -3552.00)]
+L3_ROUTE_B = [Vec2f(-9820.00, -2108.00), Vec2f(-8166.00, 1081.00), Vec2f(-5090.00, -78.00), Vec2f(-6212.00, -2777.00)]
+L3_BOSS_ROUTE = [Vec2f(-7771.00, -6279.00), Vec2f(-11025.00, -7480.00), Vec2f(-12939.00, -8238.00), Vec2f(-13836.00, -8918.00),]
+
+
+def _map_guarded_point(
+    name: str,
+    map_id: int,
+    child: BehaviorTree,
+    skip_if_in_maps: Sequence[int]=(),
+) -> BehaviorTree:
+    """Run one planner point on its map, or accept it once a later floor is loaded."""
+    branches: list[BehaviorTree] = [
+        BT.Sequence(
+            name=f"{name} - Active Map",
+            children=[BT.IsCurrentMap(map_id=map_id, log=False), child],
+        )
     ]
 
-    def _enter_the_breach() -> BehaviorTree:
-        return _map_guarded_step(
-            'Enter The Breach Map Guard',
-            PIKEN_SQUARE,
-            BT.MoveAndExitMap(
-                [
-                    (21030., 9015.),
-                    (20255., 8712.),
-                    (20180., 7500.)
+    for later_map_id in skip_if_in_maps:
+        branches.append(
+            BT.Sequence(
+                name=f"{name} - Later Map {later_map_id}",
+                children=[
+                    BT.IsCurrentMap(map_id=int(later_map_id), log=False),
+                    BT.Succeeder(f"{name}AlreadyPassed"),
                 ],
+            )
+        )
+
+    if len(branches) == 1:
+        return branches[0]
+    return BT.Selector(name=name, children=branches)
+
+
+def _vanquish_point_steps(
+    prefix: str,
+    map_id: int,
+    points: Sequence[Vec2f],
+    *,
+    clear_area_radius: float=Range.Earshot.value,
+    pause_on_combat: bool=True,
+    skip_if_in_maps: Sequence[int]=(),
+    loot_after: bool=False,
+    point_number_offset: int=0,
+) -> list[tuple[str, Callable[[], BehaviorTree]]]:
+    """Expose every Vanquish waypoint as its own MultiAccountSequence planner step."""
+    steps: list[tuple[str, Callable[[], BehaviorTree]]] = []
+
+    for local_index, point in enumerate(points, start=1):
+        point_number = int(point_number_offset) + local_index
+        name = f"{prefix} - Point {point_number:02d}"
+
+        def _build(
+            point: Vec2f=point,
+            name: str=name,
+        ) -> BehaviorTree:
+            child = BT.Sequence(
+                name=f"{name} - Combat Enabled",
+                children=[
+                    BottingTree.EnableCombatTree(),
+                    BT.VanquishNode(
+                        [point],
+                        name=name,
+                        clear_area_radius=clear_area_radius,
+                        pause_on_combat=pause_on_combat,
+                        log=False,
+                    ),
+                ],
+            )
+            return _map_guarded_point(
+                name=name,
+                map_id=map_id,
+                child=child,
+                skip_if_in_maps=skip_if_in_maps,
+            )
+
+        steps.append((name, _build))
+
+    return steps
+
+
+def _combat_disabled_move_point_steps(
+    prefix: str,
+    map_id: int,
+    points: Sequence[Vec2f],
+    *,
+    skip_if_in_maps: Sequence[int]=(),
+    point_number_offset: int=0,
+) -> list[tuple[str, Callable[[], BehaviorTree]]]:
+    """Move through wall-sensitive waypoints with HeroAI combat fully disabled."""
+    steps: list[tuple[str, Callable[[], BehaviorTree]]] = []
+    point_count = len(points)
+
+    for local_index, point in enumerate(points, start=1):
+        point_number = int(point_number_offset) + local_index
+        name = f"{prefix} - Point {point_number:02d}"
+        restore_combat = local_index == point_count
+
+        def _build(
+            point: Vec2f=point,
+            name: str=name,
+            restore_combat: bool=restore_combat,
+        ) -> BehaviorTree:
+            children: list[BehaviorTree] = [
+                BottingTree.DisableCombatTree(),
+                BT.Move(
+                    point,
+                    pause_on_combat=False,
+                    tolerance=250.0,
+                    log=False,
+                ),
+            ]
+            if restore_combat:
+                children.append(BottingTree.EnableCombatTree())
+
+            child = BT.Sequence(
+                name=f"{name} - Combat Disabled",
+                children=children,
+            )
+            return _map_guarded_point(
+                name=name,
+                map_id=map_id,
+                child=child,
+                skip_if_in_maps=skip_if_in_maps,
+            )
+
+        steps.append((name, _build))
+
+    return steps
+
+
+def _selected_start_outpost() -> int:
+    return YAKS_BEND if _six_men else PIKEN_SQUARE
+
+
+def _surface_route_to_map(
+    name: str,
+    points: Sequence[Vec2f],
+    target_map_id: int,
+) -> BehaviorTree:
+    if not points:
+        return BT.Succeeder(f"{name} Empty")
+
+    children: list[BehaviorTree] = [
+        BT.VanquishNode(
+            [point],
+            clear_area_radius=Range.Earshot.value,
+            pause_on_combat=True,
+            log=True,
+        )
+        for point in points[:-1]
+    ]
+    children.append(
+        BT.MoveAndExitMap(
+            points[-1],
+            target_map_id=target_map_id,
+            log=True,
+        )
+    )
+    return BT.Sequence(name=name, children=children)
+
+
+def _six_men_surface_entry() -> BehaviorTree:
+    return BT.Sequence(
+        name="6 Men Surface Entry",
+        children=[
+            _on_map_or_skip(
+                "6 Men - Exit Yak's Bend",
+                YAKS_BEND,
+                BT.Sequence(
+                    name="6 Men - Exit Yak's Bend And Start Timer",
+                    children=[
+                        BT.MoveAndExitMap(
+                            YAKS_BEND_EXIT,
+                            target_map_id=TRAVELERS_VALE,
+                            log=True,
+                        ),
+                        _mark_surface_start_node(),
+                    ],
+                ),
+                (TRAVELERS_VALE, ASCALON_FOOTHILLS, DIESSA_LOWLANDS, THE_BREACH, TUNNELS_L1, TUNNELS_L2, TUNNELS_L3),
+            ),
+            _on_map_or_skip(
+                "6 Men - Traveler's Vale Route",
+                TRAVELERS_VALE,
+                _surface_route_to_map(
+                    "6 Men - Traveler's Vale Route",
+                    TRAVELERS_VALE_ROUTE,
+                    ASCALON_FOOTHILLS,
+                ),
+                (ASCALON_FOOTHILLS, DIESSA_LOWLANDS, THE_BREACH, TUNNELS_L1, TUNNELS_L2, TUNNELS_L3),
+            ),
+            _on_map_or_skip(
+                "6 Men - Ascalon Foothills Route",
+                ASCALON_FOOTHILLS,
+                _surface_route_to_map(
+                    "6 Men - Ascalon Foothills Route",
+                    ASCALON_FOOTHILLS_ROUTE,
+                    DIESSA_LOWLANDS,
+                ),
+                (DIESSA_LOWLANDS, THE_BREACH, TUNNELS_L1, TUNNELS_L2, TUNNELS_L3),
+            ),
+            _on_map_or_skip(
+                "6 Men - Diessa Lowlands Route",
+                DIESSA_LOWLANDS,
+                _surface_route_to_map(
+                    "6 Men - Diessa Lowlands Route",
+                    DIESSA_LOWLANDS_ROUTE,
+                    THE_BREACH,
+                ),
+                (THE_BREACH, TUNNELS_L1, TUNNELS_L2, TUNNELS_L3),
+            ),
+            _on_map_or_skip(
+                "6 Men - The Breach To Tunnels",
                 THE_BREACH,
+                _surface_route_to_map(
+                    "6 Men - The Breach To Tunnels",
+                    SIX_MEN_BREACH_ROUTE,
+                    TUNNELS_L1,
+                ),
+                (TUNNELS_L1, TUNNELS_L2, TUNNELS_L3),
             ),
-            skip_if_in_maps=(THE_BREACH, TUNNELS_LVL_1, TUNNELS_LVL_2, TUNNELS_LVL_3),
+        ],
+    )
+
+
+def PrepareRun() -> BehaviorTree:
+    already_inside = BT.Selector(
+        name="Already Inside Tunnels",
+        children=[BT.IsCurrentMap(map_id=m, log=False) for m in DUNGEON_MAPS],
+    )
+    prepare = BT.Sequence(
+        name="Prepare Tunnels Run",
+        children=[
+            BT.Subtree(
+                name="Travel To Selected Start Outpost",
+                subtree_fn=lambda _node: _travel_all_accounts(
+                    _selected_start_outpost(),
+                    "tunnels_start_yaks" if _six_men else "tunnels_start_piken",
+                ),
+            ),
+            InventoryCheckAndMaintenance(),
+            BT.CreateParty(multibox_invite=True, timeout_ms=30_000, log=True),
+            BT.AbandonQuest(quest_id=QUEST_ID, multi_account=True, include_self=True, timeout_ms=10_000, log=True),
+            _runtime_difficulty_node(),
+            _runtime_restock_node(),
+            _runtime_consumable_upkeep_node(False),
+        ],
+    )
+    return BT.Selector(name="Prepare Run Or Resume", children=[already_inside, prepare])
+
+
+def EnterTunnels() -> BehaviorTree:
+    later = BT.Selector(
+        name="Tunnels Already Entered",
+        children=[BT.IsCurrentMap(map_id=m, log=False) for m in DUNGEON_MAPS],
+    )
+
+    def _build_entry(_node: BehaviorTree.Node) -> BehaviorTree:
+        if _six_men:
+            return BT.Sequence(
+                name="Yak's Bend To Tunnels Level 1 - 6 Men",
+                children=[
+                    _runtime_consumable_upkeep_node(False),
+                    _six_men_surface_entry(),
+                    BT.WaitForMapLoad(map_id=TUNNELS_L1, timeout_ms=60_000),
+                    _record_surface_end_node(),
+                    _runtime_consumable_upkeep_node(True),
+                ],
+            )
+
+        return BT.Sequence(
+            name="Piken To Tunnels Level 1",
+            children=[
+                _runtime_consumable_upkeep_node(False),
+                BT.MoveAndExitMap(Vec2f(20180, 7500), target_map_id=THE_BREACH, log=True),
+                BT.Sequence(
+                    name="The Breach Route",
+                    children=[
+                        BT.VanquishNode(
+                            [point],
+                            clear_area_radius=Range.Earshot.value,
+                            pause_on_combat=True,
+                            log=True,
+                        )
+                        for point in BREACH_ROUTE
+                    ],
+                ),
+                BT.MoveAndExitMap(Vec2f(17600, -1300), target_map_id=TUNNELS_L1, log=True),
+                BT.WaitForMapLoad(map_id=TUNNELS_L1, timeout_ms=60_000),
+                _runtime_consumable_upkeep_node(True),
+            ],
         )
 
-    def _use_summoning_stone() -> BehaviorTree:
-        return _map_guarded_step('Use Summoning Stone (Breach) Map Guard', THE_BREACH, UseAvailableSummoningStone())
-
-    def _enter_tunnels_level_1() -> BehaviorTree:
-        return _map_guarded_step(
-            'Enter Tunnels Level 1 Map Guard',
-            THE_BREACH,
-            BT.MoveAndExitMap((17750., -1416.), TUNNELS_LVL_1),
-            skip_if_in_maps=(TUNNELS_LVL_1, TUNNELS_LVL_2, TUNNELS_LVL_3),
-        )
-
-    return [
-        ('Enter The Breach', _enter_the_breach),
-        ('Use Summoning Stone (Breach)', _use_summoning_stone),
-        *_vanquish_point_steps('Breach Kill Route', THE_BREACH, breach_route, skip_if_in_maps=(TUNNELS_LVL_1, TUNNELS_LVL_2, TUNNELS_LVL_3)),
-        ('Enter Tunnels Level 1', _enter_tunnels_level_1),
-    ]
+    entry = BT.Subtree(name="Selected Surface Entry", subtree_fn=_build_entry)
+    return BT.Selector(name="Enter Tunnels", children=[later, entry])
 
 
-def Floor1ToNPC() -> list[tuple[str, Callable[[], BehaviorTree]]]:
-    points: list[object] = [
-        (-17442., -4638.),
-        (-12710., -6983.),
-        (-7836., -9115.),
-    ]
+def Level1_Start() -> BehaviorTree:
+    run = BT.Sequence(
+        name="Tunnels Level 1 Start",
+        children=[
+            _runtime_consumable_upkeep_node(True),
+            _mark_run_start_node(),
+            _inventory_statistics_node(after_chest=False),
+            ResetKeystoneCombatPolicy(),
+            ResolveKeystoneCombatPolicy(),
+            UseAvailableSummoningStone("l1"),
+            BT.AddModelToLootWhitelist(ELEMENTAL_KEYSTONE_MODEL_ID),
+            BT.Move(Vec2f(-15247, -5785), pause_on_combat=False, log=False),
+        ],
+    )
+    return _on_map_or_skip(
+        "Level 1 Start",
+        TUNNELS_L1,
+        run,
+        (TUNNELS_L2, TUNNELS_L3),
+    )
 
-    def _use_summoning_stone() -> BehaviorTree:
-        return _map_guarded_step('Use Summoning Stone (Floor 1) Map Guard', TUNNELS_LVL_1, UseAvailableSummoningStone(), skip_if_in_maps=(TUNNELS_LVL_2, TUNNELS_LVL_3))
 
-    return [
-        ('Use Summoning Stone (Floor 1)', _use_summoning_stone),
-        *_vanquish_point_steps('Floor 1 Route A', TUNNELS_LVL_1, points, skip_if_in_maps=(TUNNELS_LVL_2, TUNNELS_LVL_3)),
-    ]
-
-
-def NPCQuest() -> list[tuple[str, Callable[[], BehaviorTree]]]:
-    """Accept The Dreamer and the Zealot on all accounts."""
-    def _build() -> BehaviorTree:
-        return _map_guarded_step(
-            'NPC Quest Map Guard',
-            TUNNELS_LVL_1,
+def Level1_TakeQuest() -> BehaviorTree:
+    run = BT.Sequence(
+        name="Take The Dreamer and the Zealot",
+        children=[
             BT.MoveAndDialog(
-                QUEST_NPC_POS,
-                dialog_id=QUEST_ACCEPT_DIALOG,
-                target_distance=Range.Area.value,
-                multi_account=_is_multibox(),
+                Vec2f(-7400, -9462),
+                dialog_id=0x85B501,
+                pause_on_combat=False,
+                multi_account=True,
                 log=True,
             ),
-            skip_if_in_maps=(TUNNELS_LVL_2, TUNNELS_LVL_3),
-        )
-
-    return [('NPC Quest', _build)]
-
-
-def Floor1ToFloor2() -> list[tuple[str, Callable[[], BehaviorTree]]]:
-    def _point(pos: tuple[float, float], label: str, *, with_loot: bool) -> Callable[[], BehaviorTree]:
-        def _build() -> BehaviorTree:
-            children: list[BehaviorTree | BehaviorTree.Node] = [BT.VanquishNode([pos], clear_area_radius=TUNNELS_AGGRO_RANGE, name=label)]
-            if with_loot:
-                children.append(BT.LootItems())
-            return _map_guarded_step(label, TUNNELS_LVL_1, BT.Sequence(name=label, children=children), skip_if_in_maps=(TUNNELS_LVL_2, TUNNELS_LVL_3))
-        return _build
-
-    def _enter_tunnels_level_2() -> BehaviorTree:
-        return _map_guarded_step(
-            'Enter Tunnels Level 2 Map Guard',
-            TUNNELS_LVL_1,
-            BT.MoveAndExitMap((-8687., 4700.), TUNNELS_LVL_2),
-            skip_if_in_maps=(TUNNELS_LVL_2, TUNNELS_LVL_3),
-        )
-
-    return [
-        ('Floor 1 to Floor 2 - Point 01', _point((-9672., -3286.), 'Floor 1 to Floor 2 - Point 01', with_loot=True)),
-        ('Floor 1 to Floor 2 - Point 02', _point((-11415., -900.), 'Floor 1 to Floor 2 - Point 02', with_loot=True)),
-        ('Floor 1 to Floor 2 - Point 03', _point((-10727., -304.), 'Floor 1 to Floor 2 - Point 03', with_loot=True)),
-        ('Floor 1 to Floor 2 - Point 04', _point((-8618., 3132.), 'Floor 1 to Floor 2 - Point 04', with_loot=False)),
-        ('Enter Tunnels Level 2', _enter_tunnels_level_2),
-    ]
+            BT.WaitForActiveQuest(QUEST_ID, timeout_ms=15_000),
+        ],
+    )
+    return _on_map_or_skip(
+        "Level 1 Take Quest",
+        TUNNELS_L1,
+        run,
+        (TUNNELS_L2, TUNNELS_L3),
+    )
 
 
-def Floor2() -> list[tuple[str, Callable[[], BehaviorTree]]]:
-    # Points 8, 9, 10 use RANGE_NEARBY in the original (crowded rooms).
-    route: list[object] = [
-        (-991.,   10963.),
-        (2007.,   15561.),
-        (-764.,   17454.),
-        (-643.,   20296.),
-        (-8922.,  21419.),
-        (-17622., 19010.),
-        (-18139., 17292.),
-        {'pos': (-16466., 15466.), 'clear_area_radius': Range.Nearby.value},
-        {'pos': (-7110.,  18292.), 'clear_area_radius': Range.Nearby.value},
-        {'pos': (-6065.,  14829.), 'clear_area_radius': Range.Nearby.value},
-        (-10273., 14406.),
-        (-11164., 16520.),
-        (-16715.,  9618.),
-        (-16748.,  5350.),
-    ]
-
-    def _use_summoning_stone() -> BehaviorTree:
-        return _map_guarded_step('Use Summoning Stone (Floor 2) Map Guard', TUNNELS_LVL_2, UseAvailableSummoningStone(), skip_if_in_maps=(TUNNELS_LVL_3,))
-
-    def _enter_tunnels_level_3() -> BehaviorTree:
-        return _map_guarded_step(
-            'Enter Tunnels Level 3 Map Guard',
-            TUNNELS_LVL_2,
-            BT.MoveAndExitMap((-16780., 4324.), TUNNELS_LVL_3),
-            skip_if_in_maps=(TUNNELS_LVL_3,),
-        )
-
-    return [
-        ('Use Summoning Stone (Floor 2)', _use_summoning_stone),
-        *_vanquish_point_steps('Floor 2 Route', TUNNELS_LVL_2, route, skip_if_in_maps=(TUNNELS_LVL_3,)),
-        ('Enter Tunnels Level 3', _enter_tunnels_level_3),
-    ]
+def Level1_EnterLevel2() -> BehaviorTree:
+    run = BT.Sequence(
+        name="Enter Tunnels Level 2",
+        children=[
+            BT.MoveAndExitMap(Vec2f(-8576,5749), target_map_id=TUNNELS_L2, log=True, destination_obstacle_ignore_distance=Range.Spirit.value),
+            BT.WaitForMapLoad(map_id=TUNNELS_L2, timeout_ms=60_000),
+            _mark_l2_start_node(),
+        ],
+    )
+    return _on_map_or_skip(
+        "Level 1 Enter Level 2",
+        TUNNELS_L1,
+        run,
+        (TUNNELS_L2, TUNNELS_L3),
+    )
 
 
+def Level2_Start() -> BehaviorTree:
+    run = BT.Sequence(
+        name="Tunnels Level 2 Start",
+        children=[
+            # Safety restore in case a previous interrupted wall passage left combat disabled.
+            BottingTree.EnableCombatTree(),
+            UseAvailableSummoningStone("l2"),
+        ],
+    )
+    return _on_map_or_skip(
+        "Level 2 Start",
+        TUNNELS_L2,
+        run,
+        (TUNNELS_L3,),
+    )
 
-def Floor3() -> list[tuple[str, Callable[[], BehaviorTree]]]:
-    route_a: list[object] = [
-        (-11162., 3309.),
-        (-10127., 2505.),
-        (-17353., -952.),
-        (-16644., -3499.),
-        (-13208., -4395.),
-        (-12436., -5865.),
-    ]
-    route_b: list[object] = [
-        (-13244., -2246.),
-        (-10537., -1300.),
-        (-10264., -4463.),  # Triggers the beacon
-    ]
-    route_c: list[object] = [
-        (-9819., -1276.),
-        (-7260.,  1425.),
-        (-3990.,  -940.),
-        (-6418., -4303.),
-    ]
-    route_d: list[object] = [
-        (-10642., -8052.),
-        (-13186., -8718.),
-        (-15949., -8561.),
-    ]
 
-    def _use_summoning_stone() -> BehaviorTree:
-        return _map_guarded_step('Use Summoning Stone (Floor 3) Map Guard', TUNNELS_LVL_3, UseAvailableSummoningStone())
+def Level2_EnterLevel3() -> BehaviorTree:
+    run = BT.Sequence(
+        name="Enter Tunnels Level 3",
+        children=[
+            BT.MoveAndExitMap(Vec2f(-16780, 4324), target_map_id=TUNNELS_L3, log=True),
+            BT.WaitForMapLoad(map_id=TUNNELS_L3, timeout_ms=60_000),
+            _mark_l3_start_node(),
+        ],
+    )
+    return _on_map_or_skip(
+        "Level 2 Enter Level 3",
+        TUNNELS_L2,
+        run,
+        (TUNNELS_L3,),
+    )
 
-    def _route_a_loot() -> BehaviorTree:
-        return _map_guarded_step('Floor 3 Route A Loot Map Guard', TUNNELS_LVL_3, BT.LootItems())
 
-    def _open_dungeon_door() -> BehaviorTree:
-        return _map_guarded_step('Open Dungeon Door Map Guard', TUNNELS_LVL_3, BT.MoveAndInteractWithGadget((-6442., -4281.)))
+def Level3_Start() -> BehaviorTree:
+    return BT.Sequence(
+        name="Tunnels Level 3 Start",
+        children=[
+            BT.IsCurrentMap(map_id=TUNNELS_L3, log=True),
+            BT.AddModelToLootWhitelist(BOSS_KEY_MODEL_ID),
+            UseAvailableSummoningStone("l3"),
+        ],
+    )
 
-    def _collect_quest_reward() -> BehaviorTree:
-        return _map_guarded_step(
-            'Collect Quest Reward Map Guard',
-            TUNNELS_LVL_3,
-            BT.MoveAndDialog(
-                QUEST_REWARD_NPC_POS,
-                dialog_id=QUEST_REWARD_DIALOG,
-                target_distance=Range.Area.value,
-                multi_account=_is_multibox(),
+
+def Level3_OpenDoor() -> BehaviorTree:
+    return BT.Sequence(
+        name="Open Level 3 Dungeon Door",
+        children=[
+            BT.IsCurrentMap(map_id=TUNNELS_L3, log=True),
+            BT.MoveAndInteractWithGadget(
+                pos=Vec2f(-6442, -4281),
+                search_distance=900.0,
+                interaction_distance=Range.Nearby.value,
+                interaction_count=2,
+                interaction_interval_ms=750,
+                account_settle_ms=1_500,
+                timeout_ms=30_000,
+                multi_account=False,
+                include_self=True,
                 log=True,
             ),
-        )
+        ],
+    )
 
-    def _open_dungeon_chest() -> BehaviorTree:
-        return _map_guarded_step(
-            'Open Dungeon Chest Map Guard',
-            TUNNELS_LVL_3,
-            BT.Sequence(
-                name='Open Dungeon Chest',
-                children=[
-                    BT.MoveAndInteractWithGadget(DUNGEON_CHEST_POS, multi_account=_is_multibox(), include_self=True, log=True),
-                    BT.LootItems(),
-                ],
+
+def Level3_FinishRun() -> BehaviorTree:
+    """Collect the dungeon reward and finish timing immediately before the chest."""
+    return BT.Sequence(
+        name="Level 3 Reward And Chest",
+        children=[
+            BT.WaitForClearEnemiesInArea(-13836.00, -8918.00, stable_clear_ms=2000, log=True),
+            BT.IsCurrentMap(map_id=TUNNELS_L3, log=True),
+            BT.MoveAndDialog(
+                Vec2f(-16098, -8626),
+                dialog_id=0x85B507,
+                pause_on_combat=False,
+                multi_account=True,
+                log=True,
             ),
-        )
-
-    def _resign_to_piken_square() -> BehaviorTree:
-        return _map_guarded_step(
-            'Resign To Piken Square Map Guard',
-            TUNNELS_LVL_3,
-            BT.Sequence(
-                name='Resign To Piken Square',
-                children=[
-                    BT.Resign(wait_for_map_load=True, target_map_id=PIKEN_SQUARE, multi_account=_is_multibox()),
-                    _wait_for_all_accounts_on_map(PIKEN_SQUARE, name='Wait For Party Return To Piken Square'),
-                ],
+            BT.InteractTargetAndSendDialog(0x85B507, multi_account=True, log=True),
+            BT.SendDialog(0x85B507, multi_account=True, log=True),
+            BT.WaitForQuestCleared(QUEST_ID, timeout_ms=15_000),
+            _record_run_end_node(),
+            _runtime_consumable_upkeep_node(False),
+            BT.MoveAndInteractWithGadget(
+                pos=Vec2f(-16066, -8370),
+                search_distance=2_500.0,
+                interaction_distance=Range.Nearby.value,
+                interaction_count=2,
+                interaction_interval_ms=750,
+                account_settle_ms=1_500,
+                timeout_ms=30_000,
+                multi_account=True,
+                include_self=True,
+                log=True,
             ),
-        )
+            BT.Wait(5_000),
+            _inventory_statistics_node(after_chest=True),
+        ],
+    )
 
-    return [
-        ('Use Summoning Stone (Floor 3)', _use_summoning_stone),
-        *_vanquish_point_steps('Floor 3 Route A', TUNNELS_LVL_3, route_a),
-        ('Floor 3 Route A Loot', _route_a_loot),
-        *_vanquish_point_steps('Floor 3 Route B', TUNNELS_LVL_3, route_b),
-        *_vanquish_point_steps('Floor 3 Route C', TUNNELS_LVL_3, route_c),
-        ('Open Dungeon Door', _open_dungeon_door),
-        *_vanquish_point_steps('Floor 3 Route D', TUNNELS_LVL_3, route_d),
-        ('Collect Quest Reward', _collect_quest_reward),
-        ('Open Dungeon Chest', _open_dungeon_chest),
-        ('Resign To Piken Square', _resign_to_piken_square),
-    ]
+
+def Level3_ReturnToOutpost() -> BehaviorTree:
+    """Return every account to the start outpost selected by the 6-men option."""
+    return BT.Subtree(
+        name="Return To Selected Start Outpost",
+        subtree_fn=lambda _node: BT.Resign(
+            wait_for_map_load=True,
+            target_map_id=_selected_start_outpost(),
+            multi_account=True,
+            timeout_ms=10_000,
+            log=True,
+        ),
+    )
 
 
 def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
     return [
-        ('Initialize Bot', InitializeBot),
-        *TheBreachApproach(),
-        *Floor1ToNPC(),
-        *NPCQuest(),
-        *Floor1ToFloor2(),
-        *Floor2(),
-        *Floor3(),
-        ('Inventory Check And Maintenance', InventoryCheckAndMaintenance),
+        ("Initialize", InitializeBot),
+        ("Prepare Run", PrepareRun),
+        ("Enter Tunnels", EnterTunnels),
+
+        ("Level 1 Start", Level1_Start),
+        *_vanquish_point_steps(
+            "Level 1 Opening",
+            TUNNELS_L1,
+            L1_OPENING,
+            skip_if_in_maps=(TUNNELS_L2, TUNNELS_L3),
+        ),
+        ("Level 1 Take Quest", Level1_TakeQuest),
+        *_keystone_point_steps(
+            "Level 1 Elemental Keystone Route",
+            TUNNELS_L1,
+            L1_KEY_ROUTE,
+            skip_if_in_maps=(TUNNELS_L2, TUNNELS_L3),
+        ),
+        ("Level 1 Enter Level 2", Level1_EnterLevel2),
+
+        ("Level 2 Start", Level2_Start),
+        *_vanquish_point_steps(
+            "Level 2 Route",
+            TUNNELS_L2,
+            L2_ROUTE[:16],
+            skip_if_in_maps=(TUNNELS_L3,),
+        ),
+        *_combat_disabled_move_point_steps(
+            "Level 2 Route",
+            TUNNELS_L2,
+            L2_ROUTE[16:19],
+            skip_if_in_maps=(TUNNELS_L3,),
+            point_number_offset=16,
+        ),
+        *_vanquish_point_steps(
+            "Level 2 Route",
+            TUNNELS_L2,
+            L2_ROUTE[19:],
+            skip_if_in_maps=(TUNNELS_L3,),
+            point_number_offset=19,
+        ),
+        ("Level 2 Enter Level 3", Level2_EnterLevel3),
+
+        ("Level 3 Start", Level3_Start),
+        *_vanquish_point_steps("Level 3 Route A", TUNNELS_L3, L3_ROUTE_A),
+        *_vanquish_point_steps("Level 3 Door Approach", TUNNELS_L3, L3_ROUTE_B),
+        ("Level 3 Open Dungeon Door", Level3_OpenDoor),
+        *_vanquish_point_steps("Level 3 Boss Route", TUNNELS_L3, L3_BOSS_ROUTE),
+        ("Level 3 Reward And Chest", Level3_FinishRun),
+        ("Return To Selected Start Outpost", Level3_ReturnToOutpost),
     ]
+
+
+def InitializeBot() -> BehaviorTree:
+    bot = ensure_botting_tree()
+    return BT.Sequence(
+        name="Initialize Bot",
+        children=[
+            bot.Config.Aggressive(
+                multi_account=True,
+                auto_loot=_auto_loot,
+                resurrection_scroll=True,
+                account_isolation=False,
+            ),
+            BT.SetPlayerStatus(PlayerStatus.Offline, log=True),
+            BT.LogMessage(message=f"{MODULE_NAME} initialized.", module_name=MODULE_NAME),
+        ],
+    )
+
+
+def _configure_botting_tree(tree: BottingTree) -> None:
+    tree.Config.ConfigureUpkeep(
+        looting_enabled=_auto_loot,
+        resurrection_scroll=True,
+        auto_inventory_handler_enabled=True,
+        consumable_upkeeps=_enabled_consumable_upkeeps(),
+        enable_party_wipe_recovery=True,
+        enable_nearest_shrine_recovery=True,
+        heroai_state_logging=False,
+    )
+    tree.AddServiceTree(
+        "SummoningStoneRecoveryService",
+        SummoningStoneRecoveryService,
+    )
+
+
+def ensure_botting_tree() -> BottingTree:
+    global botting_tree
+    _load_settings()
+    if botting_tree is None:
+        Listeners.AutoReturnOnDefeat.Enable()
+        botting_tree = BottingTree.Create(
+            MODULE_NAME,
+            main_routine=get_execution_steps(),
+            routine_name="MultiAccountSequence",
+            repeat=True,
+            multi_account=True,
+            isolation_enabled=False,
+            configure_fn=_configure_botting_tree,
+        )
+    return botting_tree
 
 
 def main() -> None:
     global initialized
-
     if not initialized:
         _load_settings()
         ensure_botting_tree()
         initialized = True
-
     tree = ensure_botting_tree()
+    _sync_runtime_upkeeps()
     tree.tick()
-    tree.UI.draw_window(icon_path=TEXTURE, extra_tabs=[('Bot Config', _draw_bot_config), ('Party', _dungeon_party.draw_tab)])
+    _tick_direct_pcon_upkeep()
+    tree.UI.draw_window(icon_path=TEXTURE,
+        main_child_dimensions=(550, 390),
+        extra_tabs=[("Statistics", _draw_statistics), ("Config", _draw_run_config)],
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
