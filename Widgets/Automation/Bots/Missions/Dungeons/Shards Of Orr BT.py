@@ -2939,8 +2939,9 @@ def _find_ground_torch() -> int | None:
 def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
     """Recover the active torch, retracing to the last combat-drop point when needed."""
     PICKUP_TIMEOUT_MS = 45_000
-    SHRINE_RECOVERY_PICKUP_TIMEOUT_MS = 5_000
+    COMBAT_TORCH_RECOVERY_TIMEOUT_MS = 10_000
     RETRY_DELAY_MS = 1_000
+    PICKUP_CONFIRM_GRACE_MS = 1_500
     PICKUP_SEARCH_RADIUS = 7500.0
     DROP_RETRACE_TOLERANCE = 500.0
 
@@ -2959,22 +2960,24 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
     return_to_drop_tree: BehaviorTree | None = None
     started_at = 0.0
     retry_at = 0.0
+    last_ground_torch_seen_at = 0.0
     search_logged = False
     retrace_logged = False
 
     def _reset_state() -> None:
         nonlocal pickup_tree, return_to_drop_tree, started_at, retry_at
-        nonlocal search_logged, retrace_logged
+        nonlocal last_ground_torch_seen_at, search_logged, retrace_logged
         pickup_tree = _create_pickup_tree()
         return_to_drop_tree = None
         started_at = 0.0
         retry_at = 0.0
+        last_ground_torch_seen_at = 0.0
         search_logged = False
         retrace_logged = False
 
     def _pickup_torch_step(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
         nonlocal pickup_tree, return_to_drop_tree, started_at, retry_at
-        nonlocal search_logged, retrace_logged
+        nonlocal last_ground_torch_seen_at, search_logged, retrace_logged
         global _shrine_recovery_torch_skip_active, _last_torch_drop_position
 
         now = time.monotonic()
@@ -3004,11 +3007,11 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
         if (
             allow_shrine_skip
             and _shrine_recovery_torch_skip_active
-            and elapsed_ms >= SHRINE_RECOVERY_PICKUP_TIMEOUT_MS
+            and elapsed_ms >= COMBAT_TORCH_RECOVERY_TIMEOUT_MS
         ):
             PySystem.Console.Log(
                 MODULE_NAME,
-                'Torch not recovered after 5s following shrine recovery; continuing to the next route point.',
+                'Torch not recovered after 10s ; continuing to the next route point.',
                 PySystem.Console.MessageType.Warning,
             )
             _reset_state()
@@ -3024,6 +3027,18 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
             return BehaviorTree.NodeState.FAILURE
 
         ground_torch = _find_ground_torch()
+
+        if ground_torch:
+            last_ground_torch_seen_at = now
+        elif (
+            ground_torch == 0
+            and last_ground_torch_seen_at > 0.0
+            and (now - last_ground_torch_seen_at) * 1000.0 < PICKUP_CONFIRM_GRACE_MS
+        ):
+            # The ground agent can disappear a moment before the carried-bundle
+            # state is updated. Give the game time to confirm the pickup before
+            # assuming the torch was lost and retracing to the combat-drop point.
+            return BehaviorTree.NodeState.RUNNING
 
         if ground_torch == 0 and _last_torch_drop_position is not None:
             if return_to_drop_tree is None:
