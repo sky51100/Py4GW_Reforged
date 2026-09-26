@@ -3750,6 +3750,55 @@ def TravelToShandra() -> BehaviorTree:
     return BT.Selector(children=[skip_if_already_in_level_1, normal_travel], name="Travel To Shandra")
 
 
+def TravelToShandraStart() -> BehaviorTree:
+    """Planner step: leave Vlox, enter Arbor Bay and take the blessing."""
+    skip_if_already_in_level_1 = BT.Sequence(
+        name="Skip Travel To Shandra Start - Already In Level 1",
+        children=[
+            BT.IsCurrentMap(map_id=SOO_LEVEL_1, log=True),
+            BT.IsQuestState(quest_id=LOST_SOULS_QUEST_ID, state="active", log=True),
+            BT.Succeeder("TravelToShandraStartAlreadyDone"),
+        ],
+    )
+    normal_start = BT.Sequence(
+        name="Travel To Shandra - Start From Vlox",
+        children=[
+            BT.MoveAndExitMap(VLOXS_EXIT, target_map_id=ARBOR_BAY, log=True),
+            BT.WaitUntilOnExplorable(timeout_ms=30_000),
+            BT.Wait(2_000),
+            BT.MoveAndDialog(ARBOR_BLESSING_NPC, dialog_id=ARBOR_BLESSING_DIALOG, multi_account=True, log=True),
+        ],
+    )
+    return BT.Selector(
+        children=[skip_if_already_in_level_1, normal_start],
+        name="Travel To Shandra - Start",
+    )
+
+
+def TravelToShandraFinalPoint() -> BehaviorTree:
+    """Planner step: wait for combat to finish, then make the final Shandra approach."""
+    skip_if_already_in_level_1 = BT.Sequence(
+        name="Skip Travel To Shandra Final Point - Already In Level 1",
+        children=[
+            BT.IsCurrentMap(map_id=SOO_LEVEL_1, log=True),
+            BT.IsQuestState(quest_id=LOST_SOULS_QUEST_ID, state="active", log=True),
+            BT.Succeeder("TravelToShandraFinalPointAlreadyDone"),
+        ],
+    )
+    final_approach = BT.Sequence(
+        name="Travel To Shandra - Final Point",
+        children=[
+            BT.IsCurrentMap(map_id=ARBOR_BAY, log=False),
+            BT.WaitUntilOutOfCombat(timeout_ms=60_000),
+            BT.Move(SHANDRA_APPROACH, avoid_obstacles=False, pause_on_combat=False, log=False),
+        ],
+    )
+    return BT.Selector(
+        children=[skip_if_already_in_level_1, final_approach],
+        name="Travel To Shandra - Final Point",
+    )
+
+
 def HandleShandraQuest() -> BehaviorTree:
     already_inside = BT.Sequence(
         name="Skip Shandra Handler - Already In Level 1",
@@ -4745,7 +4794,15 @@ def CollectRewardAndReturnToArbor(end_countdown_timeout_ms: int=190000) -> Behav
 
 def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
     guarded_run_steps: list[tuple[str, Callable[[], BehaviorTree]]] = [
-        ("Travel To Shandra", TravelToShandra),
+        ("Travel To Shandra - Start", TravelToShandraStart),
+        *_movement_point_steps(
+            "Travel To Shandra",
+            ARBOR_BAY,
+            ARBOR_TO_SHANDRA_PATH,
+            pause_on_combat=True,
+            skip_if_in_maps=(SOO_LEVEL_1,),
+        ),
+        (f"Travel To Shandra - Point {len(ARBOR_TO_SHANDRA_PATH) + 1:02d}", TravelToShandraFinalPoint),
         ("Handle Shandra Quest", HandleShandraQuest),
         ("Enter Shards Of Orr", EnterShardsOfOrr),
 
