@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from Py4GWCoreLib.BuildMgr import BuildCoroutine
-from Py4GWCoreLib import Range, Routines
+from Py4GWCoreLib import GLOBAL_CACHE, Range, Routines
 from Py4GWCoreLib.Agent import Agent
 from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.Skill import Skill
@@ -66,6 +66,104 @@ class Curses:
             aftercast_delay=250,
             target_agent_id=self.build.current_target_id,
         ))
+    #endregion
+
+
+    #region S
+    def Spiteful_Spirit(self, *, exclude_target_id: int = 0, min_target_health: float = 0.20) -> BuildCoroutine:
+        """Cast Spiteful Spirit on a high-value active foe in a cluster.
+
+        Targeting rules:
+        - only while in aggro;
+        - never overwrite an existing Spiteful Spirit effect;
+        - prefer foes that are currently attacking or casting;
+        - among valid foes, prefer the most clustered target;
+        - optionally exclude the previous target for Arcane Echo's copied cast.
+
+        The ready-slot scan mirrors the proven Ray of Judgment / Arcane Echo
+        pattern: after Arcane Echo copies SS, the original SS slot can be on
+        cooldown while the copied SS lives in a second ready slot.
+        """
+        spiteful_spirit_id: int = Skill.GetID("Spiteful_Spirit")
+
+        if not self.build.IsSkillEquipped(spiteful_spirit_id):
+            return False
+        if not self.build.IsInAggro():
+            return False
+
+        primary_slot = GLOBAL_CACHE.SkillBar.GetSlotBySkillID(spiteful_spirit_id)
+        if not primary_slot:
+            return False
+
+        if Routines.Checks.Skills.IsSkillSlotReady(primary_slot):
+            ready_slot = primary_slot
+        else:
+            ready_slot = 0
+            for slot in range(1, 9):
+                if slot == primary_slot:
+                    continue
+                if GLOBAL_CACHE.SkillBar.GetSkillIDBySlot(slot) == spiteful_spirit_id:
+                    if Routines.Checks.Skills.IsSkillSlotReady(slot):
+                        ready_slot = slot
+                        break
+            if not ready_slot:
+                return False
+
+        def _eligible(agent_id: int) -> bool:
+            if exclude_target_id and agent_id == exclude_target_id:
+                return False
+            if Agent.GetHealth(agent_id) <= min_target_health:
+                return False
+            if Routines.Checks.Agents.HasEffect(agent_id, spiteful_spirit_id):
+                return False
+            return True
+
+        # SS only produces value while the victim acts. Prefer attacking/casting
+        # foes rather than blindly hexing a passive body in the ball.
+        target_agent_id = Routines.Targeting.PickClusteredTarget(
+            cluster_radius=Range.Adjacent.value,
+            preferred_condition=lambda agent_id: (
+                _eligible(agent_id)
+                and (Agent.IsAttacking(agent_id) or Agent.IsCasting(agent_id))
+            ),
+            filter_radius=Range.Spellcast.value,
+        )
+        if not target_agent_id:
+            return False
+
+        if ready_slot == primary_slot:
+            cast_result = yield from self.build.CastSkillIDAndRestoreTarget(
+                skill_id=spiteful_spirit_id,
+                target_agent_id=target_agent_id,
+                extra_condition=lambda: _eligible(target_agent_id),
+                log=False,
+                aftercast_delay=250,
+            )
+        else:
+            # Arcane Echo copy: CastSkillID would resolve the on-cooldown primary
+            # slot first, so use the ready duplicate slot directly.
+            previous_enemy_target = Player.GetTargetID()
+            if previous_enemy_target != target_agent_id:
+                yield from Routines.Yield.Agents.ChangeTarget(target_agent_id)
+
+            if not _eligible(target_agent_id):
+                yield from self.build.RestoreEnemyTarget(previous_enemy_target)
+                return False
+
+            GLOBAL_CACHE.SkillBar.UseSkill(
+                ready_slot,
+                target_agent_id=target_agent_id,
+                aftercast_delay=250,
+            )
+            self.build._mark_local_cast_pending(250)
+            self.build.SetTickSuccess()
+            yield from self.build.RestoreEnemyTarget(previous_enemy_target)
+            cast_result = True
+
+        if cast_result:
+            self.build._last_spiteful_spirit_target_id = target_agent_id
+
+        return cast_result
     #endregion
 
     #region W
