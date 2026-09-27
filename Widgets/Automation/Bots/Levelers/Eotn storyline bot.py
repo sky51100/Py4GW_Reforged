@@ -59,7 +59,6 @@ def _aggressive(name: str = "Configure Aggressive") -> BehaviorTree:
         multi_account=True,
         account_isolation=True,
         pause_on_danger=True,
-        auto_loot=True,
         resurrection_scroll=True,
         reset_hero_ai=False,
     )
@@ -70,7 +69,6 @@ def _pacifist(name: str = "Configure Pacifist") -> BehaviorTree:
         multi_account=True,
         account_isolation=True,
         pause_on_danger=False,
-        auto_loot=True,
         resurrection_scroll=True,
         reset_hero_ai=False,
     )
@@ -520,6 +518,322 @@ PathPoint = Vec2f | tuple[float, float] | tuple[int, int]
 PlannerStep = tuple[str, Callable[[], BehaviorTree]]
 
 
+# ---------------------------------------------------------------------------
+# Temporary loot diagnostics
+# ---------------------------------------------------------------------------
+
+EOTN_LOOT_DIAGNOSTIC_MODEL_IDS = (25413,)
+_eotn_loot_diag_last_signature: dict[int, tuple[object, ...]] = {}
+_eotn_loot_diag_next_tick_at = 0.0
+
+
+def _collect_eotn_loot_diag(model_id: int) -> tuple[tuple[object, ...], str]:
+    """Collect the LIVE loot state without changing it."""
+    model_id = int(model_id)
+    map_id = int(Map.GetMapID() or 0)
+    account_email = str(Player.GetAccountEmail() or "")
+
+    public_loot = None
+    controller_loot = None
+    import_error = ""
+
+    try:
+        from Py4GWCoreLib.py4gwcorelib_src.system_settings.loot_filters import (
+            LootFilters as PublicLootFilters,
+        )
+        public_loot = PublicLootFilters()
+    except Exception as exc:
+        import_error = f"public_import={exc!r}"
+
+    try:
+        from Py4GWCoreLib.py4gwcorelib_src.system_settings.loot_filters.controller import (
+            LootFilters as ControllerLootFilters,
+        )
+        controller_loot = ControllerLootFilters()
+    except Exception as exc:
+        import_error = (
+            f"{import_error}; controller_import={exc!r}"
+            if import_error
+            else f"controller_import={exc!r}"
+        )
+
+    loot = controller_loot or public_loot
+    if loot is None:
+        signature = (map_id, model_id, "lootfilters-unavailable", import_error)
+        return signature, (
+            f"[LootDiag] map={map_id} model={model_id} "
+            f"LootFilters unavailable: {import_error}"
+        )
+
+    live = getattr(loot, "live", None)
+    enabled = getattr(live, "enabled", None)
+
+    added_models = set(getattr(live, "added_model_ids", ()) or ())
+    blacklisted_models = set(getattr(live, "blacklist_model_ids", ()) or ())
+    blacklisted_types = set(getattr(live, "blacklist_item_types", ()) or ())
+
+    added = model_id in added_models
+    model_blacklisted = model_id in blacklisted_models
+
+    item_type = None
+    type_vetoed = None
+    try:
+        from Py4GWCoreLib.py4gwcorelib_src.system_settings.loot_filters.expected_types import (
+            expected_type,
+        )
+        item_type = expected_type(model_id)
+        type_vetoed = (
+            item_type is not None
+            and int(item_type) in blacklisted_types
+        )
+    except Exception:
+        pass
+
+    public_controller_same = (
+        public_loot is not None
+        and controller_loot is not None
+        and public_loot is controller_loot
+    )
+
+    # Crucial hot-reload probe:
+    # inspect the LootFilters class actually captured by the BT wrapper chain.
+    bt_loot_class = None
+    bt_loot = None
+    bt_class_same = None
+    bt_instance_same = None
+    bt_added = None
+    bt_probe_error = ""
+
+    try:
+        wrapper_routines = BT.AddModelToLootWhitelist.__globals__.get("RoutinesBT")
+        wrapper_items = getattr(wrapper_routines, "Items", None)
+        wrapper_add_fn = getattr(wrapper_items, "AddModelToLootWhitelist", None)
+        wrapper_globals = getattr(wrapper_add_fn, "__globals__", {})
+        bt_loot_class = wrapper_globals.get("LootFilters")
+
+        if bt_loot_class is not None:
+            bt_loot = bt_loot_class()
+            bt_class_same = (
+                controller_loot is not None
+                and bt_loot_class is controller_loot.__class__
+            )
+            bt_instance_same = (
+                controller_loot is not None
+                and bt_loot is controller_loot
+            )
+            bt_live = getattr(bt_loot, "live", None)
+            bt_added = model_id in set(
+                getattr(bt_live, "added_model_ids", ()) or ()
+            )
+    except Exception as exc:
+        bt_probe_error = repr(exc)
+
+    try:
+        wanted_loot = {
+            int(agent_id)
+            for agent_id in (loot.GetLootArray(Range.Earshot.value) or [])
+            if int(agent_id or 0) > 0
+        }
+    except Exception:
+        wanted_loot = set()
+
+    player_x, player_y = Player.GetXY()
+    ground_details: list[str] = []
+    ground_signature: list[tuple[int, int, bool]] = []
+
+    try:
+        ground_item_agents = AgentArray.GetItemArray() or []
+    except Exception:
+        ground_item_agents = []
+
+    for raw_agent_id in ground_item_agents:
+        agent_id = int(raw_agent_id or 0)
+        if agent_id <= 0:
+            continue
+
+        try:
+            item_id = int(Agent.GetItemAgentItemID(agent_id) or 0)
+            if item_id <= 0:
+                continue
+
+            ground_model_id = int(GLOBAL_CACHE.Item.GetModelID(item_id) or 0)
+            if ground_model_id != model_id:
+                continue
+
+            owner_id = int(Agent.GetItemAgentOwnerID(agent_id) or 0)
+            item_x, item_y = Agent.GetXY(agent_id)
+            dx = float(item_x) - float(player_x)
+            dy = float(item_y) - float(player_y)
+            distance = (dx * dx + dy * dy) ** 0.5
+            in_wanted_loot = agent_id in wanted_loot
+
+            ground_signature.append((agent_id, owner_id, in_wanted_loot))
+            ground_details.append(
+                (
+                    f"agent={agent_id},item={item_id},owner={owner_id},"
+                    f"dist={distance:.0f},in_GetLootArray={in_wanted_loot}"
+                )
+            )
+        except Exception as exc:
+            ground_details.append(f"agent={agent_id},probe_error={exc!r}")
+
+    pickup_message_indices: list[int] = []
+    try:
+        pickup_command = int(SharedCommandType.PickUpLoot)
+        for message_index, message in GLOBAL_CACHE.ShMem.GetAllMessages():
+            if message is None:
+                continue
+            if not bool(getattr(message, "Active", False)):
+                continue
+            if str(getattr(message, "ReceiverEmail", "") or "") != account_email:
+                continue
+            if int(getattr(message, "Command", -1)) != pickup_command:
+                continue
+            pickup_message_indices.append(int(message_index))
+    except Exception:
+        pickup_message_indices = []
+
+    looting_enabled = None
+    looting_active = None
+    if botting_tree is not None:
+        try:
+            looting_enabled = bool(botting_tree.IsLootingEnabled())
+        except Exception:
+            pass
+        try:
+            looting_active = bool(botting_tree.IsLootingActive())
+        except Exception:
+            pass
+
+    signature = (
+        map_id,
+        model_id,
+        enabled,
+        added,
+        model_blacklisted,
+        item_type,
+        type_vetoed,
+        public_controller_same,
+        bt_class_same,
+        bt_instance_same,
+        bt_added,
+        tuple(sorted(ground_signature)),
+        tuple(sorted(pickup_message_indices)),
+        looting_enabled,
+        looting_active,
+    )
+
+    ground_text = "none" if not ground_details else " | ".join(ground_details)
+    message = (
+        f"[LootDiag] map={map_id} model={model_id} "
+        f"master={enabled} added={added} "
+        f"model_blacklisted={model_blacklisted} "
+        f"item_type={item_type} type_vetoed={type_vetoed} "
+        f"same_public_controller={public_controller_same} "
+        f"bt_class_same={bt_class_same} "
+        f"bt_instance_same={bt_instance_same} "
+        f"bt_added={bt_added} "
+        f"looting_enabled={looting_enabled} looting_active={looting_active} "
+        f"pickup_messages={pickup_message_indices} "
+        f"ground=[{ground_text}]"
+    )
+    if import_error:
+        message += f" import_note={import_error}"
+    if bt_probe_error:
+        message += f" bt_probe_error={bt_probe_error}"
+
+    return signature, message
+
+
+def _emit_eotn_loot_diag(
+    model_id: int,
+    context: str,
+    *,
+    force: bool = False,
+) -> None:
+    model_id = int(model_id)
+    signature, message = _collect_eotn_loot_diag(model_id)
+
+    if (
+        not force
+        and _eotn_loot_diag_last_signature.get(model_id) == signature
+    ):
+        return
+
+    _eotn_loot_diag_last_signature[model_id] = signature
+    ConsoleLog(
+        MODULE_NAME,
+        f"{context}: {message}",
+        log=True,
+    )
+
+
+def _tick_eotn_loot_diagnostics() -> None:
+    """Watch the loot state at 250 ms and log only meaningful changes."""
+    global _eotn_loot_diag_next_tick_at
+
+    now = time.monotonic()
+    if now < _eotn_loot_diag_next_tick_at:
+        return
+
+    _eotn_loot_diag_next_tick_at = now + 0.25
+
+    for model_id in EOTN_LOOT_DIAGNOSTIC_MODEL_IDS:
+        try:
+            _emit_eotn_loot_diag(
+                model_id,
+                "Runtime",
+                force=False,
+            )
+        except Exception as exc:
+            ConsoleLog(
+                MODULE_NAME,
+                f"[LootDiag] runtime probe failed for model {model_id}: {exc!r}",
+                log=True,
+            )
+
+
+def _loot_diag_once(model_id: int, context: str) -> BehaviorTree:
+    def _probe() -> BehaviorTree.NodeState:
+        try:
+            _emit_eotn_loot_diag(
+                int(model_id),
+                str(context),
+                force=True,
+            )
+        except Exception as exc:
+            ConsoleLog(
+                MODULE_NAME,
+                f"[LootDiag] one-shot probe failed in {context}: {exc!r}",
+                log=True,
+            )
+        return BehaviorTree.NodeState.SUCCESS
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name=f"Loot Diagnostic - {context}",
+            action_fn=_probe,
+            aftercast_ms=0,
+        )
+    )
+
+
+def _add_model_to_loot_whitelist_with_diag(
+    model_id: int,
+    context: str,
+) -> BehaviorTree:
+    """Use the stock helper, with a before/after proof of the LIVE state."""
+    return BT.Sequence(
+        name=f"{context} - Add Loot Whitelist With Diagnostic",
+        children=[
+            _loot_diag_once(model_id, f"{context} BEFORE add"),
+            BT.AddModelToLootWhitelist(int(model_id)),
+            _loot_diag_once(model_id, f"{context} AFTER add"),
+        ],
+    )
+
+
+
 def _planner_map_prep_step(
     name: str,
     map_id_or_name: int | str,
@@ -772,18 +1086,19 @@ def _steps_UnlockEyeOfTheNorthPool() -> list[PlannerStep]:
         ('UnlockEyeOfTheNorthPool - 04 Wait', lambda: BT.Wait(10000)),
         ('UnlockEyeOfTheNorthPool - 05 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(3537.0, -21937.0), 8622340)),
         *_planner_vanquish_point_steps('UnlockEyeOfTheNorthPool - 06 Vanquish Route 01', path_to_eotn),
-        ('UnlockEyeOfTheNorthPool - 07 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-5198.0, 5595.0), target_map_id=646)),
-        ('UnlockEyeOfTheNorthPool - 08 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-6572.7, 6588.83), 8388609)),
-        ('UnlockEyeOfTheNorthPool - 09 Wait', lambda: BT.Wait(2000)),
-        ('UnlockEyeOfTheNorthPool - 10 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-6662.0, 6584.0), 1599)),
-        ('UnlockEyeOfTheNorthPool - 11 Wait', lambda: BT.Wait(6000)),
-        ('UnlockEyeOfTheNorthPool - 12 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-6572.7, 6588.83), 137)),
-        ('UnlockEyeOfTheNorthPool - 13 Wait', lambda: BT.Wait(1000)),
-        ('UnlockEyeOfTheNorthPool - 14 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=646)),
-        ('UnlockEyeOfTheNorthPool - 15 Send Dialog', lambda: BT.SendDialog(137)),
-        ('UnlockEyeOfTheNorthPool - 16 Send Dialog', lambda: BT.SendDialog(8591620)),
-        ('UnlockEyeOfTheNorthPool - 17 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-6133.41, 5717.3), 8620292)),
-        ('UnlockEyeOfTheNorthPool - 18 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-5626.8, 6259.57), 8622852)),
+        ('UnlockEyeOfTheNorthPool - 07 Wait EOTN Outpost' , lambda : BT.WaitForMapLoad(642)),
+        ('UnlockEyeOfTheNorthPool - 08 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-5198.0, 5595.0), target_map_id=646)),
+        ('UnlockEyeOfTheNorthPool - 09 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-6572.7, 6588.83), 8388609)),
+        ('UnlockEyeOfTheNorthPool - 10 Wait', lambda: BT.Wait(2000)),
+        ('UnlockEyeOfTheNorthPool - 11 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-6662.0, 6584.0), 1599)),
+        ('UnlockEyeOfTheNorthPool - 12 Wait', lambda: BT.Wait(6000)),
+        ('UnlockEyeOfTheNorthPool - 13 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-6572.7, 6588.83), 137)),
+        ('UnlockEyeOfTheNorthPool - 14 Wait', lambda: BT.Wait(1000)),
+        ('UnlockEyeOfTheNorthPool - 15 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=646)),
+        ('UnlockEyeOfTheNorthPool - 16 Send Dialog', lambda: BT.SendDialog(137)),
+        ('UnlockEyeOfTheNorthPool - 17 Send Dialog', lambda: BT.SendDialog(8591620)),
+        ('UnlockEyeOfTheNorthPool - 18 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-6133.41, 5717.3), 8620292)),
+        ('UnlockEyeOfTheNorthPool - 19 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-5626.8, 6259.57), 8622852)),
     ]
 
 
@@ -849,11 +1164,16 @@ Painful_Bond_ID = Skill.GetID("Painful_Bond")
 
 PRE_XANDRA_BUILD_BLACKBOARD_KEY = "eotn_pre_xandra_player_build"
 
+# Conservé hors du blackboard pour survivre à un restart du Planner.
+_pre_xandra_player_build_snapshot: dict[str, object] | None = None
+
 
 def SavePreXandraPlayerBuild(log: bool = True) -> BehaviorTree:
     """Capture the player's current profession, attributes and 8-slot skillbar."""
 
     def _save(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        global _pre_xandra_player_build_snapshot
+
         player_id = int(Player.GetAgentID() or 0)
         if player_id <= 0:
             return BehaviorTree.NodeState.FAILURE
@@ -861,6 +1181,7 @@ def SavePreXandraPlayerBuild(log: bool = True) -> BehaviorTree:
         primary_id, secondary_id = Agent.GetProfessionIDs(player_id)
         primary_id = int(primary_id or 0)
         secondary_id = int(secondary_id or 0)
+
         if primary_id <= 0:
             return BehaviorTree.NodeState.FAILURE
 
@@ -870,6 +1191,7 @@ def SavePreXandraPlayerBuild(log: bool = True) -> BehaviorTree:
             for attribute_id, value in raw_attributes.items()
             if int(value or 0) > 0
         }
+
         skills = tuple(
             int(GLOBAL_CACHE.SkillBar.GetSkillIDBySlot(slot) or 0)
             for slot in range(1, 9)
@@ -881,6 +1203,7 @@ def SavePreXandraPlayerBuild(log: bool = True) -> BehaviorTree:
             attributes=attributes,
             skills=list(skills),
         )
+
         if not template:
             ConsoleLog(
                 MODULE_NAME,
@@ -889,13 +1212,19 @@ def SavePreXandraPlayerBuild(log: bool = True) -> BehaviorTree:
             )
             return BehaviorTree.NodeState.FAILURE
 
-        node.blackboard[PRE_XANDRA_BUILD_BLACKBOARD_KEY] = {
+        snapshot = {
             "template": str(template),
             "primary_id": primary_id,
             "secondary_id": secondary_id,
             "attributes": dict(attributes),
             "skills": skills,
         }
+
+        # Blackboard pour le fonctionnement normal.
+        node.blackboard[PRE_XANDRA_BUILD_BLACKBOARD_KEY] = snapshot
+
+        # Copie persistante pour survivre à un restart de l'étape.
+        _pre_xandra_player_build_snapshot = snapshot
 
         if log:
             ConsoleLog(
@@ -920,69 +1249,184 @@ def SavePreXandraPlayerBuild(log: bool = True) -> BehaviorTree:
 
 
 def RestorePreXandraPlayerBuild(log: bool = True) -> BehaviorTree:
-    """Reload the build captured by SavePreXandraPlayerBuild after Xandra."""
+    """Restore profession and skillbar captured before the Xandra setup."""
 
     def _build(node: BehaviorTree.Node) -> BehaviorTree:
         snapshot = node.blackboard.get(PRE_XANDRA_BUILD_BLACKBOARD_KEY)
+
+        # Le blackboard est vidé lors d'un Planner restart.
+        # On retombe donc sur la copie persistante.
         if not isinstance(snapshot, dict):
+            snapshot = _pre_xandra_player_build_snapshot
+
+        if not isinstance(snapshot, dict):
+            ConsoleLog(
+                MODULE_NAME,
+                "Pre-Xandra build snapshot is missing.",
+                log=True,
+            )
             return BT.Failer(name="Pre-Xandra Build Snapshot Missing")
 
         template = str(snapshot.get("template", "") or "")
         primary_id = int(snapshot.get("primary_id", 0) or 0)
         secondary_id = int(snapshot.get("secondary_id", 0) or 0)
-        saved_skills = tuple(int(value or 0) for value in snapshot.get("skills", ()))
+        saved_skills = tuple(
+            int(value or 0)
+            for value in snapshot.get("skills", ())
+        )
 
         if not template or primary_id <= 0 or len(saved_skills) != 8:
+            ConsoleLog(
+                MODULE_NAME,
+                "Pre-Xandra build snapshot is invalid.",
+                log=True,
+            )
             return BT.Failer(name="Pre-Xandra Build Snapshot Invalid")
 
-        def _verify() -> BehaviorTree.NodeState:
+        def _restore_secondary() -> BehaviorTree.NodeState:
             player_id = int(Player.GetAgentID() or 0)
             if player_id <= 0:
                 return BehaviorTree.NodeState.FAILURE
 
-            loaded_primary_id, loaded_secondary_id = Agent.GetProfessionIDs(player_id)
-            loaded_skills = tuple(
-                int(GLOBAL_CACHE.SkillBar.GetSkillIDBySlot(slot) or 0)
-                for slot in range(1, 9)
+            current_primary_id, current_secondary_id = Agent.GetProfessionIDs(
+                player_id
             )
+            current_primary_id = int(current_primary_id or 0)
+            current_secondary_id = int(current_secondary_id or 0)
 
-            valid = bool(
-                int(loaded_primary_id or 0) == primary_id
-                and int(loaded_secondary_id or 0) == secondary_id
-                and loaded_skills == saved_skills
+            if current_primary_id != primary_id:
+                ConsoleLog(
+                    MODULE_NAME,
+                    (
+                        "Cannot restore pre-Xandra build: "
+                        f"primary profession changed "
+                        f"({current_primary_id}/{primary_id})."
+                    ),
+                    log=True,
+                )
+                return BehaviorTree.NodeState.FAILURE
+
+            if current_secondary_id == secondary_id:
+                return BehaviorTree.NodeState.SUCCESS
+
+            changed = bool(
+                PySkillbar.change_second_profession(
+                    secondary_id,
+                    0,  # player
+                )
             )
 
             if log:
                 ConsoleLog(
                     MODULE_NAME,
                     (
-                        "Pre-Xandra player build restored successfully."
-                        if valid
-                        else (
-                            "Pre-Xandra build restore verification failed: "
-                            f"primary={int(loaded_primary_id or 0)}/{primary_id}, "
-                            f"secondary={int(loaded_secondary_id or 0)}/{secondary_id}, "
-                            f"skills={list(loaded_skills)}/{list(saved_skills)}."
-                        )
+                        "Requested pre-Xandra secondary profession: "
+                        f"{current_secondary_id} -> {secondary_id}."
                     ),
                     log=True,
                 )
 
             return (
                 BehaviorTree.NodeState.SUCCESS
-                if valid
+                if changed
                 else BehaviorTree.NodeState.FAILURE
             )
+
+        def _profession_restored() -> BehaviorTree.NodeState:
+            player_id = int(Player.GetAgentID() or 0)
+            if player_id <= 0:
+                return BehaviorTree.NodeState.FAILURE
+
+            current_primary_id, current_secondary_id = Agent.GetProfessionIDs(
+                player_id
+            )
+
+            return (
+                BehaviorTree.NodeState.SUCCESS
+                if (
+                    int(current_primary_id or 0) == primary_id
+                    and int(current_secondary_id or 0) == secondary_id
+                )
+                else BehaviorTree.NodeState.FAILURE
+            )
+
+        def _build_restored() -> BehaviorTree.NodeState:
+            player_id = int(Player.GetAgentID() or 0)
+            if player_id <= 0:
+                return BehaviorTree.NodeState.FAILURE
+
+            loaded_primary_id, loaded_secondary_id = Agent.GetProfessionIDs(
+                player_id
+            )
+
+            loaded_skills = tuple(
+                int(GLOBAL_CACHE.SkillBar.GetSkillIDBySlot(slot) or 0)
+                for slot in range(1, 9)
+            )
+
+            return (
+                BehaviorTree.NodeState.SUCCESS
+                if (
+                    int(loaded_primary_id or 0) == primary_id
+                    and int(loaded_secondary_id or 0) == secondary_id
+                    and loaded_skills == saved_skills
+                )
+                else BehaviorTree.NodeState.FAILURE
+            )
+
+        def _log_success() -> BehaviorTree.NodeState:
+            if log:
+                ConsoleLog(
+                    MODULE_NAME,
+                    (
+                        "Pre-Xandra player build restored successfully: "
+                        f"primary={primary_id}, secondary={secondary_id}, "
+                        f"skills={list(saved_skills)}."
+                    ),
+                    log=True,
+                )
+
+            return BehaviorTree.NodeState.SUCCESS
 
         return BT.Sequence(
             name="Restore Pre-Xandra Player Build",
             children=[
-                BT.LoadSkillbar(template=template, log=log),
-                BT.Wait(1_000),
                 BehaviorTree(
-                    BehaviorTree.ConditionNode(
-                        name="Verify Pre-Xandra Player Build",
-                        condition_fn=_verify,
+                    BehaviorTree.ActionNode(
+                        name="Restore Pre-Xandra Secondary Profession",
+                        action_fn=_restore_secondary,
+                        aftercast_ms=500,
+                    )
+                ),
+
+                BehaviorTree(
+                    BehaviorTree.WaitUntilSuccessNode(
+                        name="Wait For Pre-Xandra Profession",
+                        condition_fn=_profession_restored,
+                        throttle_interval_ms=100,
+                        timeout_ms=5_000,
+                    )
+                ),
+
+                BT.LoadSkillbar(
+                    template=template,
+                    log=log,
+                ),
+
+                BehaviorTree(
+                    BehaviorTree.WaitUntilSuccessNode(
+                        name="Wait For Pre-Xandra Skillbar",
+                        condition_fn=_build_restored,
+                        throttle_interval_ms=100,
+                        timeout_ms=5_000,
+                    )
+                ),
+
+                BehaviorTree(
+                    BehaviorTree.ActionNode(
+                        name="Confirm Pre-Xandra Build Restored",
+                        action_fn=_log_success,
+                        aftercast_ms=0,
                     )
                 ),
             ],
@@ -1920,195 +2364,44 @@ def _steps_CompleteCurseOfTheNornbear() -> list[PlannerStep]:
 
 def _steps_BloodWashesBlood() -> list[PlannerStep]:
     return [
-        _planner_map_prep_step(
-            "Blood Washes Blood - 00 Map Preparation",
-            "Sifhalla",
-        ),
+        _planner_map_prep_step("Blood Washes Blood - 00 Map Preparation", "Sifhalla"),
         ("Blood Washes Blood - 01 Aggressive", lambda: _aggressive()),
-        *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 02 Vanquish Route 01",
-            [(16163.0, 22852.0), (16717.0, 22789.0)],
-        ),
-        (
-            "Blood Washes Blood - 03 Wait For Map Load",
-            lambda: BT.WaitForMapLoad(map_name="Jaga Moraine"),
-        ),
-        *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 04 Vanquish Route 02",
-            [
-                (-11949.0, -23710.0),
-                (-8929.0, -21112.0),
-                (-6111.0, -14675.0),
-                (-5757.0, -13735.0),
-                (-4855.0, -10881.0),
-                (-3702.0, -8096.0),
-                (-2962.0, -7412.0),
-                (-1397.0, -6161.0),
-                (1055.0, -3190.0),
-                (2170.0, -397.0),
-                (2659.0, 484.0),
-                (3151.0, 1355.0),
-                (3726.0, 4064.0),
-                (4621.0, 5918.0),
-            ],
-        ),
+        *_planner_vanquish_point_steps("Blood Washes Blood - 02 Vanquish Route 01", [(16163.0, 22852.0), (16717.0, 22789.0)]),
+        ("Blood Washes Blood - 03 Wait For Map Load", lambda: BT.WaitForMapLoad(map_name="Jaga Moraine")),
+        *_planner_vanquish_point_steps("Blood Washes Blood - 04 Vanquish Route 02", [(-11949.0, -23710.0), (-8929.0, -21112.0), (-6111.0, -14675.0), (-5757.0, -13735.0), (-4855.0, -10881.0), (-3702.0, -8096.0), (-2962.0, -7412.0), (-1397.0, -6161.0), (1055.0, -3190.0), (2170.0, -397.0), (2659.0, 484.0), (3151.0, 1355.0), (3726.0, 4064.0), (4621.0, 5918.0)]),
         ("Blood Washes Blood - 05 Pacifist", lambda: _pacifist()),
-        (
-            "Blood Washes Blood - 06 Move And Dialog",
-            lambda: BT.MoveAndDialog(Vec2f(4621.0, 5918.0), 8593409),
-        ),
+        ("Blood Washes Blood - 06 Move And Dialog", lambda: BT.MoveAndDialog(Vec2f(4621.0, 5918.0), 8593409)),
         ("Blood Washes Blood - 07 Aggressive", lambda: _aggressive()),
-        *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 08 Vanquish Route 03",
-            [
-                (3014.0, 3308.0),
-                (-567.0, -1090.0),
-                (5147.0, -5920.0),
-                (10490.0, -9516.0),
-                (11885.0, -16663.0),
-                (9771.0, -21332.0),
-            ],
-        ),
+        *_planner_vanquish_point_steps("Blood Washes Blood - 08 Vanquish Route 03", [(3014.0, 3308.0), (-567.0, -1090.0), (5147.0, -5920.0), (10490.0, -9516.0), (11885.0, -16663.0), (9771.0, -21332.0)]),
         ("Blood Washes Blood - 09 Wait", lambda: BT.Wait(80000)),
-        (
-            "Blood Washes Blood - 10 Move To Egil If Present",
-            lambda: _move_to_egil_if_present(),
-        ),
+        ("Blood Washes Blood - 10 Move and talk To Egil If Present", lambda: _move_to_egil_if_present()),
         ("Blood Washes Blood - 11 Pacifist", lambda: _pacifist()),
-        (
-            "Blood Washes Blood - 12 Move",
-            lambda: BT.Move(Vec2f(9285, -20889)),
-        ),
-        (
-            "Blood Washes Blood - 13 Bear Spirit Dialog",
-            lambda: BT.MoveAndDialogByModelID(
-                BEAR_SPIRIT_MODEL_ID,
-                8593415,
-                log=True,
-            ),
-        ),
-        (
-            "Blood Washes Blood - 14 Bear Spirit Send Dialog",
-            lambda: BT.TargetAgentByModelIDAndSendDialog(
-                BEAR_SPIRIT_MODEL_ID,
-                132,
-            ),
-        ),
-        (
-            "Blood Washes Blood - 15 Move And Exit Map",
-            lambda: BT.MoveAndExitMap(
-                Vec2f(16045.0, -20642.0),
-                target_map_name="Blood Washes Blood",
-            ),
-        ),
-        ("Blood Washes Blood - 16 Aggressive", lambda: _aggressive()),
-        *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 17 Vanquish Route 04",
-            [
-                (419.0, -3059.0),
-                (-2083.0, 1061.0),
-                (1742.0, 4963.0),
-                (228.0, 10003.0),
-                (3266.0, 12358.0),
-                (3299.0, 13489.0),
-                (365.0, 13684.0),
-            ],
-        ),
-        ("Blood Washes Blood - 18 Pacifist", lambda: _pacifist()),
-        (
-            "Blood Washes Blood - 19 Move And Interact",
-            lambda: BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True),
-        ),
-        (
-            "Blood Washes Blood - 20 Move And Interact",
-            lambda: BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True),
-        ),
-        (
-            "Blood Washes Blood - 21 Select And Equip Reward Skill",
-            lambda: _select_and_equip_reward_skill(8),
-        ),
-        ("Blood Washes Blood - 22 Aggressive", lambda: _aggressive()),
+        ("Blood Washes Blood - 12 Move", lambda: BT.Move(Vec2f(9285, -20889))),
+        ("Blood Washes Blood - 13 Bear Spirit Dialog", lambda: BT.MoveAndDialogByModelID(BEAR_SPIRIT_MODEL_ID, 0x84, log=True)),
+        ("Blood Washes Blood - 14 Move And Exit Map", lambda: BT.MoveAndExitMap(Vec2f(16045.0, -20642.0), target_map_name="Blood Washes Blood")),
+        ("Blood Washes Blood - 15 Aggressive", lambda: _aggressive()),
+        *_planner_vanquish_point_steps("Blood Washes Blood - 16 Vanquish Route 04", [(419.0, -3059.0), (-2083.0, 1061.0), (1742.0, 4963.0), (228.0, 10003.0), (3266.0, 12358.0), (3299.0, 13489.0), (365.0, 13684.0)]),
+        ("Blood Washes Blood - 17 Pacifist", lambda: _pacifist()),
+        ("Blood Washes Blood - 18 Move And Interact", lambda: BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True)),
+        ("Blood Washes Blood - 19 Move And Interact", lambda: BT.MoveAndInteract(Vec2f(942.0, 14172.0), log=True)),
+        ("Blood Washes Blood - 20 Select And Equip Reward Skill", lambda: _select_and_equip_reward_skill(8)),
+        ("Blood Washes Blood - 21 Aggressive", lambda: _aggressive()),
 
         # Original route. Barricade approach points are inserted without
         # replacing any original waypoint. Bear-form maintenance stays active
         # through the far-side verification of barricade 04 only.
-        *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 23 Route To Barricade 01",
-            [
-                (7375, 12256),                 # Original path point 01
-                (8137.44, 12125.30),           # Barricade 01 - closest approach
-            ],
-            during_step_factory=_maintain_blood_washes_blood_bear_form,
-        ),
-        (
-            "Blood Washes Blood - 24 Verify Barricade 01 Passage",
-            lambda: _verify_blood_washes_blood_barricade_passage(
-                "Blood Washes Blood - Barricade 01",
-                Vec2f(8514.08, 12101.35),      # Barricade 01 - far side
-            ),
-        ),
-        *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 25 Route To Barricade 02",
-            [
-                (10984, 11918),                # Original path point 02
-                (11337.05, 11403.98),          # Barricade 02 - closest approach
-            ],
-            during_step_factory=_maintain_blood_washes_blood_bear_form,
-        ),
-        (
-            "Blood Washes Blood - 26 Verify Barricade 02 Passage",
-            lambda: _verify_blood_washes_blood_barricade_passage(
-                "Blood Washes Blood - Barricade 02",
-                Vec2f(11709.23, 10948.48),     # Barricade 02 - far side
-            ),
-        ),
-        *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 27 Route To Barricade 03",
-            [(13038.97, 9352.95)],              # Barricade 03 - approach
-            during_step_factory=_maintain_blood_washes_blood_bear_form,
-        ),
-        (
-            "Blood Washes Blood - 28 Verify Barricade 03 Passage",
-            lambda: _verify_blood_washes_blood_barricade_passage(
-                "Blood Washes Blood - Barricade 03",
-                Vec2f(13175.19, 8990.44),      # Barricade 03 - far side
-            ),
-        ),
-        *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 29 Route To Barricade 04",
-            [
-                (13502, 8591),                 # Original path point 03
-                (16885, 7971),                 # Original path point 04
-                (15198, 6897),                 # Original path point 05
-                (14874, 3441),                 # Original path point 06
-                (15379.00, 3398.32),           # Barricade 04 - approach
-            ],
-            during_step_factory=_maintain_blood_washes_blood_bear_form,
-        ),
-        (
-            "Blood Washes Blood - 30 Verify Barricade 04 Passage",
-            lambda: _verify_blood_washes_blood_barricade_passage(
-                "Blood Washes Blood - Barricade 04",
-                Vec2f(15729.87, 3342.82),      # Barricade 04 - far side
-            ),
-        ),
+        *_planner_vanquish_point_steps("Blood Washes Blood - 22 Route To Barricade 01", [(7375, 12256), (8137.44, 12125.30)], during_step_factory=_maintain_blood_washes_blood_bear_form),
+        ("Blood Washes Blood - 23 Verify Barricade 01 Passage", lambda: _verify_blood_washes_blood_barricade_passage("Blood Washes Blood - Barricade 01", Vec2f(8514.08, 12101.35))),
+        *_planner_vanquish_point_steps("Blood Washes Blood - 24 Route To Barricade 02", [(10984, 11918), (11337.05, 11403.98)], during_step_factory=_maintain_blood_washes_blood_bear_form),
+        ("Blood Washes Blood - 25 Verify Barricade 02 Passage", lambda: _verify_blood_washes_blood_barricade_passage("Blood Washes Blood - Barricade 02", Vec2f(11709.23, 10948.48))),
+        *_planner_vanquish_point_steps("Blood Washes Blood - 26 Route To Barricade 03", [(13038.97, 9352.95)], during_step_factory=_maintain_blood_washes_blood_bear_form),
+        ("Blood Washes Blood - 27 Verify Barricade 03 Passage", lambda: _verify_blood_washes_blood_barricade_passage("Blood Washes Blood - Barricade 03", Vec2f(13175.19, 8990.44))),
+        *_planner_vanquish_point_steps("Blood Washes Blood - 28 Route To Barricade 04", [(13502, 8591), (16885, 7971), (15198, 6897), (14874, 3441), (15379.00, 3398.32)], during_step_factory=_maintain_blood_washes_blood_bear_form),
+        ("Blood Washes Blood - 29 Verify Barricade 04 Passage", lambda: _verify_blood_washes_blood_barricade_passage("Blood Washes Blood - Barricade 04", Vec2f(15729.87, 3342.82))),
 
         # Barricade 04 crossed: no more manual bear-form / skill-4 maintenance.
-        *_planner_vanquish_point_steps(
-            "Blood Washes Blood - 31 Vanquish After Last Barricade",
-            [
-                (16960, 3216),                 # Original path point 07
-                (16734, 5066),                 # Original path point 08
-                (18257, 3930),                 # Original path point 09
-                (17938, 2201),                 # Original path point 10
-                (15908, -280),                 # Original path point 11
-                (11438, 7209),                 # Original path point 12
-            ],
-        ),
-        (
-            "Blood Washes Blood - 32 Wait For Map Load",
-            lambda: BT.WaitForMapLoad(map_name="Gunnar's Hold"),
-        ),
+        *_planner_vanquish_point_steps("Blood Washes Blood - 30 Vanquish After Last Barricade", [(16960, 3216), (16734, 5066), (18257, 3930), (17938, 2201), (15908, -280), (11438, 7209)]),
+        ("Blood Washes Blood - 31 Wait For Map Load", lambda: BT.WaitForMapLoad(map_name="Gunnar's Hold")),
     ]
 
 
@@ -2116,16 +2409,8 @@ def _move_to_egil_if_present() -> BehaviorTree:
     return BT.Selector(
         name="Blood Washes Blood - Move To Egil If Present",
         children=[
-            BT.MoveToModelID(
-                EGIL_MODEL_ID,
-                pause_on_combat=False,
-                log=True,
-            ),
-            BT.Succeeder(
-                name="Egil Absent - Previous Phase Already Completed"
-            ),
-        ],
-    )
+            BT.MoveAndDialogByModelID(EGIL_MODEL_ID,0x832007,log=True,),
+            BT.Succeeder(name="Egil Absent - Previous Phase Already Completed"),],)
 
 
 def _steps_TravelToOlafstead() -> list[PlannerStep]:
@@ -2149,11 +2434,12 @@ def _steps_CompleteShrineOfRavenSpirit() -> list[PlannerStep]:
         ('Shrine Of The Raven Spirit - 03 Aggressive', lambda: _aggressive()),
         ('Shrine Of The Raven Spirit - 04 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-1392.0, 1205.0), target_map_id=553)),
         *_planner_vanquish_point_steps('Shrine Of The Raven Spirit - 05 Vanquish Route 01', [(-2252.0, 831.0), (-2887.0, -2894.0), (-3211.0, -3843.0), (-3940.0, -3155.0), (-4941.0, 728.0), (-5310.0, 3693.0), (-8984.0, 4861.0), (-12866.0, 5695.0), (-13612.0, 6369.0), (-14355.0, 7040.0), (-14909.0, 7880.0), (-15520.0, 8680.0)]),
-        ('Shrine Of The Raven Spirit - 06 Target Olaf And Dialog', lambda: BT.TargetAgentByModelIDAndSendDialog(OLAF_OLAFSON_MODEL_ID, 0x832E04, log=True)),
-        ('Shrine Of The Raven Spirit - 07 Wait For Clear Area', lambda: BT.WaitForClearEnemiesInArea(-15696.0, 8732.0, radius=Range.Longbow.value, stable_clear_ms=60000, log=True)),
-        ('Shrine Of The Raven Spirit - 08 Travel', lambda: BT.Travel(target_map_name='Olafstead')),
-        ('Shrine Of The Raven Spirit - 09 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(132.0, -684.0), 0x832E07)),
-        ('Shrine Of The Raven Spirit - 10 Wait', lambda: BT.Wait(2000)),
+        ('Shrine Of The Raven Spirit - 06 Target Olaf And Dialog', lambda: BT.TargetAgentByModelIDAndInteract(OLAF_OLAFSON_MODEL_ID,log=True)),
+        ('Shrine Of The Raven Spirit - 07 Target Olaf And Dialog', lambda: BT.SendDialog(0x85, log=True)),
+        ('Shrine Of The Raven Spirit - 08 Wait For Clear Area', lambda: BT.WaitForClearEnemiesInArea(-15696.0, 8732.0, radius=Range.Longbow.value, stable_clear_ms=30000, log=True)),
+        ('Shrine Of The Raven Spirit - 09 Travel', lambda: BT.Travel(target_map_name='Olafstead')),
+        ('Shrine Of The Raven Spirit - 10 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(132.0, -684.0), 0x832E07)),
+        ('Shrine Of The Raven Spirit - 11 Wait', lambda: BT.Wait(2000)),
     ]
 
 
@@ -2225,7 +2511,7 @@ def _steps_SearchForTheEbonVanguard() -> list[PlannerStep]:
         *_planner_vanquish_point_steps('Search For The Ebon Vanguard - 04 Vanquish Route 01', [(-14000.0, 4297.0), (-9580.0, -2860.0)]),
         ('Search For The Ebon Vanguard - 05 Pacifist', lambda: _pacifist()),
         ('Search For The Ebon Vanguard - 06 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-9580.0, -2860.0), 8591367)),
-        ('Search For The Ebon Vanguard - 07 Send Dialog', lambda: BT.SendDialog(132)),
+        ('Search For The Ebon Vanguard - 07 Send Dialog', lambda: BT.MoveAndDialog(Vec2f(-9580.0, -2860.0),0x84)),
         ('Search For The Ebon Vanguard - 08 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=665)),
         ('Search For The Ebon Vanguard - 09 Aggressive', lambda: _aggressive()),
         *_planner_vanquish_point_steps('Search For The Ebon Vanguard - 10 Vanquish Route 02', [(5221.0, -3019.0), (18715.0, -3896.0), (20010.0, -66.0), (17938.0, 2493.0), (19705.0, 3742.0)]),
@@ -2251,18 +2537,18 @@ def _steps_WarbandOfBrothers() -> list[PlannerStep]:
         ('Warband Of Brothers - 01 Aggressive', lambda: _aggressive()),
         ('Warband Of Brothers - 02 Move And Dialog', lambda: BT.MoveAndDialog(Vec2f(-19094.0, 17945.0), 132)),
         ('Warband Of Brothers - 03 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=666)),
-        ('Warband Of Brothers - 04 Add Loot Whitelist', lambda: BT.AddModelToLootWhitelist(25413)),
-        *_planner_vanquish_point_steps('Warband Of Brothers - 05 Vanquish Route 01', [(-13404.0, -2958.0), (-7696.0, 4576.0), (-5939.0, 3668.0), (-7823.0, 6395.0), (-5790.0, 7957.0), (-12068.0, 3611.0),(-4043.76, 6405.57) ]),
+        ('Warband Of Brothers - 04 Add Loot Whitelist', lambda: _add_model_to_loot_whitelist_with_diag(25413, "Warband 04")),
+        *_planner_vanquish_point_steps('Warband Of Brothers - 05 Vanquish Route 01', [(-13404.0, -2958.0), (-7696.0, 4576.0), (-5939.0, 3668.0), (-7823.0, 6395.0), (-5790.0, 7957.0),(-4569.23, 6526.14), (-12068.0, 3611.0),(-4043.76, 6405.57) ]),
         ('Warband Of Brothers - 06 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(-4043.76, 6405.57), log=True)),
         ('Warband Of Brothers - 07 Wait', lambda: BT.Wait(2000)),
-        *_planner_vanquish_point_steps('Warband Of Brothers - 08 Vanquish Route 02', [(-4799.0, 6891.0), (-9905.0, 5280.0), (-13153.0, 3346.0), (-4600.0, 6494.0),(-1959.15, 7955.19), (1490.38, 8409.88), (3217.9, 8404.31), (-4608.37, 6540.96), (-16482.0, 1716.68), (-18616.02, 806.14), (-19704.0, 318.0)]),
+        *_planner_vanquish_point_steps('Warband Of Brothers - 08 Vanquish Route 02', [(3038,8357),(-629,9052),(-4345,6631),(-14125,2723),(-18800,853),(-19452,498)]),
         ('Warband Of Brothers - 09 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=667)),
-        ('Warband Of Brothers - 10 Add Loot Whitelist', lambda: BT.AddModelToLootWhitelist(25413)),
+        ('Warband Of Brothers - 10 Add Loot Whitelist', lambda: _add_model_to_loot_whitelist_with_diag(25413, "Warband 10")),
         *_planner_vanquish_point_steps('Warband Of Brothers - 11 Vanquish Route 03', [(-3290.88, 15187.92), (-1760.07, 12088.74), (-475.83, 11932.78), (-2164.81, 11785.08), (-2061.81, 12930.91), (-2407.16, 14068.22), (-2030.78, 12776.65)]),
         ('Warband Of Brothers - 12 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(-2254.0, 11176.0), log=True)),
         *_planner_vanquish_point_steps('Warband Of Brothers - 13 Vanquish Route 04', [(-2404.72, 9076.48), (-1563.08, 11763.31), (6634.5, 17973.61), (7429.3, 13458.01), (13162.54, 9219.06), (15923.27, 8823.71), (16782.0, 8642.0)]),
         ('Warband Of Brothers - 14 Wait For Map Load', lambda: BT.WaitForMapLoad(map_id=668)),
-        ('Warband Of Brothers - 15 Add Loot Whitelist', lambda: BT.AddModelToLootWhitelist(25413)),
+        ('Warband Of Brothers - 15 Add Loot Whitelist', lambda: _add_model_to_loot_whitelist_with_diag(25413, "Warband 15")),
         *_planner_vanquish_point_steps('Warband Of Brothers - 16 Vanquish Route 05', [(17337.79, -5963.91), (16669.06, -4763.91), (16089.83, -3724.5), (17007.08, -5518.76), (17159.0, -6461.0)]),
         ('Warband Of Brothers - 17 Move And Interact With Gadget', lambda: BT.MoveAndInteractWithGadget(Vec2f(17159.0, -6461.0), log=True)),
         ('Warband Of Brothers - 18 Wait', lambda: BT.Wait(2000)),
@@ -2388,7 +2674,7 @@ def _steps_LabSpace() -> list[PlannerStep]:
         ('LabSpace - 2', lambda: BT.MoveAndExitMap(Vec2f(16376,13436), target_map_name="Magus Stones")),
         ('LabSpace - 3', lambda: BT.MoveAndDialog(Vec2f(10228.0, 11488.0), 8596484)),
         *_planner_vanquish_point_steps('LabSpace - 4', [(8329.03, 9954.58), (7258.69, 10987.36), (4812.16, 11197.93), (2778.98, 13297.53), (499.76, 14253.58), (-4305.25, 13044.76), (-11493.07, 16584.55), (-17671.37, 14695.37)]),
-        ('LabSpace - 6', lambda: BT.AddModelToLootWhitelist(25413)),
+        ('LabSpace - 6', lambda: _add_model_to_loot_whitelist_with_diag(25413, "LabSpace 6")),
         ('LabSpace - 5', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)),
         ('LabSpace - 7', lambda:BT.MoveDirect(Vec2f(-18513,16437))),
         ('LabSpace - 7', lambda:BT.MoveAndDialog(Vec2f(-18794.00, 16287.00),8596487)),
@@ -2408,7 +2694,7 @@ def _steps_TheElusiveGolemancer() -> list[PlannerStep]:
         ('TheElusiveGolemancer 2', lambda: BT.Move(Vec2f(-17204.16, 8545.91))),
         ('TheElusiveGolemancer 3', lambda: BT.MoveAndInteractWithGadget(Vec2f(-17601.0, 8150.0), log=True)),
         ('TheElusiveGolemancer 4', lambda: BT.Wait(20_000)),
-        ('TheElusiveGolemancer 45', lambda: BT.Move([Vec2f(-15960.14, 3309.37), Vec2f(-13369.91, -965.44)], avoid_obstacles=False, tolerance=800)),
+        ('TheElusiveGolemancer 5', lambda: BT.Move([Vec2f(-15960.14, 3309.37), Vec2f(-13369.91, -965.44)], avoid_obstacles=False, tolerance=800)),
         ('TheElusiveGolemancer 6', lambda: BT.MoveAndInteractWithGadget(Vec2f(-11737.0, -3710.0), log=True)),
             *_planner_vanquish_point_steps('TheElusiveGolemancer 7', [(-15108.84, -2793.48),(-16518.94, -662.78),]),
             ('TheElusiveGolemancer 8', lambda: BT.WaitUntilOutOfCombat(timeout_ms=120_000)),
@@ -3354,9 +3640,7 @@ def ToKamadanForOlias(log: bool = True) -> BehaviorTree:
                 (-5031.77, 6001.52),
                 (-5899.57, 7240.19),
             ], log=log, clear_area_radius=Range.Earshot.value),
-            BT.TargetAgentByModelIDAndSendDialog(4914, 0x82D404, log=log),
-            BT.Wait(500),
-            BT.SendDialog(0x87, log=log),
+            BT.TargetAgentByModelIDAndSendDialog(4914, 0x87, log=log),
             BT.WaitForMapLoad(map_id=400),
             _aggressive(),
             BT.VanquishNode([
@@ -3378,7 +3662,7 @@ def ToKamadanForOlias(log: bool = True) -> BehaviorTree:
             ], pause_on_combat=True, log=log, clear_area_radius=Range.Earshot.value),
             BT.WaitForMapLoad(map_id=290, timeout_ms=60000),
             BT.TargetAgentByModelIDAndSendDialog(4914, 0x84, log=log),
-            BT.SendDialog(0x85),
+            BT.SendDialog(0x84),
             BT.WaitForMapLoad(map_id=543),
             BT.Wait(2_000),
             BT.TargetAgentByModelIDAndSendDialog(4829, 0x82D407, log=log),
@@ -3390,8 +3674,6 @@ def ToConsulateDocksForOlias(log: bool = True) -> BehaviorTree:
     return BT.Sequence(
         name="Unlock Consulate Docks",
         children=[
-            BT.Travel(target_map_id=KAINENG_CENTER_MAP_ID, log=log),
-            BT.LeaveParty(),
             BT.Travel(target_map_id=449, log=log),
             BT.Move(Vec2f(-8075.89, 14592.47), log=log),
             BT.Move(Vec2f(-6743.29, 16663.21), log=log),
@@ -3399,6 +3681,7 @@ def ToConsulateDocksForOlias(log: bool = True) -> BehaviorTree:
             BT.WaitForMapLoad(map_id=429),
             BT.MoveAndDialog(Vec2f(-4631.86, 16711.79), 0x85, log=log),
             BT.WaitForMapLoad(map_id=493),
+            BT.MoveAndDialog((-2367.00, 16796.00),0x830E01)
         ],
     )
 
@@ -3575,6 +3858,7 @@ def main() -> None:
 
     tree = ensure_botting_tree()
     tree.tick()
+    _tick_eotn_loot_diagnostics()
     attach_botting_tree_support(tree)
     tree.UI.draw_window(
         icon_path=ICON_PATH,
