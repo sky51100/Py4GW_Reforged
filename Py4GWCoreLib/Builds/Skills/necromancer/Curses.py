@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from Py4GWCoreLib.BuildMgr import BuildCoroutine
-from Py4GWCoreLib import GLOBAL_CACHE, Range, Routines
+from Py4GWCoreLib import GLOBAL_CACHE, Range, Routines, Utils
 from Py4GWCoreLib.Agent import Agent
 from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.Skill import Skill
@@ -65,6 +65,86 @@ class Curses:
             log=False,
             aftercast_delay=250,
             target_agent_id=self.build.current_target_id,
+        ))
+    #endregion
+
+    #region M
+    def Mark_of_Pain(
+        self,
+        *,
+        min_adjacent_enemies: int = 2,
+        min_target_health: float = 0.30,
+    ) -> BuildCoroutine:
+        """Cast Mark of Pain on a durable enemy standing inside a useful pack.
+
+        The target itself does not take Mark of Pain's splash damage, so avoid
+        isolated or nearly-dead foes. Prefer the player's current target when it
+        already anchors a valid pack; otherwise choose the eligible enemy with
+        the most adjacent enemies.
+        """
+        mark_of_pain_id: int = Skill.GetID("Mark_of_Pain")
+
+        if not self.build.IsSkillEquipped(mark_of_pain_id):
+            return False
+        if not self.build.IsInAggro():
+            return False
+
+        player_pos = Player.GetXY()
+        enemies = Routines.Agents.GetFilteredEnemyArray(
+            player_pos[0],
+            player_pos[1],
+            Range.Spellcast.value,
+        )
+        if not enemies:
+            return False
+
+        def _eligible(agent_id: int) -> bool:
+            return (
+                Agent.IsAlive(agent_id)
+                and Agent.GetHealth(agent_id) > min_target_health
+                and not Routines.Checks.Agents.HasEffect(agent_id, mark_of_pain_id)
+            )
+
+        candidates = [agent_id for agent_id in enemies if _eligible(agent_id)]
+        if not candidates:
+            return False
+
+        def _adjacent_enemy_count(agent_id: int) -> int:
+            target_xy = Agent.GetXY(agent_id)
+            return sum(
+                1
+                for other_id in enemies
+                if other_id != agent_id
+                and Agent.IsAlive(other_id)
+                and Utils.Distance(target_xy, Agent.GetXY(other_id)) <= Range.Adjacent.value
+            )
+
+        valid_candidates = [
+            agent_id
+            for agent_id in candidates
+            if _adjacent_enemy_count(agent_id) >= min_adjacent_enemies
+        ]
+        if not valid_candidates:
+            return False
+
+        current_target_id = Player.GetTargetID()
+        if current_target_id in valid_candidates:
+            target_agent_id = current_target_id
+        else:
+            target_agent_id = max(
+                valid_candidates,
+                key=lambda agent_id: (
+                    _adjacent_enemy_count(agent_id),
+                    Agent.GetHealth(agent_id),
+                ),
+            )
+
+        return (yield from self.build.CastSkillIDAndRestoreTarget(
+            skill_id=mark_of_pain_id,
+            target_agent_id=target_agent_id,
+            extra_condition=lambda: _eligible(target_agent_id),
+            log=False,
+            aftercast_delay=250,
         ))
     #endregion
 

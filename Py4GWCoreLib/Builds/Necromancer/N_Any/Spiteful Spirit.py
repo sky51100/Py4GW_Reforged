@@ -11,6 +11,8 @@ Arcane_Echo_ID = Skill.GetID("Arcane_Echo")
 Signet_of_Lost_Souls_ID = Skill.GetID("Signet_of_Lost_Souls")
 Enfeebling_Blood_ID = Skill.GetID("Enfeebling_Blood")
 Weaken_Armor_ID = Skill.GetID("Weaken_Armor")
+Mark_of_Pain_ID = Skill.GetID("Mark_of_Pain")
+Foul_Feast_ID = Skill.GetID("Foul_Feast")
 
 
 # Keep enough energy to seed Arcane Echo and immediately cast Spiteful Spirit.
@@ -39,6 +41,8 @@ class Spiteful_Spirit(BuildMgr):
                 Signet_of_Lost_Souls_ID,
                 Enfeebling_Blood_ID,
                 Weaken_Armor_ID,
+                Mark_of_Pain_ID,
+                Foul_Feast_ID,
             ],
         )
 
@@ -72,24 +76,36 @@ class Spiteful_Spirit(BuildMgr):
         ):
             return True
 
-        # While Arcane Echo is waiting to copy the next spell, allow ONLY SS.
-        # Returning True even when no cast occurs prevents the HeroAI fallback
-        # from consuming Arcane Echo with an unrelated spell.
+        # If Arcane Echo is waiting to copy SS, try SS first. Crucially, do
+        # NOT hard-lock the whole build if SS was interrupted / is unavailable:
+        # otherwise the controller can sit idle for the full Echo window.
+        ss_attempted_while_echo_active = False
         if arcane_echo_active:
+            ss_attempted_while_echo_active = True
             if (yield from self.skills.Necromancer.Curses.Spiteful_Spirit()):
                 return True
+
+        # Foul Feast is a reactive party cleanse and is useful even outside
+        # active aggro. If Echo is still waiting because SS was interrupted,
+        # this may consume Echo by copying Foul Feast; that is intentionally
+        # preferable to freezing the build and doing nothing.
+        if self.IsSkillEquipped(Foul_Feast_ID) and (
+            yield from self.skills.Necromancer.SoulReaping.Foul_Feast()
+        ):
             return True
 
         if not self.IsInAggro():
             return False
 
         # Main SS cast, or Arcane Echo's copied SS if the original slot is now
-        # recharging. The helper scans duplicate slots and avoids the last target.
-        last_ss_target_id = getattr(self, "_last_spiteful_spirit_target_id", 0)
-        if (yield from self.skills.Necromancer.Curses.Spiteful_Spirit(
-            exclude_target_id=last_ss_target_id if self.IsSkillEquipped(Arcane_Echo_ID) else 0,
-        )):
-            return True
+        # recharging. Skip this duplicate call when Echo already attempted SS
+        # earlier in the same tick.
+        if not ss_attempted_while_echo_active:
+            last_ss_target_id = getattr(self, "_last_spiteful_spirit_target_id", 0)
+            if (yield from self.skills.Necromancer.Curses.Spiteful_Spirit(
+                exclude_target_id=last_ss_target_id if self.IsSkillEquipped(Arcane_Echo_ID) else 0,
+            )):
+                return True
 
         # Energy recovery. Same ceiling already used by the existing Necro Prot
         # controller in this library.
@@ -97,6 +113,13 @@ class Spiteful_Spirit(BuildMgr):
             yield from self.skills.Necromancer.SoulReaping.Signet_of_Lost_Souls(
                 max_self_energy_pct=SIGNET_ENERGY_CEILING,
             )
+        ):
+            return True
+
+        # Mark of Pain: use it only on a worthwhile pack target. The helper
+        # avoids overwriting an existing Mark and skips nearly-dead enemies.
+        if self.IsSkillEquipped(Mark_of_Pain_ID) and (
+            yield from self.skills.Necromancer.Curses.Mark_of_Pain()
         ):
             return True
 
