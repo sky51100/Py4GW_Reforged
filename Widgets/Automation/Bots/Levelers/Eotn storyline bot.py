@@ -2686,6 +2686,100 @@ FLUCTUATION_MATRIX_MODEL_IDS = {
 }
 
 ELUSIVE_PROTECTION_GOLEM_MODEL_ID = 6880
+ELUSIVE_INDESTRUCTIBLE_GOLEM_MODEL_ID = 6878
+
+
+def _repeat_fluctuation_matrix_until_golem_dead() -> BehaviorTree:
+    """Repeat the fluctuation-matrix cycle until the target golem dies.
+
+    Model 6878 is tracked once seen. If it subsequently disappears from the
+    live agent array, that is treated as completion as well, but a golem that
+    has never been observed is never mistaken for a dead one.
+    """
+    tracked_golem_agent_id = {"value": 0}
+
+    def _find_golem_agent_id() -> int:
+        for raw_agent_id in AgentArray.GetAgentArray() or []:
+            agent_id = int(raw_agent_id or 0)
+            if agent_id <= 0:
+                continue
+
+            try:
+                if (
+                    int(Agent.GetModelID(agent_id) or 0)
+                    == ELUSIVE_INDESTRUCTIBLE_GOLEM_MODEL_ID
+                ):
+                    tracked_golem_agent_id["value"] = agent_id
+                    return agent_id
+            except Exception:
+                continue
+
+        return 0
+
+    def _is_golem_dead() -> BehaviorTree.NodeState:
+        agent_id = _find_golem_agent_id()
+
+        if agent_id > 0:
+            return (
+                BehaviorTree.NodeState.SUCCESS
+                if Agent.IsDead(agent_id)
+                else BehaviorTree.NodeState.FAILURE
+            )
+
+        # Only consider disappearance as death after this exact golem has
+        # previously been observed. This avoids a false success before spawn.
+        agent_id = int(tracked_golem_agent_id["value"] or 0)
+        if agent_id > 0:
+            if Agent.IsDead(agent_id) or not Agent.IsValid(agent_id):
+                return BehaviorTree.NodeState.SUCCESS
+
+        return BehaviorTree.NodeState.FAILURE
+
+    def _dead_condition(name: str) -> BehaviorTree:
+        return BehaviorTree(
+            BehaviorTree.ConditionNode(
+                name=name,
+                condition_fn=_is_golem_dead,
+            )
+        )
+
+    attempt = BT.Selector(
+        name="Fluctuation Matrix Attempt Or Golem Already Dead",
+        children=[
+            _dead_condition("Check Indestructible Golem Before Matrix Cycle"),
+            BT.Sequence(
+                name="Fluctuation Matrix Cycle",
+                children=[
+                    BT.PickupGroundItemByModelID(
+                        tuple(FLUCTUATION_MATRIX_MODEL_IDS),
+                        max_distance=10_000.0,
+                        timeout_ms=10_000,
+                        allow_unassigned=True,
+                        interaction_interval_ms=500,
+                        log=True,
+                    ),
+                    BT.Wait(1_000),
+                    BT.MoveAndInteractWithGadget(
+                        Vec2f(5356.0, -19374.0),
+                        log=True,
+                    ),
+                    _pixel_stack(),
+                    BT.Wait(5_000),
+                    BT.DropBundle(log=True),
+                    _dead_condition("Check Indestructible Golem After Matrix Cycle"),
+                ],
+            ),
+        ],
+    )
+
+    return BehaviorTree(
+        BehaviorTree.RepeaterUntilSuccessNode(
+            name="Repeat Fluctuation Matrix Until Golem Dies",
+            child=BT.Node(attempt),
+            timeout_ms=0,
+        )
+    )
+
 
 def _steps_TheElusiveGolemancer() -> list[PlannerStep]:
     return [
@@ -2702,7 +2796,7 @@ def _steps_TheElusiveGolemancer() -> list[PlannerStep]:
             ('TheElusiveGolemancer 10', lambda: BT.WaitForMapLoad(map_id=659)),
             ('TheElusiveGolemancer 11', lambda: BT.MoveAndInteractWithGadget(Vec2f(15979.0, -17531.0), log=True)),
             ('TheElusiveGolemancer 12', lambda: _pacifist()),
-            *_planner_vanquish_point_steps('TheElusiveGolemancer 13', [(18031.51, -13929.63),(17886.86, -13218.39),]),
+            ('TheElusiveGolemancer 13', lambda : BT.Move([(17914,-15612),(18112,-13333),(17163,-12397),], flag_heroes_to_waypoint=True)),
             ('TheElusiveGolemancer 14', lambda: BT.MoveAndInteractWithGadget(Vec2f(15551.0, -13705.0), log=True)),
             ('TheElusiveGolemancer 15', lambda: BT.Wait(3_000)),
             ('TheElusiveGolemancer 16', lambda: _aggressive()),
@@ -2746,28 +2840,12 @@ def _steps_TheElusiveGolemancer() -> list[PlannerStep]:
             ('TheElusiveGolemancer 28', lambda: _pacifist()),
             ('TheElusiveGolemancer 29', lambda: BT.Move(Vec2f(5107.97, -17710.35))),
             ('TheElusiveGolemancer 30', lambda: BT.FlagAllHeroes(5413.07, -19400.44)),
-            ('TheElusiveGolemancer 31', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS),max_distance=10_000.0,timeout_ms=10_000,allow_unassigned=True,interaction_interval_ms=500,log=True,),),
-            ('TheElusiveGolemancer 32', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
-            ('TheElusiveGolemancer 33', lambda: _pixel_stack()),
-            ('TheElusiveGolemancer 34', lambda: BT.Wait(5_000)),
-            ('TheElusiveGolemancer 35', lambda: BT.DropBundle(log=True)),
-            ('TheElusiveGolemancer 36', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS),max_distance=10_000.0,timeout_ms=10_000,allow_unassigned=True,interaction_interval_ms=500,log=True,),),
-            ('TheElusiveGolemancer 37', lambda: BT.Wait(1_000)),
-            ('TheElusiveGolemancer 38', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
-            ('TheElusiveGolemancer 39', lambda: _pixel_stack()),
-            ('TheElusiveGolemancer 40', lambda: BT.Wait(5_000)),
-            ('TheElusiveGolemancer 41', lambda: BT.DropBundle(log=True)),
-            ('TheElusiveGolemancer 42', lambda: BT.PickupGroundItemByModelID(tuple(FLUCTUATION_MATRIX_MODEL_IDS),max_distance=10_000.0,timeout_ms=10_000,allow_unassigned=True,interaction_interval_ms=500,log=True,)),
-            ('TheElusiveGolemancer 43', lambda: BT.Wait(1_000)),
-            ('TheElusiveGolemancer 44', lambda: BT.MoveAndInteractWithGadget(Vec2f(5356.0, -19374.0), log=True)),
-            ('TheElusiveGolemancer 45', lambda: _pixel_stack()),
-            ('TheElusiveGolemancer 46', lambda: BT.Wait(5_000)),
-            ('TheElusiveGolemancer 47', lambda: BT.DropBundle(log=True)),
-            ('TheElusiveGolemancer 48', lambda: BT.VanquishNode([(6882.36, -20769.41), (6566.0, -21425.0)], clear_area_radius=Range.Earshot.value)),
-            ('TheElusiveGolemancer 49', lambda: BT.WaitForMapLoad(map_id=660)),
-            ('TheElusiveGolemancer 50', lambda: _aggressive()),
-            *_planner_vanquish_point_steps('TheElusiveGolemancer 51', [(-12164.0, 10409.53),(-12584.28, 13570.28),(-15062.15, 16139.62),(-18265.0, 13647.0),]),
-            ('TheElusiveGolemancer 52', lambda: BT.WaitForMapLoad(map_id=640)),
+            ('TheElusiveGolemancer 31 Matrix Cycle Until Golem Dead', lambda: _repeat_fluctuation_matrix_until_golem_dead()),
+            ('TheElusiveGolemancer 32', lambda: BT.VanquishNode([(6882.36, -20769.41), (6566.0, -21425.0)], clear_area_radius=Range.Earshot.value)),
+            ('TheElusiveGolemancer 33', lambda: BT.WaitForMapLoad(map_id=660)),
+            ('TheElusiveGolemancer 34', lambda: _aggressive()),
+            *_planner_vanquish_point_steps('TheElusiveGolemancer 35', [(-12164.0, 10409.53),(-12584.28, 13570.28),(-15062.15, 16139.62),(-18265.0, 13647.0),]),
+            ('TheElusiveGolemancer 36', lambda: BT.WaitForMapLoad(map_id=640)),
         ]
 
 def _unflag_alittlehelp_heroes_local() -> BehaviorTree:
@@ -2811,40 +2889,95 @@ def _unflag_alittlehelp_heroes_local() -> BehaviorTree:
         ],
     )
 
+ALITTLEHELP_WIPE_RESTART_STEP = 'A Little Help - 09 Dialog'
+ALITTLEHELP_WIPE_STEP_PREFIXES = tuple(f'A Little Help - {index:02d} ' for index in range(9, 27))
+
+
+def _alittlehelp_wipe_restart_service() -> BehaviorTree:
+    state = {"armed": False, "last_return_ms": 0.0}
+
+    def _is_alittlehelp_mission_step(step_name: str) -> bool:
+        return any(step_name.startswith(prefix) for prefix in ALITTLEHELP_WIPE_STEP_PREFIXES)
+
+    def _tick(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        recovery_active = bool(node.blackboard.get("party_wipe_recovery_active", False))
+        recovery_step = str(node.blackboard.get("party_wipe_recovery_step_name", "") or "")
+        current_step = str(node.blackboard.get("current_step_name", "") or "")
+
+        if not state["armed"] and recovery_active and (_is_alittlehelp_mission_step(recovery_step) or _is_alittlehelp_mission_step(current_step)):
+            state["armed"] = True
+            state["last_return_ms"] = 0.0
+            ConsoleLog(MODULE_NAME, f"A Little Help wipe detected; restarting from '{ALITTLEHELP_WIPE_RESTART_STEP}'.", log=True)
+
+        if not state["armed"]:
+            return BehaviorTree.NodeState.RUNNING
+
+        # Désactive temporairement le recovery standard pour empêcher
+        # une reprise de l'étape courante.
+        node.blackboard["party_wipe_recovery_suppressed"] = True
+        node.blackboard["restart_step_name_request"] = ""
+
+        # Une fois revenu à Rata Sum, reprendre au dialogue qui relance la mission.
+        if Map.IsMapReady() and Map.IsOutpost() and int(Map.GetMapID() or 0) == 640 and GLOBAL_CACHE.Party.IsPartyLoaded():
+            node.blackboard["party_wipe_recovery_suppressed"] = False
+            node.blackboard["restart_step_name_request"] = ALITTLEHELP_WIPE_RESTART_STEP
+            state["armed"] = False
+            state["last_return_ms"] = 0.0
+            ConsoleLog(MODULE_NAME, f"A Little Help recovery ready; restarting from '{ALITTLEHELP_WIPE_RESTART_STEP}'.", log=True)
+            return BehaviorTree.NodeState.RUNNING
+
+        # Même si GW prévoit une résurrection au sanctuaire, on force ici
+        # le retour à l'avant-poste afin de relancer correctement la mission.
+        now = time.monotonic() * 1000.0
+        if Map.IsMapReady() and now - state["last_return_ms"] >= 1000.0:
+            GLOBAL_CACHE.Party.ReturnToOutpost()
+            state["last_return_ms"] = now
+
+        return BehaviorTree.NodeState.RUNNING
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="A Little Help Wipe Restart Service",
+            action_fn=_tick,
+            aftercast_ms=0,
+        )
+    )
 
 def _steps_ALittleHelp() -> list[PlannerStep]:
-        return [
-('ALittleHelp 0', lambda: BT.MoveAndExitMap(Vec2f(20320,16861), target_map_id=501)),
-*_planner_vanquish_point_steps('ALittleHelp 1', [(-22469,-5887),(-12978,-8490),(2552,-9452),(9029,-9692),(14574,-9613)]),
-('ALittleHelp 2', lambda: BT.MoveAndDialog(Vec2f(17611.00, -9341.00), 8598532)),
-*_planner_vanquish_point_steps('ALittleHelp 3',[(8016,-10470),(1025,-8638),(-4327,-10132),(-8425,-12543),]),
-('ALittleHelp 4', lambda: BT.MoveAndExitMap(Vec2f(-8618,-14375), target_map_id=572)),
-*_planner_vanquish_point_steps('ALittleHelp 4',[(-5413,15875),(-15672,11827),(-10182,-115),(-16273,-5484),(-20039,-10133),(-21923,-9612),(-24115,-10567)]),
-('ALittleHelp 6', lambda: BT.WaitUntilOutOfCombat()),
-('ALittleHelp 7', lambda: BT.MoveAndDialogByModelID(6789, 8598532)),
-('ALittleHelp 8', lambda: BT.Travel(target_map_name="Rata Sum")),
-('ALittleHelp 9', lambda: BT.MoveAndDialog(Vec2f(16051.00, 15183.00), 8598535)),
-('ALittleHelp 10', lambda: BT.SendDialog(132)),
-('ALittleHelp 11', lambda: BT.WaitForMapLoad(map_id=664)),
-('ALittleHelp 17', lambda: BT.Move(Vec2f(-16715.00, 8931.00))),
-('ALittleHelp 14', lambda: BT.FlagHero(1, -17880.37, 10046.01)),
-('ALittleHelp 15', lambda: BT.FlagHero(2, -17880.37, 10046.01)),
-('ALittleHelp 16', lambda: BT.FlagHero(3, -17880.37, 10046.01)),
-('ALittleHelp 17', lambda: BT.Move(Vec2f(-15538.57, 7641.21))),
-('ALittleHelp 18', lambda: BT.Wait(5000)),
-('ALittleHelp 18', lambda: BT.WaitForClearEnemiesInArea(-15538.57, 7641.21,stable_clear_ms=60_000, radius=Range.Spirit.value, log=True)),
-('ALittleHelp 19', lambda: _unflag_alittlehelp_heroes_local()),
-('ALittleHelp 20', lambda:BT.TargetAgentByName(agent_name='Sokka', log=True)),
-('ALittleHelp 21', lambda:BT.InteractTargetAndSendDialog(132)),
-('ALittleHelp 22', lambda: BT.DropBundle(log=True)),
-('ALittleHelp 23', lambda: BT.Wait(5000)),
-('ALittleHelp 21', lambda:BT.InteractTargetAndSendDialog(132)),
-('ALittleHelp 22', lambda: BT.DropBundle(log=True)),
-*_planner_vanquish_point_steps('ALittleHelp 23',[(-16519,9556),(-14161,7403),(-10389,9222),(-9492,10399),(-7471,13112),(-6188,15259),]),
-('ALittleHelp 24', lambda: BT.WaitForMapToChange(map_id=640)),
-('ALittleHelp 25', lambda: BT.MoveAndDialog(Vec2f(16051.00, 15183.00),8622855))
-
-]
+    return [
+        ('A Little Help - 00 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(20320, 16861), target_map_id=501)),
+        *_planner_vanquish_point_steps('A Little Help - 01 Vanquish Route 01', [(-22469, -5887), (-12978, -8490), (2552, -9452), (9029, -9692), (14574, -9613)]),
+        ('A Little Help - 02 Dialog', lambda: BT.MoveAndDialog(Vec2f(17611.00, -9341.00), 8598532)),
+        *_planner_vanquish_point_steps('A Little Help - 03 Vanquish Route 02', [(8016, -10470), (1025, -8638), (-4327, -10132), (-8425, -12543)]),
+        ('A Little Help - 04 Move And Exit Map', lambda: BT.MoveAndExitMap(Vec2f(-8618, -14375), target_map_id=572)),
+        *_planner_vanquish_point_steps('A Little Help - 05 Vanquish Route 03', [(-5413, 15875), (-15672, 11827), (-10182, -115), (-16273, -5484), (-20039, -10133), (-21923, -9612), (-24115, -10567)]),
+        ('A Little Help - 06 Wait Out Of Combat', lambda: BT.WaitUntilOutOfCombat()),
+        ('A Little Help - 07 Dialog Model ID 6789', lambda: BT.MoveAndDialogByModelID(6789, 8598532)),
+        ('A Little Help - 08 Travel To Rata Sum', lambda: BT.Travel(target_map_name="Rata Sum")),
+        ('A Little Help - 09 Dialog', lambda: BT.MoveAndDialog(Vec2f(16051.00, 15183.00), 8598535)),
+        ('A Little Help - 10 Send Dialog 132', lambda: BT.SendDialog(132)),
+        ('A Little Help - 11 Wait For Map 664', lambda: BT.WaitForMapLoad(map_id=664)),
+        ('A Little Help - 12 Move To Fight Position', lambda: BT.Move(Vec2f(-16715.00, 8931.00))),
+        ('A Little Help - 13 Flag Hero 1', lambda: BT.FlagHero(1, -17880.37, 10046.01)),
+        ('A Little Help - 14 Flag Hero 2', lambda: BT.FlagHero(2, -17880.37, 10046.01)),
+        ('A Little Help - 15 Flag Hero 3', lambda: BT.FlagHero(3, -17880.37, 10046.01)),
+        ('A Little Help - 16 Move To Combat Area', lambda: BT.Move(Vec2f(-15365,8605),)),
+        ('A Little Help - 17 Wait 5 Seconds', lambda: BT.Wait(5000)),
+        ('A Little Help - 18 Wait For Area Clear', lambda: BT.WaitForClearEnemiesInArea(-15365,8605, stable_clear_ms=80_000, radius=Range.Longbow.value, log=True, keep_player_near_center=True)),
+        ('A Little Help - 19 Unflag Heroes', lambda: _unflag_alittlehelp_heroes_local()),
+        ('A Little Help - 19 Move to secure position', lambda:BT.Move((-16246,9117))),
+        ('A Little Help - 20 Target Sokka', lambda: BT.TargetAgentByName(agent_name='Sokka', log=True)),
+        ('A Little Help - 21 Interact With Sokka And Send Dialog', lambda: BT.InteractTargetAndSendDialog(0x84)),
+        ('A Little Help - 21 Interact With Sokka And Send Dialog', lambda: BT.InteractTargetAndSendDialog(0x84)),
+        ('A Little Help - 22 Drop Bundle', lambda: BT.DropBundle(log=True)),
+        ('A Little Help - 23 Wait 10 Seconds', lambda: BT.Wait(10000)),
+        ('A Little Help - 24 Interact With Sokka And Send Dialog', lambda: BT.InteractTargetAndSendDialog(0x84)),
+        ('A Little Help - 24 Interact With Sokka And Send Dialog', lambda: BT.InteractTargetAndSendDialog(0x84)),
+        ('A Little Help - 25 Drop Bundle', lambda: BT.DropBundle(log=True)),
+        *_planner_vanquish_point_steps('A Little Help - 26 Vanquish Route 04', [(-16464,9550),(-17826,11011),(-17046,14895),(-12464,13766),(-4723,13262),(-6188, 15259)]),
+        ('A Little Help - 27 Wait For Map 640', lambda: BT.WaitForMapToChange(map_id=640)),
+        ('A Little Help - 28 Final Dialog', lambda: BT.MoveAndDialog(Vec2f(16051.00, 15183.00), 8622855)),
+    ]
 
 def _steps_Jalis() -> list[PlannerStep]:
         return [
@@ -3844,6 +3977,8 @@ def ensure_botting_tree() -> BottingTree:
                 enable_party_wipe_recovery=True,
             ),
         )
+
+        botting_tree.AddServiceTree("A Little Help Wipe Restart", _alittlehelp_wipe_restart_service)
 
     return botting_tree
 
