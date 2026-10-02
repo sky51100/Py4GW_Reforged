@@ -2756,9 +2756,32 @@ def DropTorchForCombat(log: bool = False) -> BehaviorTree:
         except Exception:
             _last_torch_drop_position = None
 
-        return _verified_drop_bundle(
+        release_tree = _verified_drop_bundle(
             'Drop Torch For Combat - Confirm Release',
             log=log,
+        )
+        if not TORCH_DIAGNOSTICS or _last_torch_drop_position is None:
+            return release_tree
+
+        origin = _last_torch_drop_position
+        before_items, before_gadgets = _torch_drop_debug_snapshot('BEFORE', origin)
+
+        def _released_snapshot(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+            _torch_drop_debug_snapshot('RELEASED', origin, before_items, before_gadgets)
+            return BehaviorTree.NodeState.SUCCESS
+
+        def _settled_snapshot(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+            _torch_drop_debug_snapshot('SETTLED', origin, before_items, before_gadgets)
+            return BehaviorTree.NodeState.SUCCESS
+
+        return BT.Sequence(
+            name='Drop Torch For Combat - With Debug Snapshots',
+            children=[
+                release_tree,
+                BehaviorTree(BehaviorTree.ActionNode(name='Torch Drop Snapshot - Released', action_fn=_released_snapshot, aftercast_ms=0)),
+                BT.Wait(350),
+                BehaviorTree(BehaviorTree.ActionNode(name='Torch Drop Snapshot - Settled', action_fn=_settled_snapshot, aftercast_ms=0)),
+            ],
         )
 
     return BT.Subtree(name='Drop Torch For Combat If Required', subtree_fn=_build)
@@ -2835,7 +2858,10 @@ def _torch_aware_combat_node(
             and _enemy_in_torch_combat_range(trigger_radius)
         )
 
-        if should_drop_torch:
+        # Finish a started drop subtree even after the bundle disappears from
+        # the character's hands. Otherwise the 250ms release confirmation (and
+        # the diagnostic after-snapshots) would never get a subsequent tick.
+        if drop_tree is not None or should_drop_torch:
             if drop_tree is None:
                 drop_tree = DropTorchForCombat(log=True)
 
@@ -2905,6 +2931,98 @@ def TorchAwareMoveAndKill(
         return BT.MoveAndKill(pos, clear_area_radius=clear_area_radius, log=False)
 
     return _torch_aware_combat_node(name, _create)
+
+
+def _torch_agent_brief(agent_id: int) -> str:
+    """Best-effort details of a positively detected ground item, no character names."""
+    try:
+        item_id = int(Agent.GetItemAgentItemID(agent_id) or 0)
+        owner_id = int(Agent.GetItemAgentOwnerID(agent_id) or 0)
+        model_id = int(GLOBAL_CACHE.Item.GetModelID(item_id) or 0) if item_id > 0 else 0
+        player_id = int(Player.GetAgentID() or 0)
+        px, py = Agent.GetXY(player_id)
+        x, y = Agent.GetXY(agent_id)
+        distance = ((float(x) - float(px)) ** 2 + (float(y) - float(py)) ** 2) ** 0.5
+        return (f'AgentID={agent_id}, ItemID={item_id}, ModelID={model_id}, '
+                f'OwnerID={owner_id}, player_dist={distance:.0f}')
+    except Exception as exc:
+        return f'AgentID={agent_id}, details_error={type(exc).__name__}: {exc}'
+
+
+def _torch_drop_debug_snapshot(
+    stage: str,
+    origin: tuple[float, float],
+    before_items: set[int] | None = None,
+    before_gadgets: set[int] | None = None,
+) -> tuple[set[int], set[int]]:
+    """Compare ItemAgents and GadgetAgents near a combat drop, diagnostic only.
+
+    The baseline is captured before DropBundle and compared with snapshots after
+    release. Unknown agents are logged, NEVER used as pickup candidates.
+    """
+    nearby_items: list[tuple[float, int, int, int, int]] = []
+    nearby_gadgets: list[tuple[float, int, int]] = []
+    try:
+        item_array = list(AgentArray.GetItemArray() or [])
+        gadget_array = list(AgentArray.GetGadgetArray() or [])
+        for raw_id in item_array:
+            try:
+                agent_id = int(raw_id or 0)
+                if agent_id <= 0 or not Agent.GetItemAgentByID(agent_id):
+                    continue
+                x, y = Agent.GetXY(agent_id)
+                distance = ((float(x) - origin[0]) ** 2 + (float(y) - origin[1]) ** 2) ** 0.5
+                if distance > 950.0:
+                    continue
+                item_id = int(Agent.GetItemAgentItemID(agent_id) or 0)
+                owner_id = int(Agent.GetItemAgentOwnerID(agent_id) or 0)
+                model_id = int(GLOBAL_CACHE.Item.GetModelID(item_id) or 0) if item_id > 0 else 0
+                nearby_items.append((distance, agent_id, item_id, model_id, owner_id))
+            except Exception as exc:
+                PySystem.Console.Log(MODULE_NAME, f'[Torch Debug] {stage} item scan error: {type(exc).__name__}: {exc}', PySystem.Console.MessageType.Warning)
+        for raw_id in gadget_array:
+            try:
+                agent_id = int(raw_id or 0)
+                if agent_id <= 0:
+                    continue
+                x, y = Agent.GetXY(agent_id)
+                distance = ((float(x) - origin[0]) ** 2 + (float(y) - origin[1]) ** 2) ** 0.5
+                if distance > 950.0:
+                    continue
+                gadget_id = int(Agent.GetGadgetID(agent_id) or 0)
+                nearby_gadgets.append((distance, agent_id, gadget_id))
+            except Exception as exc:
+                PySystem.Console.Log(MODULE_NAME, f'[Torch Debug] {stage} gadget scan error: {type(exc).__name__}: {exc}', PySystem.Console.MessageType.Warning)
+
+        nearby_items.sort()
+        nearby_gadgets.sort()
+        PySystem.Console.Log(
+            MODULE_NAME,
+            (f'[Torch Debug] DROP {stage}: held={_is_holding_bundle()}, '
+             f'origin=({origin[0]:.0f},{origin[1]:.0f}), '
+             f'near_items={len(nearby_items)}/{len(item_array)}, '
+             f'near_gadgets={len(nearby_gadgets)}/{len(gadget_array)} (radius=950)'),
+            PySystem.Console.MessageType.Info,
+        )
+        for distance, agent_id, item_id, model_id, owner_id in nearby_items[:12]:
+            added = 'NEW' if before_items is not None and agent_id not in before_items else 'existing'
+            PySystem.Console.Log(
+                MODULE_NAME,
+                (f'[Torch Debug] DROP {stage} ItemAgent={agent_id}, ItemID={item_id}, '
+                 f'ModelID={model_id}, OwnerID={owner_id}, drop_dist={distance:.0f}, {added}'),
+                PySystem.Console.MessageType.Info,
+            )
+        for distance, agent_id, gadget_id in nearby_gadgets[:12]:
+            added = 'NEW' if before_gadgets is not None and agent_id not in before_gadgets else 'existing'
+            PySystem.Console.Log(
+                MODULE_NAME,
+                (f'[Torch Debug] DROP {stage} GadgetAgent={agent_id}, '
+                 f'GadgetID={gadget_id}, drop_dist={distance:.0f}, {added}'),
+                PySystem.Console.MessageType.Info,
+            )
+    except Exception as exc:
+        PySystem.Console.Log(MODULE_NAME, f'[Torch Debug] DROP {stage} scan failed: {type(exc).__name__}: {exc}', PySystem.Console.MessageType.Warning)
+    return ({entry[1] for entry in nearby_items}, {entry[1] for entry in nearby_gadgets})
 
 
 def _log_torch_ground_diagnostics() -> None:
@@ -3011,6 +3129,38 @@ def _log_torch_ground_diagnostics() -> None:
                 f'[Torch Debug] {len(records) - 12} additional ground agents omitted from this snapshot.',
                 PySystem.Console.MessageType.Info,
             )
+
+        # The current pickup searches ItemArray only. Check GadgetArray as a
+        # separate observation; NEVER treat an unknown gadget as a torch.
+        gadget_candidates: list[tuple[float, int, int]] = []
+        try:
+            gadgets = list(AgentArray.GetGadgetArray() or [])
+            anchor = drop_pos if drop_pos is not None else (float(px), float(py))
+            for raw_id in gadgets:
+                try:
+                    gadget_agent_id = int(raw_id or 0)
+                    if gadget_agent_id <= 0:
+                        continue
+                    gx, gy = Agent.GetXY(gadget_agent_id)
+                    distance = ((float(gx) - anchor[0]) ** 2 + (float(gy) - anchor[1]) ** 2) ** 0.5
+                    if distance <= 950.0:
+                        gadget_candidates.append((distance, gadget_agent_id, int(Agent.GetGadgetID(gadget_agent_id) or 0)))
+                except Exception as exc:
+                    PySystem.Console.Log(MODULE_NAME, f'[Torch Debug] Gadget candidate error: {type(exc).__name__}: {exc}', PySystem.Console.MessageType.Warning)
+            gadget_candidates.sort()
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f'[Torch Debug] Gadget scan: total={len(gadgets)}, near_anchor={len(gadget_candidates)}, anchor={"drop" if drop_pos is not None else "player"} (radius=950).',
+                PySystem.Console.MessageType.Info,
+            )
+            for distance, agent_id, gadget_id in gadget_candidates[:12]:
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    f'[Torch Debug] GadgetAgent={agent_id}, GadgetID={gadget_id}, anchor_dist={distance:.0f}.',
+                    PySystem.Console.MessageType.Info,
+                )
+        except Exception as exc:
+            PySystem.Console.Log(MODULE_NAME, f'[Torch Debug] Gadget scan error: {type(exc).__name__}: {exc}', PySystem.Console.MessageType.Warning)
     except Exception as exc:
         PySystem.Console.Log(
             MODULE_NAME,
@@ -3083,24 +3233,32 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
     retry_at = 0.0
     last_ground_torch_seen_at = 0.0
     last_diagnostic_at = 0.0
+    last_detected_torch_agent = 0
+    last_detected_brief = 'none'
+    pickup_request_logged = False
     search_logged = False
     retrace_logged = False
 
     def _reset_state() -> None:
         nonlocal pickup_tree, return_to_drop_tree, started_at, retry_at
         nonlocal last_ground_torch_seen_at, last_diagnostic_at, search_logged, retrace_logged
+        nonlocal last_detected_torch_agent, last_detected_brief, pickup_request_logged
         pickup_tree = _create_pickup_tree()
         return_to_drop_tree = None
         started_at = 0.0
         retry_at = 0.0
         last_ground_torch_seen_at = 0.0
         last_diagnostic_at = 0.0
+        last_detected_torch_agent = 0
+        last_detected_brief = 'none'
+        pickup_request_logged = False
         search_logged = False
         retrace_logged = False
 
     def _pickup_torch_step(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
         nonlocal pickup_tree, return_to_drop_tree, started_at, retry_at
         nonlocal last_ground_torch_seen_at, last_diagnostic_at, search_logged, retrace_logged
+        nonlocal last_detected_torch_agent, last_detected_brief, pickup_request_logged
         global _shrine_recovery_torch_skip_active, _last_torch_drop_position
 
         now = time.monotonic()
@@ -3109,6 +3267,15 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
             _shrine_recovery_torch_skip_active = True
 
         if _is_holding_bundle():
+            if TORCH_DIAGNOSTICS:
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    (f'[Torch Debug] PICKUP HOLD CONFIRMED: held=True, '
+                     f'last_detected={last_detected_brief}, '
+                     f'elapsed_ms={int((now - started_at) * 1000.0) if started_at > 0.0 else 0}; '
+                     'source not inferred when there was no detected candidate.'),
+                    PySystem.Console.MessageType.Success,
+                )
             _shrine_recovery_torch_skip_active = False
             _last_torch_drop_position = None
             _reset_state()
@@ -3162,6 +3329,14 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
 
         if ground_torch:
             last_ground_torch_seen_at = now
+            if TORCH_DIAGNOSTICS and int(ground_torch) != last_detected_torch_agent:
+                last_detected_torch_agent = int(ground_torch)
+                last_detected_brief = _torch_agent_brief(last_detected_torch_agent)
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    f'[Torch Debug] FOUND: {last_detected_brief}.',
+                    PySystem.Console.MessageType.Success,
+                )
         elif (
             ground_torch == 0
             and last_ground_torch_seen_at > 0.0
@@ -3209,6 +3384,7 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
 
             return_to_drop_tree = None
             pickup_tree = _create_pickup_tree()
+            pickup_request_logged = False
             pickup_tree.blackboard = node.blackboard
             retry_at = 0.0
             return BehaviorTree.NodeState.RUNNING
@@ -3221,6 +3397,17 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
         if now < retry_at:
             return BehaviorTree.NodeState.RUNNING
 
+        if TORCH_DIAGNOSTICS and not pickup_request_logged:
+            pickup_request_logged = True
+            target_description = (
+                _torch_agent_brief(int(ground_torch)) if ground_torch is not None
+                else 'ground scan returned None (exception/unavailable)'
+            )
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f'[Torch Debug] PICKUP REQUEST: {target_description}; using existing BT.PickupGroundItemByModelID.',
+                PySystem.Console.MessageType.Info,
+            )
         pickup_tree.blackboard = node.blackboard
         pickup_result = BehaviorTree.Node._normalize_state(pickup_tree.tick())
 
@@ -3228,12 +3415,25 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
             return BehaviorTree.NodeState.RUNNING
 
         if pickup_result == BehaviorTree.NodeState.SUCCESS and _is_holding_bundle():
+            if TORCH_DIAGNOSTICS:
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    f'[Torch Debug] PICKUP CONFIRMED: last_detected={last_detected_brief}; held=True.',
+                    PySystem.Console.MessageType.Success,
+                )
             _shrine_recovery_torch_skip_active = False
             _last_torch_drop_position = None
             _reset_state()
             return BehaviorTree.NodeState.SUCCESS
 
+        if TORCH_DIAGNOSTICS:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f'[Torch Debug] PICKUP RESULT: state={pickup_result}, held={_is_holding_bundle()}; resetting pickup tree for retry.',
+                PySystem.Console.MessageType.Warning,
+            )
         pickup_tree = _create_pickup_tree()
+        pickup_request_logged = False
         pickup_tree.blackboard = node.blackboard
         retry_at = now + RETRY_DELAY_MS / 1000.0
         return BehaviorTree.NodeState.RUNNING
