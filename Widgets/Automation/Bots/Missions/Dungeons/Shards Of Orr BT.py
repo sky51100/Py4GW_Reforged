@@ -241,6 +241,10 @@ L1_PATH_AFTER_DOOR = [Vec2f(17442.4, 2577.83), Vec2f(20181.6, 1203.7), Vec2f(204
 # Level 2 routes / torch mechanics
 TORCH_MODEL_IDS = (22341, 22342)
 TORCH_BUFF_ID = 2545
+# Temporary diagnostic mode for torch pickup. Disable after testing.
+TORCH_DIAGNOSTICS = True
+TORCH_DIAGNOSTIC_INTERVAL_MS = 3_000
+TORCH_INITIAL_RETRACE_GRACE_MS = 1_000
 # Martial leaders keep carrying the torch until enemies are genuinely close.
 # This only controls the automatic torch DROP trigger; Vanquish clear radii
 # remain unchanged.
@@ -2898,6 +2902,118 @@ def TorchAwareMoveAndKill(
     return _torch_aware_combat_node(name, _create)
 
 
+def _log_torch_ground_diagnostics() -> None:
+    """Diagnose a missed torch without changing the actual pickup filters.
+
+    Runs only after a failed _find_ground_torch() and is rate-limited by PickupTorch.
+    The model-ID candidates are reported even if an owner/range filter rejects them.
+    """
+    try:
+        player_id = int(Player.GetAgentID() or 0)
+        if player_id <= 0:
+            PySystem.Console.Log(MODULE_NAME, '[Torch Debug] Invalid local player AgentID.', PySystem.Console.MessageType.Warning)
+            return
+
+        px, py = Agent.GetXY(player_id)
+        drop_pos = _last_torch_drop_position
+        items = list(AgentArray.GetItemArray() or [])
+        records: list[dict[str, object]] = []
+        torch_model_count = 0
+        eligible_count = 0
+
+        for raw_agent_id in items:
+            agent_id = int(raw_agent_id or 0)
+            item_id = owner_id = model_id = 0
+            player_distance: float | None = None
+            drop_distance: float | None = None
+            valid_agent = False
+            reason = 'invalid agent ID'
+            try:
+                if agent_id > 0:
+                    valid_agent = bool(Agent.GetItemAgentByID(agent_id))
+                    if valid_agent:
+                        owner_id = int(Agent.GetItemAgentOwnerID(agent_id) or 0)
+                        item_id = int(Agent.GetItemAgentItemID(agent_id) or 0)
+                        if item_id > 0:
+                            model_id = int(GLOBAL_CACHE.Item.GetModelID(item_id) or 0)
+                        x, y = Agent.GetXY(agent_id)
+                        player_distance = ((float(x) - float(px)) ** 2 + (float(y) - float(py)) ** 2) ** 0.5
+                        if drop_pos is not None:
+                            drop_distance = ((float(x) - drop_pos[0]) ** 2 + (float(y) - drop_pos[1]) ** 2) ** 0.5
+
+                if not valid_agent:
+                    reason = 'invalid item-agent'
+                elif item_id <= 0:
+                    reason = 'invalid ItemID'
+                elif model_id not in TORCH_MODEL_IDS:
+                    reason = 'different ModelID'
+                elif owner_id not in (0, player_id):
+                    reason = 'owner filter'
+                elif player_distance is None or player_distance > 7500.0:
+                    reason = 'outside 7500 range'
+                else:
+                    reason = 'ELIGIBLE'
+                    eligible_count += 1
+            except Exception as exc:
+                reason = f'candidate error: {type(exc).__name__}: {exc}'
+
+            if model_id in TORCH_MODEL_IDS:
+                torch_model_count += 1
+            records.append({
+                'agent': agent_id, 'item': item_id, 'model': model_id, 'owner': owner_id,
+                'distance': player_distance, 'drop_distance': drop_distance, 'reason': reason,
+            })
+
+        player_drop_distance = None if drop_pos is None else (
+            ((float(px) - drop_pos[0]) ** 2 + (float(py) - drop_pos[1]) ** 2) ** 0.5
+        )
+        PySystem.Console.Log(
+            MODULE_NAME,
+            (f'[Torch Debug] Scan: player={player_id}, items={len(items)}, '
+             f'torch_ModelIDs={torch_model_count}, eligible={eligible_count}, '
+             f'distance_to_recorded_drop={player_drop_distance:.0f}'
+             if player_drop_distance is not None else
+             f'[Torch Debug] Scan: player={player_id}, items={len(items)}, '
+             f'torch_ModelIDs={torch_model_count}, eligible={eligible_count}, recorded_drop=None'),
+            PySystem.Console.MessageType.Warning,
+        )
+
+        # Show every torch candidate first, then the closest other ground items.
+        # This lets us spot a wrong ModelID, owner, range, or missing agent data.
+        records.sort(key=lambda entry: (
+            0 if entry['model'] in TORCH_MODEL_IDS else 1,
+            min(
+                entry['distance'] if entry['distance'] is not None else float('inf'),
+                entry['drop_distance'] if entry['drop_distance'] is not None else float('inf'),
+            ),
+        ))
+        for entry in records[:12]:
+            distance = entry['distance']
+            drop_distance = entry['drop_distance']
+            distance_label = '?' if distance is None else f'{distance:.0f}'
+            drop_distance_label = '?' if drop_distance is None else f'{drop_distance:.0f}'
+            PySystem.Console.Log(
+                MODULE_NAME,
+                (f"[Torch Debug] AgentID={entry['agent']}, ItemID={entry['item']}, "
+                 f"ModelID={entry['model']}, OwnerID={entry['owner']}, "
+                 f"player_dist={distance_label}, drop_dist={drop_distance_label}, "
+                 f"filter={entry['reason']}"),
+                PySystem.Console.MessageType.Info,
+            )
+        if len(records) > 12:
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f'[Torch Debug] {len(records) - 12} additional ground agents omitted from this snapshot.',
+                PySystem.Console.MessageType.Info,
+            )
+    except Exception as exc:
+        PySystem.Console.Log(
+            MODULE_NAME,
+            f'[Torch Debug] Ground scan exception: {type(exc).__name__}: {exc}',
+            PySystem.Console.MessageType.Error,
+        )
+
+
 def _find_ground_torch() -> int | None:
     """Return a nearby pickup-compatible torch agent, 0 if absent, None if the scan failed."""
     try:
@@ -2961,23 +3077,25 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
     started_at = 0.0
     retry_at = 0.0
     last_ground_torch_seen_at = 0.0
+    last_diagnostic_at = 0.0
     search_logged = False
     retrace_logged = False
 
     def _reset_state() -> None:
         nonlocal pickup_tree, return_to_drop_tree, started_at, retry_at
-        nonlocal last_ground_torch_seen_at, search_logged, retrace_logged
+        nonlocal last_ground_torch_seen_at, last_diagnostic_at, search_logged, retrace_logged
         pickup_tree = _create_pickup_tree()
         return_to_drop_tree = None
         started_at = 0.0
         retry_at = 0.0
         last_ground_torch_seen_at = 0.0
+        last_diagnostic_at = 0.0
         search_logged = False
         retrace_logged = False
 
     def _pickup_torch_step(node: BehaviorTree.Node) -> BehaviorTree.NodeState:
         nonlocal pickup_tree, return_to_drop_tree, started_at, retry_at
-        nonlocal last_ground_torch_seen_at, search_logged, retrace_logged
+        nonlocal last_ground_torch_seen_at, last_diagnostic_at, search_logged, retrace_logged
         global _shrine_recovery_torch_skip_active, _last_torch_drop_position
 
         now = time.monotonic()
@@ -3028,6 +3146,15 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
 
         ground_torch = _find_ground_torch()
 
+        # Diagnostic snapshots are captured only on misses, at most every 3s.
+        if (
+            TORCH_DIAGNOSTICS
+            and (ground_torch is None or ground_torch == 0)
+            and (last_diagnostic_at <= 0.0 or (now - last_diagnostic_at) * 1000.0 >= TORCH_DIAGNOSTIC_INTERVAL_MS)
+        ):
+            last_diagnostic_at = now
+            _log_torch_ground_diagnostics()
+
         if ground_torch:
             last_ground_torch_seen_at = now
         elif (
@@ -3042,6 +3169,9 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
 
         if ground_torch == 0 and _last_torch_drop_position is not None:
             if return_to_drop_tree is None:
+                # Avoid retracing immediately after a transient ground-agent miss.
+                if elapsed_ms < TORCH_INITIAL_RETRACE_GRACE_MS:
+                    return BehaviorTree.NodeState.RUNNING
                 drop_x, drop_y = _last_torch_drop_position
                 return_to_drop_tree = BT.Move(
                     Vec2f(float(drop_x), float(drop_y)),

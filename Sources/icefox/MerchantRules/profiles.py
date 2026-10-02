@@ -30,6 +30,9 @@ PROFILE_MIGRATION_SCHEMA = 'merchant_rules_profile_migration_v1'
 PROFILE_MIGRATION_SCHEMA_VERSION = 1
 LOADED_PROFILE_STATE_SCHEMA = 'merchant_rules_loaded_profile_state_v1'
 LOADED_PROFILE_STATE_SCHEMA_VERSION = 1
+CHARACTER_PROFILE_STATE_DOC_NAME = 'Widgets/MerchantRules/CharacterProfileState.json'
+CHARACTER_PROFILE_STATE_SCHEMA = 'merchant_rules_character_profile_state_v1'
+CHARACTER_PROFILE_STATE_SCHEMA_VERSION = 1
 PROFILE_SCOPE_SHARED = 'shared'
 PROFILE_SCOPE_ACCOUNT = 'account'
 PROFILE_SCOPES: tuple[str, ...] = (
@@ -54,6 +57,14 @@ class LoadedProfileProvenance:
     display_name_snapshot: str
     normalized_content_fingerprint: str
     associated_at_unix_ms: int
+
+
+@dataclass(frozen=True)
+class CharacterProfileAssociation:
+    """Remember one character's explicitly loaded saved profile."""
+
+    profile_identity: ProfileIdentity
+    character_name_snapshot: str = ''
 
 
 @dataclass
@@ -541,3 +552,59 @@ class ProfileStore:
             normalized_content_fingerprint=content_fingerprint,
             associated_at_unix_ms=max(0, _safe_int(raw_state.get('associated_at_unix_ms', 0), 0)),
         )
+
+
+def normalize_character_profile_state_root(raw_state: object) -> dict[str, object]:
+    """Validate the independent root schema for per-character profile memory."""
+
+    if not isinstance(raw_state, dict):
+        raise ValueError('Character profile state must be a JSON object.')
+    state = cast(dict[str, object], raw_state)
+    if str(state.get('schema', '') or '').strip() != CHARACTER_PROFILE_STATE_SCHEMA:
+        raise ValueError('Character profile state schema is not supported.')
+    schema_version = _safe_int(state.get('schema_version', 0), 0)
+    if schema_version != CHARACTER_PROFILE_STATE_SCHEMA_VERSION:
+        if schema_version > CHARACTER_PROFILE_STATE_SCHEMA_VERSION:
+            raise ValueError(
+                f'Character profile state schema v{schema_version} is newer than supported schema '
+                f'v{CHARACTER_PROFILE_STATE_SCHEMA_VERSION}.'
+            )
+        raise ValueError('Character profile state schema version is not supported.')
+    characters = state.get('characters', {})
+    if not isinstance(characters, dict):
+        raise ValueError('Character profile state entries must be a JSON object.')
+    return state
+
+
+def character_profile_association_from_json(raw_entry: object) -> CharacterProfileAssociation:
+    """Validate one character mapping without making other entries authoritative."""
+
+    if not isinstance(raw_entry, dict):
+        raise ValueError('Character profile association must be a JSON object.')
+    entry = cast(dict[str, object], raw_entry)
+    source_scope = str(entry.get('source_scope', '') or '').strip()
+    source_key = str(entry.get('source_key', '') or '').strip()
+    if source_scope not in PROFILE_SCOPES:
+        raise ValueError('Character profile association scope is invalid.')
+    if not is_valid_profile_id(source_key):
+        raise ValueError('Character profile association key is invalid.')
+    name_snapshot = _normalize_shared_profile_display_name(entry.get('character_name_snapshot', ''))[:128]
+    return CharacterProfileAssociation(
+        profile_identity=ProfileIdentity(source_scope, source_key),
+        character_name_snapshot=name_snapshot,
+    )
+
+
+def character_profile_association_to_json(
+    association: CharacterProfileAssociation,
+) -> dict[str, object]:
+    """Serialize one mapping using the stable saved-profile identity only."""
+
+    identity = association.profile_identity
+    if identity.scope not in PROFILE_SCOPES or not is_valid_profile_id(identity.key):
+        raise ValueError('Character profile association identity is invalid.')
+    return {
+        'source_scope': identity.scope,
+        'source_key': identity.key,
+        'character_name_snapshot': _normalize_shared_profile_display_name(association.character_name_snapshot)[:128],
+    }

@@ -18344,7 +18344,7 @@ class MerchantRulesWidget:
     def _collect_item_infos_from_ids(self, item_ids: list[int]) -> list[InventoryItemInfo]:
         items: list[InventoryItemInfo] = []
         for item_id in item_ids:
-            item_info = self._build_inventory_item_info(item_id)
+            item_info = self._build_inventory_item_info(item_id, include_runtime_name=False)
             if item_info is None:
                 continue
             items.append(item_info)
