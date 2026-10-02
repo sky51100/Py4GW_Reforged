@@ -4,6 +4,7 @@ from collections.abc import Callable, Sequence
 import os
 import time
 from Py4GWCoreLib.Listeners import Listeners
+from Py4GWCoreLib.GlobalCache.WhiteboardLocks import read_resurrection_scroll_states
 from Py4GWCoreLib.Item import has_active_party_summon
 import PySystem
 from Py4GWCoreLib.BottingTree import BottingTree
@@ -755,6 +756,7 @@ def _configure_runtime_upkeeps(*, consumables_enabled: bool | None = None, looti
     enabled_consumables = _enabled_consumable_upkeeps()
     botting_tree.Config.ConfigureUpkeep(
         looting_enabled=_runtime_looting_enabled,
+        resurrection_scroll=True,
         auto_inventory_handler_enabled=True,
         consumable_upkeeps=enabled_consumables,
         enable_party_wipe_recovery=True,
@@ -766,6 +768,10 @@ def _configure_runtime_upkeeps(*, consumables_enabled: bool | None = None, looti
     botting_tree.AddServiceTree(
         "SummoningStoneRecoveryService",
         SummoningStoneRecoveryService,
+    )
+    botting_tree.AddServiceTree(
+        "ResurrectionScrollSyncService",
+        ResurrectionScrollSyncService,
     )
     _configured_consumable_upkeeps = enabled_consumables
 
@@ -3778,12 +3784,108 @@ def MoveBetweenBraziersWithFlameRecovery(
 # endregion
 
 
+
+def ResurrectionScrollSyncService() -> BehaviorTree:
+    """Enable the existing HeroAI scroll handler on this dungeon party, including followers.
+
+    ConfigureUpkeep(resurrection_scroll=True) only changes the leader's local setting.
+    Followers acknowledge their own setting through existing Whiteboard heartbeats.
+    """
+    SYNC_INTERVAL_MS = 5_000.0
+    STATUS_INTERVAL_MS = 30_000.0
+    state = {"next_sync_ms": 0.0, "last_status_ms": 0.0, "last_pending": -1}
+
+    def _tick(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+        if not Map.IsMapReady() or not Party.IsPartyLoaded() or not Map.IsExplorable():
+            return BehaviorTree.NodeState.RUNNING
+        if int(Map.GetMapID() or 0) not in (SOO_LEVEL_1, SOO_LEVEL_2, SOO_LEVEL_3):
+            return BehaviorTree.NodeState.RUNNING
+
+        now_ms = time.monotonic() * 1000.0
+        if now_ms < float(state["next_sync_ms"]):
+            return BehaviorTree.NodeState.RUNNING
+        state["next_sync_ms"] = now_ms + SYNC_INTERVAL_MS
+
+        sender_email = str(Player.GetAccountEmail() or "").strip()
+        if not sender_email:
+            return BehaviorTree.NodeState.RUNNING
+        local_account = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(sender_email)
+        local_party_id = int(getattr(getattr(local_account, "AgentPartyData", None), "PartyID", 0) or 0)
+        # Never broadcast to unrelated clients while the party mirror is unavailable.
+        if local_party_id <= 0:
+            return BehaviorTree.NodeState.RUNNING
+
+        if botting_tree is not None and not botting_tree.IsResurrectionScrollEnabled():
+            botting_tree.EnableResurrectionScroll()
+
+        try:
+            accounts = GLOBAL_CACHE.ShMem.GetAllAccountData(sort_results=False)
+        except TypeError:
+            accounts = GLOBAL_CACHE.ShMem.GetAllAccountData()
+        except Exception as exc:
+            PySystem.Console.Log(MODULE_NAME, f"[Res Scroll] Party lookup failed: {exc}", PySystem.Console.MessageType.Warning)
+            return BehaviorTree.NodeState.RUNNING
+
+        live_states = read_resurrection_scroll_states()
+        pending: list[str] = []
+        known_followers: set[str] = set()
+        for account in accounts or []:
+            email = str(getattr(account, "AccountEmail", "") or "").strip()
+            if not email or email == sender_email or email in known_followers:
+                continue
+            account_party_id = int(getattr(getattr(account, "AgentPartyData", None), "PartyID", 0) or 0)
+            if account_party_id != local_party_id:
+                continue
+            known_followers.add(email)
+            enabled, skip_if_res_available = live_states.get(email, (False, False))
+            if not enabled or skip_if_res_available:
+                pending.append(email)
+
+        # Same existing command as HeroAI's all-accounts UI:
+        # (enabled=1, skip_if_res_available=0, mask=3, reserved=0).
+        # Mask 3 updates BOTH fields on the follower, so an available res skill
+        # does not silently suppress the explicitly requested resurrection scroll.
+        for email in pending:
+            try:
+                GLOBAL_CACHE.ShMem.SendMessage(
+                    sender_email,
+                    email,
+                    SharedCommandType.SetResurrectionScroll,
+                    (1, 0, 3, 0),
+                )
+            except Exception as exc:
+                PySystem.Console.Log(MODULE_NAME, f"[Res Scroll] Follower synchronization failed: {exc}", PySystem.Console.MessageType.Warning)
+
+        if (len(pending) != int(state["last_pending"])
+                or (pending and now_ms - float(state["last_status_ms"]) >= STATUS_INTERVAL_MS)):
+            total = len(known_followers)
+            confirmed = total - len(pending)
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"[Res Scroll] Followers confirmed={confirmed}/{total}; sync pending={len(pending)}.",
+                PySystem.Console.MessageType.Info if not pending else PySystem.Console.MessageType.Warning,
+            )
+            state["last_pending"] = len(pending)
+            state["last_status_ms"] = now_ms
+
+        return BehaviorTree.NodeState.RUNNING
+
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name="Resurrection Scroll Party Synchronization",
+            action_fn=_tick,
+            aftercast_ms=500,
+        )
+    )
+
+
 # region Bot initialization
 
 
 def _configure_botting_tree(tree: BottingTree) -> None:
     tree.Config.ConfigureUpkeep(
         looting_enabled=True,
+        resurrection_scroll=True,
         auto_inventory_handler_enabled=True,
         consumable_upkeeps=_enabled_consumable_upkeeps(),
         enable_party_wipe_recovery=True,
@@ -3793,6 +3895,10 @@ def _configure_botting_tree(tree: BottingTree) -> None:
     tree.AddServiceTree(
         "SummoningStoneRecoveryService",
         SummoningStoneRecoveryService,
+    )
+    tree.AddServiceTree(
+        "ResurrectionScrollSyncService",
+        ResurrectionScrollSyncService,
     )
 
 
@@ -3826,6 +3932,7 @@ def InitializeBot() -> BehaviorTree:
             bot.Config.Aggressive(
                 multi_account=True,
                 auto_loot=True,
+                resurrection_scroll=True,
                 account_isolation=False,
             ),
             BT.SetPlayerStatus(PlayerStatus.Offline, log=True),
