@@ -1684,6 +1684,19 @@ class CombatClass:
                 self.in_casting_routine = False
                 return False, 0
 
+        # Comfort Animal has an unusually long pet-only range (a little beyond
+        # compass range). Reject an absent, unloaded or distant pet BEFORE any
+        # cast attempt, including when automatic targeting is disabled.
+        if skill_id == self.comfort_animal:
+            pet_id = int(GLOBAL_CACHE.Party.Pets.GetPetID(player_id) or 0)
+            if (
+                pet_id == 0
+                or not Agent.IsValid(pet_id)
+                or Utils.Distance(Player.GetXY(), Agent.GetXY(pet_id)) > Range.SafeCompass.value
+            ):
+                self.in_casting_routine = False
+                return False, 0
+
         # --- Expensive target resolution (only if all cheap checks passed) ---
         v_target = self.GetAppropiateTarget(slot)
 
