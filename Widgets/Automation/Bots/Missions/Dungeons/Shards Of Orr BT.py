@@ -281,7 +281,7 @@ FENDI_CHEST_POSITION = (-15800.98, 16901.23)
 FENDI_CHEST_GADGET_ID = 8934
 
 # Stable position used to stage the leader before the final chest interaction.
-FENDI_CHEST_SAFE_POSITION = Vec2f(-15885.85, 17100.0)
+FENDI_CHEST_SAFE_POSITION = Vec2f(-15766.63, 17397.07)
 
 initialized = False
 botting_tree: BottingTree | None = None
@@ -755,7 +755,6 @@ def _configure_runtime_upkeeps(*, consumables_enabled: bool | None = None, looti
     enabled_consumables = _enabled_consumable_upkeeps()
     botting_tree.Config.ConfigureUpkeep(
         looting_enabled=_runtime_looting_enabled,
-        resurrection_scroll=True,
         auto_inventory_handler_enabled=True,
         consumable_upkeeps=enabled_consumables,
         enable_party_wipe_recovery=True,
@@ -3785,7 +3784,6 @@ def MoveBetweenBraziersWithFlameRecovery(
 def _configure_botting_tree(tree: BottingTree) -> None:
     tree.Config.ConfigureUpkeep(
         looting_enabled=True,
-        resurrection_scroll=True,
         auto_inventory_handler_enabled=True,
         consumable_upkeeps=_enabled_consumable_upkeeps(),
         enable_party_wipe_recovery=True,
@@ -3828,7 +3826,6 @@ def InitializeBot() -> BehaviorTree:
             bot.Config.Aggressive(
                 multi_account=True,
                 auto_loot=True,
-                resurrection_scroll=True,
                 account_isolation=False,
             ),
             BT.SetPlayerStatus(PlayerStatus.Offline, log=True),
