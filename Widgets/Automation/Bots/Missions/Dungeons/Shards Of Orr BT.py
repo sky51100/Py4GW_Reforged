@@ -4112,24 +4112,82 @@ def EnterShardsOfOrr(enable_consumables_on_entry: bool=False) -> BehaviorTree:
 
 
 class _PauseWhilePartyNotAliveNode(BehaviorTree.Node):
-    """Freeze the current run step while any party member is dead.
+    """Pause the current Planner child and approach fallen allies for HeroAI resurrection.
 
-    The child is not reset while blocked. HeroAI and BottingTree background
-    services keep running, so resurrection/recovery can happen independently;
-    once every party member is alive, the exact current child resumes.
+    The Planner child is never advanced or reset by this recovery. The living
+    leader approaches the nearest dead party member while surviving remote
+    accounts temporarily converge on that location, including when the leader
+    is the one who died. Each account's existing HeroAI resurrection-scroll
+    handler performs the actual use; this node only brings allies into range.
+    A full wipe still belongs to the Core shrine-recovery service.
     """
+
+    # Stay comfortably inside the Core's resurrection-scroll Earshot search.
+    RES_APPROACH_DISTANCE = max(250.0, min(500.0, float(Range.Earshot.value) * 0.45))
+    RES_MOVE_TOLERANCE = 200.0
+    RES_RETRY_MS = 2_000.0
+    RES_WAIT_LOG_MS = 15_000.0
 
     def __init__(self, child: BehaviorTree | BehaviorTree.Node, *, name: str) -> None:
         super().__init__(name=name, node_type="PartyAliveGate", node_category="decorator")
         self.child = self._coerce_node(child)
         self._blocked = False
         self._last_block_key = ""
+        self._rescue_target_id = 0
+        self._rescue_target_xy: tuple[float, float] | None = None
+        self._rescue_move_tree: BehaviorTree | None = None
+        self._rescue_next_retry_ms = 0.0
+        self._rescue_last_wait_log_ms = 0.0
+        # email -> previous (IsFlagged, FlagPos.x/y, FollowPos.x/y/z).
+        # Save only options we really overwrite and restore only our own flags.
+        self._rescue_flag_originals: dict[str, tuple[bool, float, float, float, float, float]] = {}
+        self._rescue_flag_xy: tuple[float, float] | None = None
 
     def get_children(self) -> list[BehaviorTree.Node]:
         return [self.child]
 
+    def _restore_rescue_flags(self) -> None:
+        our_xy = self._rescue_flag_xy
+        for email, previous in self._rescue_flag_originals.items():
+            try:
+                options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(email)
+                if options is None or our_xy is None:
+                    continue
+                # Do not undo a user's flag changed during this recovery.
+                if (not bool(options.IsFlagged)
+                        or abs(float(options.FlagPos.x) - our_xy[0]) > 1.0
+                        or abs(float(options.FlagPos.y) - our_xy[1]) > 1.0):
+                    continue
+                (old_flagged, old_x, old_y, old_follow_x, old_follow_y, old_follow_z) = previous
+                options.IsFlagged = old_flagged
+                options.FlagPos.x = old_x
+                options.FlagPos.y = old_y
+                # The leader publisher normally rewrites FollowPos, but an
+                # immediate restore also works if the leader is still dead.
+                if (abs(float(options.FollowPos.x) - our_xy[0]) <= 1.0
+                        and abs(float(options.FollowPos.y) - our_xy[1]) <= 1.0):
+                    options.FollowPos.x = old_follow_x
+                    options.FollowPos.y = old_follow_y
+                    options.FollowPos.z = old_follow_z
+            except Exception as exc:
+                PySystem.Console.Log(
+                    MODULE_NAME, f"[PartyAlive] Unable to restore follower rescue flag: {exc}",
+                    PySystem.Console.MessageType.Warning,
+                )
+        self._rescue_flag_originals.clear()
+        self._rescue_flag_xy = None
+
+    def _clear_rescue(self) -> None:
+        self._restore_rescue_flags()
+        self._rescue_target_id = 0
+        self._rescue_target_xy = None
+        self._rescue_move_tree = None
+        self._rescue_next_retry_ms = 0.0
+        self._rescue_last_wait_log_ms = 0.0
+
     def reset(self) -> None:
         super().reset()
+        self._clear_rescue()
         self.child.reset()
         self._blocked = False
         self._last_block_key = ""
@@ -4179,8 +4237,54 @@ class _PauseWhilePartyNotAliveNode(BehaviorTree.Node):
             pass
         return f"agent {int(agent_id)}"
 
+    def _flag_living_followers(self, target_xy: tuple[float, float], dead_ids: list[int], member_ids: list[int]) -> None:
+        """Use the native HeroAI personal flags to make living followers reach the corpse.
+
+        This also works with a dead leader, when ordinary leader movement cannot.
+        No remote script, undocumented wrapper or extra Planner step is required.
+        """
+        try:
+            local_party_id = int(GLOBAL_CACHE.Party.GetPartyID() or 0)
+            if local_party_id <= 0:
+                return  # Never redirect other parties without a verified party ID.
+            local_id = int(Player.GetAgentID() or 0)
+            known_members = set(member_ids)
+            dead_members = set(dead_ids)
+            pairs = GLOBAL_CACHE.ShMem.GetAllActiveAccountHeroAIPairs(sort_results=False)
+            for account, options in pairs or []:
+                if account is None or options is None or not getattr(account, 'IsSlotActive', False):
+                    continue
+                if getattr(account, 'IsHero', False) or getattr(account, 'IsNPC', False):
+                    continue
+                if int(getattr(getattr(account, 'AgentPartyData', None), 'PartyID', 0) or 0) != local_party_id:
+                    continue
+                agent_id = int(getattr(getattr(account, 'AgentData', None), 'AgentID', 0) or 0)
+                if agent_id <= 0 or agent_id == local_id or agent_id not in known_members or agent_id in dead_members:
+                    continue
+                email = str(getattr(account, 'AccountEmail', '') or '').strip()
+                if not email:
+                    continue
+                if email not in self._rescue_flag_originals:
+                    self._rescue_flag_originals[email] = (
+                        bool(options.IsFlagged), float(options.FlagPos.x), float(options.FlagPos.y),
+                        float(options.FollowPos.x), float(options.FollowPos.y), float(options.FollowPos.z),
+                    )
+                options.FlagPos.x = target_xy[0]
+                options.FlagPos.y = target_xy[1]
+                options.IsFlagged = True
+                # The Core's leader publisher will normally update FollowPos.
+                # Set it here too so followers can move even if the leader died.
+                options.FollowPos.x = target_xy[0]
+                options.FollowPos.y = target_xy[1]
+            self._rescue_flag_xy = target_xy
+        except Exception as exc:
+            PySystem.Console.Log(
+                MODULE_NAME, f"[PartyAlive] Follower rescue positioning failed: {exc}",
+                PySystem.Console.MessageType.Warning,
+            )
+
     def _tick_impl(self) -> BehaviorTree.NodeState:
-        # Let the wrapped transition handle map loading normally.
+        # The wrapped transition must handle map changes normally.
         try:
             map_ready = bool(Map.IsMapReady())
             party_loaded = bool(Party.IsPartyLoaded()) if map_ready else False
@@ -4189,14 +4293,15 @@ class _PauseWhilePartyNotAliveNode(BehaviorTree.Node):
             party_loaded = False
 
         if not map_ready or not party_loaded:
+            self._clear_rescue()
             if self.blackboard is not None:
                 self.child.blackboard = self.blackboard
             return self.child.tick()
 
         member_ids, expected_size = self._party_member_agent_ids()
 
-        # Do not advance if the party mirror is temporarily incomplete.
         if expected_size > 0 and len(member_ids) < expected_size:
+            self._clear_rescue()
             block_key = f"unresolved:{len(member_ids)}/{expected_size}"
             if self._last_block_key != block_key:
                 PySystem.Console.Log(
@@ -4222,17 +4327,109 @@ class _PauseWhilePartyNotAliveNode(BehaviorTree.Node):
             if self._last_block_key != block_key:
                 PySystem.Console.Log(
                     MODULE_NAME,
-                    f"[PartyAlive] Pausing current run step until every party member is alive. Dead: {', '.join(dead_labels)}.",
+                    f"[PartyAlive] Pausing the current Planner step for resurrection. Dead: {', '.join(dead_labels)}.",
                     PySystem.Console.MessageType.Warning,
                 )
                 self._last_block_key = block_key
             self._blocked = True
+
+            # The Core shrine-recovery service owns a total party wipe.
+            if len(dead_ids) == len(member_ids) or (self.blackboard is not None and self.blackboard.get('party_wipe_recovery_active', False)):
+                self._clear_rescue()
+                return BehaviorTree.NodeState.RUNNING
+
+            local_id = int(Player.GetAgentID() or 0)
+            local_alive = local_id > 0 and local_id not in dead_ids
+            if local_id in dead_ids:
+                target_id = local_id  # Followers must return to the dead leader first.
+            elif local_alive:
+                try:
+                    px, py = Agent.GetXY(local_id)
+                    target_id = min(dead_ids, key=lambda agent_id: (
+                        (float(Agent.GetXY(agent_id)[0]) - float(px)) ** 2 +
+                        (float(Agent.GetXY(agent_id)[1]) - float(py)) ** 2
+                    ))
+                except Exception:
+                    target_id = dead_ids[0]
+            else:
+                return BehaviorTree.NodeState.RUNNING
+
+            try:
+                tx, ty = Agent.GetXY(target_id)
+                target_xy = (float(tx), float(ty))
+            except Exception:
+                return BehaviorTree.NodeState.RUNNING
+
+            if target_id != self._rescue_target_id or self._rescue_target_xy != target_xy:
+                self._restore_rescue_flags()
+                self._rescue_target_id = target_id
+                self._rescue_target_xy = target_xy
+                self._rescue_move_tree = None
+                self._rescue_next_retry_ms = 0.0
+                self._rescue_last_wait_log_ms = 0.0
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    f"[PartyAlive] Rescue target agent={target_id} at ({tx:.0f}, {ty:.0f}); bringing living party members into scroll range.",
+                    PySystem.Console.MessageType.Info,
+                )
+
+            self._flag_living_followers(target_xy, dead_ids, member_ids)
+
+            if not local_alive:
+                # The local character is dead. Living followers have their own
+                # temporary HeroAI flags and their local res-scroll handlers tick.
+                return BehaviorTree.NodeState.RUNNING
+
+            try:
+                px, py = Agent.GetXY(local_id)
+                distance = ((float(px) - tx) ** 2 + (float(py) - ty) ** 2) ** 0.5
+            except Exception:
+                return BehaviorTree.NodeState.RUNNING
+
+            now_ms = time.monotonic() * 1000.0
+            if distance <= self.RES_APPROACH_DISTANCE:
+                self._rescue_move_tree = None
+                if now_ms - self._rescue_last_wait_log_ms >= self.RES_WAIT_LOG_MS:
+                    PySystem.Console.Log(
+                        MODULE_NAME,
+                        f"[PartyAlive] In resurrection range of agent={target_id} ({distance:.0f}u); waiting for HeroAI res/scroll.",
+                        PySystem.Console.MessageType.Info,
+                    )
+                    self._rescue_last_wait_log_ms = now_ms
+                return BehaviorTree.NodeState.RUNNING
+
+            if now_ms < self._rescue_next_retry_ms:
+                return BehaviorTree.NodeState.RUNNING
+            if self._rescue_move_tree is None:
+                self._rescue_move_tree = BT.Move(
+                    Vec2f(*target_xy), pause_on_combat=True,
+                    tolerance=self.RES_MOVE_TOLERANCE,
+                    flag_heroes_to_waypoint=False,
+                    ignore_destination_obstacles=True, log=False,
+                )
+                PySystem.Console.Log(
+                    MODULE_NAME, f"[PartyAlive] Moving to fallen agent={target_id} ({distance:.0f}u away).",
+                    PySystem.Console.MessageType.Info,
+                )
+            self._rescue_move_tree.blackboard = self.blackboard
+            result = BehaviorTree.Node._normalize_state(self._rescue_move_tree.tick())
+            if result == BehaviorTree.NodeState.FAILURE:
+                PySystem.Console.Log(
+                    MODULE_NAME, f"[PartyAlive] Rescue approach failed for agent={target_id}; retrying in 2s.",
+                    PySystem.Console.MessageType.Warning,
+                )
+                self._rescue_move_tree = None
+                self._rescue_next_retry_ms = now_ms + self.RES_RETRY_MS
+            elif result == BehaviorTree.NodeState.SUCCESS:
+                self._rescue_move_tree = None
+                self._rescue_next_retry_ms = now_ms + 500.0
             return BehaviorTree.NodeState.RUNNING
 
         if self._blocked:
+            self._clear_rescue()
             PySystem.Console.Log(
                 MODULE_NAME,
-                "[PartyAlive] Every party member is alive. Resuming current run step.",
+                "[PartyAlive] Every party member is alive. Resuming the current Planner step.",
                 PySystem.Console.MessageType.Success,
             )
             self._blocked = False
