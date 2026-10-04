@@ -769,7 +769,6 @@ def _configure_runtime_upkeeps(*, consumables_enabled: bool | None = None, looti
     enabled_consumables = _enabled_consumable_upkeeps()
     botting_tree.Config.ConfigureUpkeep(
         looting_enabled=_runtime_looting_enabled,
-        resurrection_scroll=botting_tree.IsResurrectionScrollEnabled(),  # Preserve native HeroAI UI choice.
         auto_inventory_handler_enabled=True,
         consumable_upkeeps=enabled_consumables,
         enable_party_wipe_recovery=True,
@@ -4038,7 +4037,6 @@ def MoveBetweenBraziersWithFlameRecovery(
 def _configure_botting_tree(tree: BottingTree) -> None:
     tree.Config.ConfigureUpkeep(
         looting_enabled=True,
-        resurrection_scroll=tree.IsResurrectionScrollEnabled(),  # Preserve native HeroAI UI choice.
         auto_inventory_handler_enabled=True,
         consumable_upkeeps=_enabled_consumable_upkeeps(),
         enable_party_wipe_recovery=True,
@@ -4081,7 +4079,6 @@ def InitializeBot() -> BehaviorTree:
             bot.Config.Aggressive(
                 multi_account=True,
                 auto_loot=True,
-                resurrection_scroll=None,  # Do not override native HeroAI UI selection.
                 account_isolation=False,
             ),
             BT.SetPlayerStatus(PlayerStatus.Offline, log=True),
