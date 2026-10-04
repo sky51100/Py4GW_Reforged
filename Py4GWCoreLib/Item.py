@@ -808,6 +808,8 @@ def is_active_summoning_stone_ally(agent_id: int, owner_ids: set[int] | None = N
 
 def has_active_party_summon(others: Iterable[int] | None = None) -> bool:
     from .Party import Party
+    from .AgentArray import AgentArray
+    from .Agent import Agent
 
     owner_ids = party_player_agent_ids()
     if others is None:
@@ -816,11 +818,47 @@ def has_active_party_summon(others: Iterable[int] | None = None) -> bool:
         except Exception:
             others = []
 
+    observed_ids: set[int] = set()
     for other in others:
         try:
             agent_id = int(other or 0)
         except Exception:
+            # Handle party entries which are structs rather than bare IDs.
+            try:
+                agent_id = int(getattr(other, 'agent_id', 0) or getattr(other, 'AgentID', 0) or 0)
+            except Exception:
+                continue
+        if agent_id <= 0:
             continue
+        observed_ids.add(agent_id)
+        try:
+            if Agent.IsPet(agent_id):
+                continue  # Pets do not count as summoning-stone creatures.
+        except Exception:
+            pass
+        if is_active_summoning_stone_ally(agent_id, owner_ids=owner_ids):
+            return True
+
+    # Summoning-stone creatures may appear in the Allies panel while absent
+    # from Party.GetOthers(). Scan both lists for all callers, including those
+    # that explicitly pass GetOthers() (Messaging and dungeon watchers).
+    try:
+        ally_ids = AgentArray.GetAllyArray() or []
+    except Exception:
+        ally_ids = []
+
+    for ally in ally_ids:
+        try:
+            agent_id = int(ally or 0)
+        except Exception:
+            continue
+        if agent_id <= 0 or agent_id in observed_ids:
+            continue
+        try:
+            if Agent.IsPet(agent_id):
+                continue
+        except Exception:
+            pass
         if is_active_summoning_stone_ally(agent_id, owner_ids=owner_ids):
             return True
     return False

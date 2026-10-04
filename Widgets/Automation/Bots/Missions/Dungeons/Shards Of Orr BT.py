@@ -4,7 +4,6 @@ from collections.abc import Callable, Sequence
 import os
 import time
 from Py4GWCoreLib.Listeners import Listeners
-from Py4GWCoreLib.GlobalCache.WhiteboardLocks import read_resurrection_scroll_states
 from Py4GWCoreLib.Item import has_active_party_summon
 import PySystem
 from Py4GWCoreLib.BottingTree import BottingTree
@@ -77,10 +76,14 @@ ARBOR_BLESSING_DIALOG = 0x84
 
 # Consumables
 SUMMON_MODEL_IDS = (37810,30209,31155)
-PCON_UPKEEPS = tuple((int(model_id) for model_id in ALL_CONSUMABLE_UPKEEPS if int(model_id) not in CONSET_UPKEEPS))
+# Party morale consumables are independent of personal PCons.
+MORALE_CON_MODEL_IDS = (int(ModelID.Four_Leaf_Clover.value), int(ModelID.Honeycomb.value))
+PCON_UPKEEPS = tuple(int(model_id) for model_id in ALL_CONSUMABLE_UPKEEPS
+                     if int(model_id) not in CONSET_UPKEEPS and int(model_id) not in MORALE_CON_MODEL_IDS)
 
-CONSET_RESTOCK_ITEMS: tuple[tuple[int, int], ...] = tuple(((model_id, 10) for model_id in CONSET_UPKEEPS))
-PCON_RESTOCK_ITEMS: tuple[tuple[int, int], ...] = tuple(((model_id, 10) for model_id in PCON_UPKEEPS))
+CONSET_RESTOCK_ITEMS: tuple[tuple[int, int], ...] = tuple((model_id, 10) for model_id in CONSET_UPKEEPS)
+PCON_RESTOCK_ITEMS: tuple[tuple[int, int], ...] = tuple((model_id, 10) for model_id in PCON_UPKEEPS)
+MORALE_CON_RESTOCK_ITEMS: tuple[tuple[int, int], ...] = tuple((model_id, 10) for model_id in MORALE_CON_MODEL_IDS)
 
 SUMMON_RESTOCK_ITEMS: tuple[tuple[int, int], ...] = tuple(((model_id, 10) for model_id in SUMMON_MODEL_IDS))
 
@@ -136,6 +139,8 @@ _restock_conset = True
 _activate_conset = True
 _restock_pcons = True
 _activate_pcons = True
+_restock_morale_cons = True
+_activate_morale_cons = True
 _use_summoning_stone = True
 _inventory_maintenance_enabled = True
 _inventory_min_free_slots = 5
@@ -235,7 +240,7 @@ LEVEL1_EXIT_TO_ARBOR = Vec2f(-15650.0, 8900.0)
 
 SOO_ENTRANCE_PATH = [Vec2f(11177.0, -17683.0), Vec2f(10218.0, -18864.0), Vec2f(9519.0, -19968.0), Vec2f(9240.07, -20260.95)]
 
-L1_PATH = [Vec2f(3720.16, 15370.78), Vec2f(6740.06, 11039.32), Vec2f(15757, 16952), Vec2f(16026.25, 16957.26), Vec2f(14255.37, 6189.6)]
+L1_PATH = [Vec2f(-5698.70, 9494.41), Vec2f(3720.16, 15370.78), Vec2f(6740.06, 11039.32), Vec2f(15757, 16952), Vec2f(16026.25, 16957.26), Vec2f(14255.37, 6189.6)]
 
 L1_PATH_AFTER_DOOR = [Vec2f(17442.4, 2577.83), Vec2f(20181.6, 1203.7), Vec2f(20400.5, 1300.0)]
 
@@ -298,7 +303,7 @@ botting_tree: BottingTree | None = None
 def _load_settings() -> None:
     global _settings_loaded
     global _use_hard_mode, _restock_conset, _activate_conset
-    global _restock_pcons, _activate_pcons, _use_summoning_stone
+    global _restock_pcons, _activate_pcons, _restock_morale_cons, _activate_morale_cons, _use_summoning_stone
     global _inventory_maintenance_enabled
     global _inventory_min_free_slots
     global _inventory_min_id_kits
@@ -313,6 +318,9 @@ def _load_settings() -> None:
     _activate_conset = _settings_ini.get_bool(_SETTINGS_SECTION, "ActivateConset", True)
     _restock_pcons = _settings_ini.get_bool(_SETTINGS_SECTION, "RestockPcons", True)
     _activate_pcons = _settings_ini.get_bool(_SETTINGS_SECTION, "ActivatePcons", True)
+    # Migrate old configs conservatively: Morale Cons previously followed the PCon switches.
+    _restock_morale_cons = _settings_ini.get_bool(_SETTINGS_SECTION, "RestockMoraleCons", _restock_pcons)
+    _activate_morale_cons = _settings_ini.get_bool(_SETTINGS_SECTION, "ActivateMoraleCons", _activate_pcons)
     _use_summoning_stone = _settings_ini.get_bool(_SETTINGS_SECTION, "UseSummoningStone", True)
     _inventory_maintenance_enabled = _settings_ini.get_bool(_SETTINGS_SECTION, 'InventoryMaintenanceEnabled', True)
     _inventory_min_free_slots = max(0, _settings_ini.get_int(_SETTINGS_SECTION, 'InventoryMinFreeSlots', 5))
@@ -328,6 +336,8 @@ def _save_settings() -> None:
     _settings_ini.set(_SETTINGS_SECTION, "ActivateConset", _activate_conset)
     _settings_ini.set(_SETTINGS_SECTION, "RestockPcons", _restock_pcons)
     _settings_ini.set(_SETTINGS_SECTION, "ActivatePcons", _activate_pcons)
+    _settings_ini.set(_SETTINGS_SECTION, "RestockMoraleCons", _restock_morale_cons)
+    _settings_ini.set(_SETTINGS_SECTION, "ActivateMoraleCons", _activate_morale_cons)
     _settings_ini.set(_SETTINGS_SECTION, "UseSummoningStone", _use_summoning_stone)
     _settings_ini.set(_SETTINGS_SECTION, 'InventoryMaintenanceEnabled', _inventory_maintenance_enabled)
     _settings_ini.set(_SETTINGS_SECTION, 'InventoryMinFreeSlots', _inventory_min_free_slots)
@@ -648,7 +658,7 @@ def _tick_direct_pcon_upkeep() -> None:
     global _pcon_direct_index, _pcon_direct_last_dispatch_ms
     global _pcon_direct_runtime_logged, _pcon_direct_last_recipient_signature
 
-    if not _bot_is_started() or not _runtime_consumables_enabled or not _activate_pcons:
+    if not _bot_is_started() or not _runtime_consumables_enabled or not (_activate_pcons or _activate_morale_cons):
         if _pcon_direct_runtime_logged or _pcon_direct_last_dispatch_ms:
             _reset_direct_pcon_runtime()
         return
@@ -661,7 +671,9 @@ def _tick_direct_pcon_upkeep() -> None:
     except Exception:
         return
 
-    if not PCON_UPKEEPS:
+    enabled_models = ((PCON_UPKEEPS if _activate_pcons else ()) +
+                      (MORALE_CON_MODEL_IDS if _activate_morale_cons else ()))
+    if not enabled_models:
         return
 
     now_ms = int(time.monotonic() * 1000.0)
@@ -679,12 +691,13 @@ def _tick_direct_pcon_upkeep() -> None:
         _pcon_direct_last_recipient_signature = recipient_signature
         PySystem.Console.Log(
             MODULE_NAME,
-            f"[PCons] Direct multibox upkeep active: models={len(PCON_UPKEEPS)}, accounts={len(recipients)}.",
+            f"[Consumables] Direct multibox upkeep: pcons={len(PCON_UPKEEPS) if _activate_pcons else 0}, "
+            f"morale_cons={len(MORALE_CON_MODEL_IDS) if _activate_morale_cons else 0}, accounts={len(recipients)}.",
             PySystem.Console.MessageType.Info,
         )
 
-    model_id = int(PCON_UPKEEPS[_pcon_direct_index % len(PCON_UPKEEPS)])
-    _pcon_direct_index = (_pcon_direct_index + 1) % len(PCON_UPKEEPS)
+    model_id = int(enabled_models[_pcon_direct_index % len(enabled_models)])
+    _pcon_direct_index = (_pcon_direct_index + 1) % len(enabled_models)
 
     sender_email = str(Player.GetAccountEmail() or "").strip()
     if not sender_email:
@@ -756,7 +769,7 @@ def _configure_runtime_upkeeps(*, consumables_enabled: bool | None = None, looti
     enabled_consumables = _enabled_consumable_upkeeps()
     botting_tree.Config.ConfigureUpkeep(
         looting_enabled=_runtime_looting_enabled,
-        resurrection_scroll=True,
+        resurrection_scroll=botting_tree.IsResurrectionScrollEnabled(),  # Preserve native HeroAI UI choice.
         auto_inventory_handler_enabled=True,
         consumable_upkeeps=enabled_consumables,
         enable_party_wipe_recovery=True,
@@ -768,10 +781,6 @@ def _configure_runtime_upkeeps(*, consumables_enabled: bool | None = None, looti
     botting_tree.AddServiceTree(
         "SummoningStoneRecoveryService",
         SummoningStoneRecoveryService,
-    )
-    botting_tree.AddServiceTree(
-        "ResurrectionScrollSyncService",
-        ResurrectionScrollSyncService,
     )
     _configured_consumable_upkeeps = enabled_consumables
 
@@ -808,6 +817,7 @@ def _draw_run_config() -> None:
     global _use_hard_mode
     global _restock_conset, _activate_conset
     global _restock_pcons, _activate_pcons
+    global _restock_morale_cons, _activate_morale_cons
     global _use_summoning_stone
     global _inventory_maintenance_enabled
     global _inventory_min_free_slots
@@ -852,9 +862,22 @@ def _draw_run_config() -> None:
     value = PyImGui.checkbox('Activate / maintain pcons', _activate_pcons)
     if value != _activate_pcons:
         _activate_pcons = value
+        _reset_direct_pcon_runtime()
         changed = True
-        # Direct PCon upkeep reads this flag every tick, so the change is live
-        # and does not require rebuilding Core upkeep services.
+
+    PyImGui.separator()
+    PyImGui.text("Morale consumables (party-wide)")
+    value = PyImGui.checkbox('Restock morale cons from storage', _restock_morale_cons)
+    if value != _restock_morale_cons:
+        _restock_morale_cons = value
+        changed = True
+
+    value = PyImGui.checkbox('Activate / maintain morale cons', _activate_morale_cons)
+    if value != _activate_morale_cons:
+        _activate_morale_cons = value
+        _reset_direct_pcon_runtime()
+        changed = True
+    PyImGui.text_wrapped('Four-Leaf Clover below 100 morale; Honeycomb below 110. Independent of personal PCons.')
 
     PyImGui.separator()
     PyImGui.text("Summoning stones")
@@ -922,6 +945,8 @@ def _runtime_restock_node() -> BehaviorTree:
 
         if _restock_pcons:
             items.extend(PCON_RESTOCK_ITEMS)
+        if _restock_morale_cons:
+            items.extend(MORALE_CON_RESTOCK_ITEMS)
 
         if _use_summoning_stone:
             items.extend(SUMMON_RESTOCK_ITEMS)
@@ -3210,7 +3235,7 @@ def _find_ground_torch() -> int | None:
 def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
     """Recover the active torch, retracing to the last combat-drop point when needed."""
     PICKUP_TIMEOUT_MS = 45_000
-    COMBAT_TORCH_RECOVERY_TIMEOUT_MS = 10_000
+    COMBAT_TORCH_RECOVERY_TIMEOUT_MS = 30_000
     RETRY_DELAY_MS = 1_000
     PICKUP_CONFIRM_GRACE_MS = 1_500
     PICKUP_SEARCH_RADIUS = 7500.0
@@ -3301,7 +3326,7 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
         ):
             PySystem.Console.Log(
                 MODULE_NAME,
-                'Torch not recovered after 10s ; continuing to the next route point.',
+                'Torch not recovered after 30s ; continuing to the next route point.',
                 PySystem.Console.MessageType.Warning,
             )
             _reset_state()
@@ -3486,18 +3511,20 @@ def UseAvailableSummoningStone() -> BehaviorTree:
 
 
 def SummoningStoneRecoveryService() -> BehaviorTree:
-    """Best-effort replacement summon when the active party summon dies mid-floor.
+    """Keep one summoning-stone ally alive on each dungeon floor (best effort).
 
-    The normal Level 1/2/3 start calls remain authoritative.  This service is
-    armed only after a living summoning-stone ally has actually been observed
-    on the current floor.  Runtime config and the UI flag are checked every tick,
-    so disabling stones stops replacement attempts immediately.
+    Level 1/2/3 start requests remain in place. If those initial requests never
+    produce an observed summon, start a sequential retry after a grace period.
+    Also replace a previously observed summon when it disappears. The receiver's
+    native Messaging.UseSummoningStone still checks active summon and sickness.
     """
-    ATTEMPT_INTERVAL_MS = 3_000.0
+    INITIAL_SUMMON_GRACE_MS = 12_000.0
+    ATTEMPT_INTERVAL_MS = 5_000.0
     RETRY_CYCLE_DELAY_MS = 15_000.0
 
     state: dict[str, object] = {
         "map_id": 0,
+        "map_entered_ms": 0.0,
         "saw_active_summon": False,
         "recovering": False,
         "targets": [],
@@ -3507,6 +3534,7 @@ def SummoningStoneRecoveryService() -> BehaviorTree:
 
     def _reset_for_map(map_id: int) -> None:
         state["map_id"] = int(map_id)
+        state["map_entered_ms"] = time.monotonic() * 1000.0
         state["saw_active_summon"] = False
         state["recovering"] = False
         state["targets"] = []
@@ -3538,6 +3566,11 @@ def SummoningStoneRecoveryService() -> BehaviorTree:
             # Floor transitions intentionally remove the old summon. The regular
             # LevelX_Start action owns the initial summon on each new floor.
             _reset_for_map(map_id)
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"[Summoning] Floor {map_id}: watcher active; checking initial summon after {INITIAL_SUMMON_GRACE_MS / 1000:.0f}s.",
+                PySystem.Console.MessageType.Info,
+            )
             return BehaviorTree.NodeState.RUNNING
 
         player_id = int(Player.GetAgentID() or 0)
@@ -3555,8 +3588,14 @@ def SummoningStoneRecoveryService() -> BehaviorTree:
             if bool(state["recovering"]):
                 PySystem.Console.Log(
                     MODULE_NAME,
-                    "[Summoning] Replacement summon detected; recovery stopped.",
+                    "[Summoning] Summoned ally detected; requests stopped.",
                     PySystem.Console.MessageType.Success,
+                )
+            elif not bool(state["saw_active_summon"]):
+                PySystem.Console.Log(
+                    MODULE_NAME,
+                    "[Summoning] Initial summoned ally observed; replacement monitoring armed.",
+                    PySystem.Console.MessageType.Info,
                 )
             state["saw_active_summon"] = True
             state["recovering"] = False
@@ -3565,12 +3604,13 @@ def SummoningStoneRecoveryService() -> BehaviorTree:
             state["next_attempt_ms"] = 0.0
             return BehaviorTree.NodeState.RUNNING
 
-        # Do not replace the explicit level-start summon. Recovery starts only
-        # after a real summon was observed alive on this same floor.
-        if not bool(state["saw_active_summon"]):
+        now_ms = time.monotonic() * 1000.0
+        # Previously, never detecting the first summon left this service idle forever.
+        # Allow the LevelX_Start request to settle first, then retry if still absent.
+        initial_missing = not bool(state["saw_active_summon"])
+        if initial_missing and now_ms - float(state["map_entered_ms"]) < INITIAL_SUMMON_GRACE_MS:
             return BehaviorTree.NodeState.RUNNING
 
-        now_ms = time.monotonic() * 1000.0
         if not bool(state["recovering"]):
             state["recovering"] = True
             state["target_index"] = 0
@@ -3578,7 +3618,9 @@ def SummoningStoneRecoveryService() -> BehaviorTree:
             _refresh_targets()
             PySystem.Console.Log(
                 MODULE_NAME,
-                "[Summoning] Active party summon was lost; trying replacement stones account by account.",
+                ("[Summoning] No initial summon observed; trying available stones account by account."
+                 if initial_missing else
+                 "[Summoning] Active party summon was lost; trying replacement stones account by account."),
                 PySystem.Console.MessageType.Warning,
             )
 
@@ -3597,6 +3639,11 @@ def SummoningStoneRecoveryService() -> BehaviorTree:
             state["target_index"] = 0
             state["targets"] = _refresh_targets()
             state["next_attempt_ms"] = now_ms + RETRY_CYCLE_DELAY_MS
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f"[Summoning] No summon detected after trying {len(targets)} account(s); next cycle in {RETRY_CYCLE_DELAY_MS / 1000:.0f}s.",
+                PySystem.Console.MessageType.Warning,
+            )
             return BehaviorTree.NodeState.RUNNING
 
         sender_email = str(Player.GetAccountEmail() or "").strip()
@@ -3617,7 +3664,7 @@ def SummoningStoneRecoveryService() -> BehaviorTree:
             )
             PySystem.Console.Log(
                 MODULE_NAME,
-                f"[Summoning] Asking {label} to try a replacement summoning stone.",
+                f"[Summoning] Asking {label} to try a summoning stone (request {target_index + 1}/{len(targets)}; use depends on local inventory/sickness).",
                 PySystem.Console.MessageType.Info,
             )
         except Exception as exc:
@@ -3985,107 +4032,13 @@ def MoveBetweenBraziersWithFlameRecovery(
 
 
 
-def ResurrectionScrollSyncService() -> BehaviorTree:
-    """Enable the existing HeroAI scroll handler on this dungeon party, including followers.
-
-    ConfigureUpkeep(resurrection_scroll=True) only changes the leader's local setting.
-    Followers acknowledge their own setting through existing Whiteboard heartbeats.
-    """
-    SYNC_INTERVAL_MS = 5_000.0
-    STATUS_INTERVAL_MS = 30_000.0
-    state = {"next_sync_ms": 0.0, "last_status_ms": 0.0, "last_pending": -1}
-
-    def _tick(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        if not Map.IsMapReady() or not Party.IsPartyLoaded() or not Map.IsExplorable():
-            return BehaviorTree.NodeState.RUNNING
-        if int(Map.GetMapID() or 0) not in (SOO_LEVEL_1, SOO_LEVEL_2, SOO_LEVEL_3):
-            return BehaviorTree.NodeState.RUNNING
-
-        now_ms = time.monotonic() * 1000.0
-        if now_ms < float(state["next_sync_ms"]):
-            return BehaviorTree.NodeState.RUNNING
-        state["next_sync_ms"] = now_ms + SYNC_INTERVAL_MS
-
-        sender_email = str(Player.GetAccountEmail() or "").strip()
-        if not sender_email:
-            return BehaviorTree.NodeState.RUNNING
-        local_account = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(sender_email)
-        local_party_id = int(getattr(getattr(local_account, "AgentPartyData", None), "PartyID", 0) or 0)
-        # Never broadcast to unrelated clients while the party mirror is unavailable.
-        if local_party_id <= 0:
-            return BehaviorTree.NodeState.RUNNING
-
-        if botting_tree is not None and not botting_tree.IsResurrectionScrollEnabled():
-            botting_tree.EnableResurrectionScroll()
-
-        try:
-            accounts = GLOBAL_CACHE.ShMem.GetAllAccountData(sort_results=False)
-        except TypeError:
-            accounts = GLOBAL_CACHE.ShMem.GetAllAccountData()
-        except Exception as exc:
-            PySystem.Console.Log(MODULE_NAME, f"[Res Scroll] Party lookup failed: {exc}", PySystem.Console.MessageType.Warning)
-            return BehaviorTree.NodeState.RUNNING
-
-        live_states = read_resurrection_scroll_states()
-        pending: list[str] = []
-        known_followers: set[str] = set()
-        for account in accounts or []:
-            email = str(getattr(account, "AccountEmail", "") or "").strip()
-            if not email or email == sender_email or email in known_followers:
-                continue
-            account_party_id = int(getattr(getattr(account, "AgentPartyData", None), "PartyID", 0) or 0)
-            if account_party_id != local_party_id:
-                continue
-            known_followers.add(email)
-            enabled, skip_if_res_available = live_states.get(email, (False, False))
-            if not enabled or skip_if_res_available:
-                pending.append(email)
-
-        # Same existing command as HeroAI's all-accounts UI:
-        # (enabled=1, skip_if_res_available=0, mask=3, reserved=0).
-        # Mask 3 updates BOTH fields on the follower, so an available res skill
-        # does not silently suppress the explicitly requested resurrection scroll.
-        for email in pending:
-            try:
-                GLOBAL_CACHE.ShMem.SendMessage(
-                    sender_email,
-                    email,
-                    SharedCommandType.SetResurrectionScroll,
-                    (1, 0, 3, 0),
-                )
-            except Exception as exc:
-                PySystem.Console.Log(MODULE_NAME, f"[Res Scroll] Follower synchronization failed: {exc}", PySystem.Console.MessageType.Warning)
-
-        if (len(pending) != int(state["last_pending"])
-                or (pending and now_ms - float(state["last_status_ms"]) >= STATUS_INTERVAL_MS)):
-            total = len(known_followers)
-            confirmed = total - len(pending)
-            PySystem.Console.Log(
-                MODULE_NAME,
-                f"[Res Scroll] Followers confirmed={confirmed}/{total}; sync pending={len(pending)}.",
-                PySystem.Console.MessageType.Info if not pending else PySystem.Console.MessageType.Warning,
-            )
-            state["last_pending"] = len(pending)
-            state["last_status_ms"] = now_ms
-
-        return BehaviorTree.NodeState.RUNNING
-
-    return BehaviorTree(
-        BehaviorTree.ActionNode(
-            name="Resurrection Scroll Party Synchronization",
-            action_fn=_tick,
-            aftercast_ms=500,
-        )
-    )
-
-
 # region Bot initialization
 
 
 def _configure_botting_tree(tree: BottingTree) -> None:
     tree.Config.ConfigureUpkeep(
         looting_enabled=True,
-        resurrection_scroll=True,
+        resurrection_scroll=tree.IsResurrectionScrollEnabled(),  # Preserve native HeroAI UI choice.
         auto_inventory_handler_enabled=True,
         consumable_upkeeps=_enabled_consumable_upkeeps(),
         enable_party_wipe_recovery=True,
@@ -4095,10 +4048,6 @@ def _configure_botting_tree(tree: BottingTree) -> None:
     tree.AddServiceTree(
         "SummoningStoneRecoveryService",
         SummoningStoneRecoveryService,
-    )
-    tree.AddServiceTree(
-        "ResurrectionScrollSyncService",
-        ResurrectionScrollSyncService,
     )
 
 
@@ -4132,7 +4081,7 @@ def InitializeBot() -> BehaviorTree:
             bot.Config.Aggressive(
                 multi_account=True,
                 auto_loot=True,
-                resurrection_scroll=True,
+                resurrection_scroll=None,  # Do not override native HeroAI UI selection.
                 account_isolation=False,
             ),
             BT.SetPlayerStatus(PlayerStatus.Offline, log=True),
@@ -4338,44 +4287,67 @@ class _PauseWhilePartyNotAliveNode(BehaviorTree.Node):
         self._rescue_move_tree: BehaviorTree | None = None
         self._rescue_next_retry_ms = 0.0
         self._rescue_last_wait_log_ms = 0.0
-        # email -> previous (IsFlagged, FlagPos.x/y, FollowPos.x/y/z).
-        # Save only options we really overwrite and restore only our own flags.
+        # Keep one original state per account for the entire rescue session.
+        # A dead follower can retain flag A while living followers are moved to
+        # flag B: a single, global last-target coordinate cannot restore both.
         self._rescue_flag_originals: dict[str, tuple[bool, float, float, float, float, float]] = {}
-        self._rescue_flag_xy: tuple[float, float] | None = None
+        self._rescue_flag_positions: dict[str, set[tuple[float, float]]] = {}
 
     def get_children(self) -> list[BehaviorTree.Node]:
         return [self.child]
 
+    @staticmethod
+    def _is_our_rescue_position(x: float, y: float, positions: set[tuple[float, float]]) -> bool:
+        # Shared-memory options contain the exact coordinates written by us.
+        # Do not clear flags manually moved elsewhere during resurrection.
+        return any(abs(float(x) - rx) <= 1.0 and abs(float(y) - ry) <= 1.0
+                   for rx, ry in positions)
+
     def _restore_rescue_flags(self) -> None:
-        our_xy = self._rescue_flag_xy
-        for email, previous in self._rescue_flag_originals.items():
-            try:
-                options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(email)
-                if options is None or our_xy is None:
-                    continue
-                # Do not undo a user's flag changed during this recovery.
-                if (not bool(options.IsFlagged)
-                        or abs(float(options.FlagPos.x) - our_xy[0]) > 1.0
-                        or abs(float(options.FlagPos.y) - our_xy[1]) > 1.0):
-                    continue
-                (old_flagged, old_x, old_y, old_follow_x, old_follow_y, old_follow_z) = previous
-                options.IsFlagged = old_flagged
-                options.FlagPos.x = old_x
-                options.FlagPos.y = old_y
-                # The leader publisher normally rewrites FollowPos, but an
-                # immediate restore also works if the leader is still dead.
-                if (abs(float(options.FollowPos.x) - our_xy[0]) <= 1.0
-                        and abs(float(options.FollowPos.y) - our_xy[1]) <= 1.0):
-                    options.FollowPos.x = old_follow_x
-                    options.FollowPos.y = old_follow_y
-                    options.FollowPos.z = old_follow_z
-            except Exception as exc:
+        restored = 0
+        preserved = 0
+        try:
+            for email, previous in list(self._rescue_flag_originals.items()):
+                try:
+                    options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(email)
+                    positions = self._rescue_flag_positions.get(email, set())
+                    if options is None or not positions:
+                        continue
+                    # A user may explicitly unflag/reflag elsewhere during the
+                    # pause. Only undo positions set by this PartyAliveGate.
+                    if not bool(options.IsFlagged) or not self._is_our_rescue_position(
+                        float(options.FlagPos.x), float(options.FlagPos.y), positions
+                    ):
+                        preserved += 1
+                        continue
+                    (old_flagged, old_x, old_y,
+                     old_follow_x, old_follow_y, old_follow_z) = previous
+                    options.IsFlagged = old_flagged
+                    options.FlagPos.x = old_x
+                    options.FlagPos.y = old_y
+                    # FollowPos might have been published by the leader, or it
+                    # might still point to ANY earlier rescue target.
+                    if self._is_our_rescue_position(
+                        float(options.FollowPos.x), float(options.FollowPos.y), positions
+                    ):
+                        options.FollowPos.x = old_follow_x
+                        options.FollowPos.y = old_follow_y
+                        options.FollowPos.z = old_follow_z
+                    restored += 1
+                except Exception as exc:
+                    PySystem.Console.Log(
+                        MODULE_NAME, f"[PartyAlive] Unable to restore follower rescue flag: {exc}",
+                        PySystem.Console.MessageType.Warning,
+                    )
+            if restored or preserved:
                 PySystem.Console.Log(
-                    MODULE_NAME, f"[PartyAlive] Unable to restore follower rescue flag: {exc}",
-                    PySystem.Console.MessageType.Warning,
+                    MODULE_NAME,
+                    f"[PartyAlive] Rescue cleanup: restored={restored}, preserved_user_flags={preserved}.",
+                    PySystem.Console.MessageType.Info,
                 )
-        self._rescue_flag_originals.clear()
-        self._rescue_flag_xy = None
+        finally:
+            self._rescue_flag_originals.clear()
+            self._rescue_flag_positions.clear()
 
     def _clear_rescue(self) -> None:
         self._restore_rescue_flags()
@@ -4469,6 +4441,9 @@ class _PauseWhilePartyNotAliveNode(BehaviorTree.Node):
                         bool(options.IsFlagged), float(options.FlagPos.x), float(options.FlagPos.y),
                         float(options.FollowPos.x), float(options.FollowPos.y), float(options.FollowPos.z),
                     )
+                # Keep every assigned position, including those of followers
+                # who may die before a subsequent rescue-target change.
+                self._rescue_flag_positions.setdefault(email, set()).add(target_xy)
                 options.FlagPos.x = target_xy[0]
                 options.FlagPos.y = target_xy[1]
                 options.IsFlagged = True
@@ -4476,7 +4451,6 @@ class _PauseWhilePartyNotAliveNode(BehaviorTree.Node):
                 # Set it here too so followers can move even if the leader died.
                 options.FollowPos.x = target_xy[0]
                 options.FollowPos.y = target_xy[1]
-            self._rescue_flag_xy = target_xy
         except Exception as exc:
             PySystem.Console.Log(
                 MODULE_NAME, f"[PartyAlive] Follower rescue positioning failed: {exc}",
@@ -4561,7 +4535,9 @@ class _PauseWhilePartyNotAliveNode(BehaviorTree.Node):
                 return BehaviorTree.NodeState.RUNNING
 
             if target_id != self._rescue_target_id or self._rescue_target_xy != target_xy:
-                self._restore_rescue_flags()
+                # Do NOT restore/forget follower flags here: a follower that
+                # just died may still be flagged at the previous corpse while
+                # the others get the new destination. Release all at session end.
                 self._rescue_target_id = target_id
                 self._rescue_target_xy = target_xy
                 self._rescue_move_tree = None
