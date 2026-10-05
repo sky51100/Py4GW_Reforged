@@ -1,19 +1,22 @@
-Fix: Summoning Stone detection in Py4GW_Reforged
+Summoning Stone Party Service - Core + Shards of Orr
 
-Archive contents:
-  Py4GWCoreLib/Item.py (complete updated source file)
+Files included:
+- Py4GWCoreLib/botting_tree_src/services.py
+- Py4GWCoreLib/botting_tree_src/upkeep.py
+- Py4GWCoreLib/Item.py
+- Widgets/Automation/Bots/Missions/Dungeons/Shards of Orr BT.py
 
-Installation:
-1. Close every Py4GW client.
-2. Back up your current Py4GWCoreLib/Item.py.
-3. Extract the ZIP into the Py4GW_Reforged root folder and confirm overwrite of Py4GWCoreLib/Item.py.
-4. Restart all Py4GW clients.
+What changes:
+1. Adds reusable BottingTree SummoningStonePartyServiceTree.
+2. Adds Add/EnsureSummoningStonePartyService helpers.
+3. Service coordinates active multibox accounts one-by-one using the existing
+   SharedCommandType.UseSummoningStone / Messaging.UseSummoningStone handler.
+4. Shards no longer contains its own summoning service or Level1/2/3 summon calls.
+5. Shards keeps its Use summoning stones toggle; the Core service reads it live.
+6. Active summon detection scans Party.GetOthers() broadly, but scans the full
+   AllyArray strictly by known summon ModelID/encoded name to avoid false positives
+   from ordinary allied NPCs while still detecting Angchu/Tengu summons.
 
-Change:
- has_active_party_summon checks Party.GetOthers() AND AgentArray.GetAllyArray(),
- excludes pets and supports struct entries. This helps detect allied Angchu
- summoned creatures even when they are missing from Party.GetOthers().
-
-Base source: Item.py from the user-provided Work-Branch-merchant-rules-updated ZIP.
-Only this module is included. If your local Item.py has newer edits than
-that archive, compare before overwriting.
+Install:
+Extract this ZIP at the Py4GW_Reforged repository root and replace the four files.
+Restart every Py4GW client afterwards.

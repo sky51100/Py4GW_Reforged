@@ -855,11 +855,25 @@ def has_active_party_summon(others: Iterable[int] | None = None) -> bool:
         if agent_id <= 0 or agent_id in observed_ids:
             continue
         try:
-            if Agent.IsPet(agent_id):
+            if not Agent.IsAlive(agent_id) or Agent.IsPet(agent_id):
                 continue
         except Exception:
+            continue
+
+        # The full AllyArray contains many ordinary allied NPCs. Do not use the
+        # owner/NPC fallback here, otherwise unrelated allies can be mistaken for
+        # summoning-stone creatures. The extra scan is intentionally strict and
+        # covers the known summons that may appear only in the Allies panel
+        # (notably Tengu Support Flare / Angchu reinforcements).
+        try:
+            if int(Agent.GetModelID(agent_id) or 0) in KNOWN_SUMMONING_STONE_CREATURE_MODEL_IDS:
+                return True
+        except Exception:
             pass
-        if is_active_summoning_stone_ally(agent_id, owner_ids=owner_ids):
-            return True
+        try:
+            if Agent.GetEncNameStrByID(agent_id, literal=True) in KNOWN_SUMMONING_STONE_CREATURE_ENC_NAMES:
+                return True
+        except Exception:
+            pass
     return False
                     

@@ -4,7 +4,6 @@ from collections.abc import Callable, Sequence
 import os
 import time
 from Py4GWCoreLib.Listeners import Listeners
-from Py4GWCoreLib.Item import has_active_party_summon
 import PySystem
 from Py4GWCoreLib.BottingTree import BottingTree
 from Py4GWCoreLib.ImGui_src.types import Alignment
@@ -775,11 +774,15 @@ def _configure_runtime_upkeeps(*, consumables_enabled: bool | None = None, looti
         enable_nearest_shrine_recovery=True,
         heroai_state_logging=False,
     )
-    # ConfigureUpkeep rebuilds the service list. Reinstall the dungeon-level
-    # summoning-stone recovery service so the UI toggle remains live at runtime.
-    botting_tree.AddServiceTree(
-        "SummoningStoneRecoveryService",
-        SummoningStoneRecoveryService,
+    # ConfigureUpkeep rebuilds the service list. Reinstall the reusable Core
+    # multibox summoning service; the UI flag is read live by the service.
+    botting_tree.EnsureSummoningStonePartyService(
+        enabled=lambda: _use_summoning_stone,
+        map_ids=(SOO_LEVEL_1, SOO_LEVEL_2, SOO_LEVEL_3),
+        initial_grace_ms=2_000,
+        attempt_interval_ms=5_000,
+        retry_cycle_delay_ms=15_000,
+        log=True,
     )
     _configured_consumable_upkeeps = enabled_consumables
 
@@ -885,8 +888,8 @@ def _draw_run_config() -> None:
     if value != _use_summoning_stone:
         _use_summoning_stone = value
         changed = True
-        # The level-start action and SummoningStoneRecoveryService both read
-        # this flag live, so no ConfigureUpkeep rebuild is required here.
+        # The reusable Core SummoningStonePartyService reads this flag live,
+        # so no ConfigureUpkeep rebuild is required here.
 
     PyImGui.separator()
     PyImGui.text("Torch handling")
@@ -3470,220 +3473,6 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
         )
     )
 
-def UseAvailableSummoningStone() -> BehaviorTree:
-    """Broadcast a best-effort summoning-stone request to every active account.
-
-    The request is fire-and-forget: a client with no usable stone, an existing
-    summon, or summoning sickness cannot block dungeon progression.
-    """
-
-    def _dispatch(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        if not _use_summoning_stone or not _consumables_allowed():
-            return BehaviorTree.NodeState.SUCCESS
-
-        sender_email = str(Player.GetAccountEmail() or "").strip()
-        recipients = _inventory_recipient_emails()
-        if not sender_email or not recipients:
-            return BehaviorTree.NodeState.SUCCESS
-
-        for receiver_email in recipients:
-            try:
-                GLOBAL_CACHE.ShMem.SendMessage(
-                    sender_email,
-                    receiver_email,
-                    SharedCommandType.UseSummoningStone,
-                    (0.0, 0.0, 0.0, 0.0),
-                    ("", "", "", ""),
-                )
-            except Exception:
-                continue
-
-        return BehaviorTree.NodeState.SUCCESS
-
-    return BehaviorTree(
-        BehaviorTree.ActionNode(
-            name="Use Summoning Stone In Dungeon (Multibox Non Blocking)",
-            action_fn=_dispatch,
-            aftercast_ms=0,
-        )
-    )
-
-
-def SummoningStoneRecoveryService() -> BehaviorTree:
-    """Keep one summoning-stone ally alive on each dungeon floor (best effort).
-
-    Level 1/2/3 start requests remain in place. If those initial requests never
-    produce an observed summon, start a sequential retry after a grace period.
-    Also replace a previously observed summon when it disappears. The receiver's
-    native Messaging.UseSummoningStone still checks active summon and sickness.
-    """
-    INITIAL_SUMMON_GRACE_MS = 12_000.0
-    ATTEMPT_INTERVAL_MS = 5_000.0
-    RETRY_CYCLE_DELAY_MS = 15_000.0
-
-    state: dict[str, object] = {
-        "map_id": 0,
-        "map_entered_ms": 0.0,
-        "saw_active_summon": False,
-        "recovering": False,
-        "targets": [],
-        "target_index": 0,
-        "next_attempt_ms": 0.0,
-    }
-
-    def _reset_for_map(map_id: int) -> None:
-        state["map_id"] = int(map_id)
-        state["map_entered_ms"] = time.monotonic() * 1000.0
-        state["saw_active_summon"] = False
-        state["recovering"] = False
-        state["targets"] = []
-        state["target_index"] = 0
-        state["next_attempt_ms"] = 0.0
-
-    def _refresh_targets() -> list[tuple[str, str]]:
-        targets: list[tuple[str, str]] = []
-        seen: set[str] = set()
-        for email, label in _inventory_target_accounts():
-            email = str(email or "").strip()
-            if not email or email in seen:
-                continue
-            seen.add(email)
-            targets.append((email, str(label or email)))
-        state["targets"] = targets
-        return targets
-
-    def _tick(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        if not _use_summoning_stone or not _consumables_allowed():
-            return BehaviorTree.NodeState.RUNNING
-        if not Map.IsMapReady() or Map.IsMapLoading() or not Map.IsExplorable():
-            return BehaviorTree.NodeState.RUNNING
-
-        map_id = int(Map.GetMapID() or 0)
-        if map_id not in (SOO_LEVEL_1, SOO_LEVEL_2, SOO_LEVEL_3):
-            return BehaviorTree.NodeState.RUNNING
-        if map_id != int(state["map_id"] or 0):
-            # Floor transitions intentionally remove the old summon. The regular
-            # LevelX_Start action owns the initial summon on each new floor.
-            _reset_for_map(map_id)
-            PySystem.Console.Log(
-                MODULE_NAME,
-                f"[Summoning] Floor {map_id}: watcher active; checking initial summon after {INITIAL_SUMMON_GRACE_MS / 1000:.0f}s.",
-                PySystem.Console.MessageType.Info,
-            )
-            return BehaviorTree.NodeState.RUNNING
-
-        player_id = int(Player.GetAgentID() or 0)
-        if player_id <= 0 or not Agent.IsValid(player_id) or Agent.IsDead(player_id):
-            return BehaviorTree.NodeState.RUNNING
-        if Routines.Checks.Party.IsPartyWiped():
-            return BehaviorTree.NodeState.RUNNING
-
-        try:
-            summon_alive = bool(has_active_party_summon(GLOBAL_CACHE.Party.GetOthers()))
-        except Exception:
-            summon_alive = False
-
-        if summon_alive:
-            if bool(state["recovering"]):
-                PySystem.Console.Log(
-                    MODULE_NAME,
-                    "[Summoning] Summoned ally detected; requests stopped.",
-                    PySystem.Console.MessageType.Success,
-                )
-            elif not bool(state["saw_active_summon"]):
-                PySystem.Console.Log(
-                    MODULE_NAME,
-                    "[Summoning] Initial summoned ally observed; replacement monitoring armed.",
-                    PySystem.Console.MessageType.Info,
-                )
-            state["saw_active_summon"] = True
-            state["recovering"] = False
-            state["targets"] = []
-            state["target_index"] = 0
-            state["next_attempt_ms"] = 0.0
-            return BehaviorTree.NodeState.RUNNING
-
-        now_ms = time.monotonic() * 1000.0
-        # Previously, never detecting the first summon left this service idle forever.
-        # Allow the LevelX_Start request to settle first, then retry if still absent.
-        initial_missing = not bool(state["saw_active_summon"])
-        if initial_missing and now_ms - float(state["map_entered_ms"]) < INITIAL_SUMMON_GRACE_MS:
-            return BehaviorTree.NodeState.RUNNING
-
-        if not bool(state["recovering"]):
-            state["recovering"] = True
-            state["target_index"] = 0
-            state["next_attempt_ms"] = now_ms
-            _refresh_targets()
-            PySystem.Console.Log(
-                MODULE_NAME,
-                ("[Summoning] No initial summon observed; trying available stones account by account."
-                 if initial_missing else
-                 "[Summoning] Active party summon was lost; trying replacement stones account by account."),
-                PySystem.Console.MessageType.Warning,
-            )
-
-        if now_ms < float(state["next_attempt_ms"] or 0.0):
-            return BehaviorTree.NodeState.RUNNING
-
-        targets: list[tuple[str, str]] = list(state["targets"] or [])
-        if not targets:
-            targets = _refresh_targets()
-            if not targets:
-                state["next_attempt_ms"] = now_ms + RETRY_CYCLE_DELAY_MS
-                return BehaviorTree.NodeState.RUNNING
-
-        target_index = int(state["target_index"] or 0)
-        if target_index >= len(targets):
-            state["target_index"] = 0
-            state["targets"] = _refresh_targets()
-            state["next_attempt_ms"] = now_ms + RETRY_CYCLE_DELAY_MS
-            PySystem.Console.Log(
-                MODULE_NAME,
-                f"[Summoning] No summon detected after trying {len(targets)} account(s); next cycle in {RETRY_CYCLE_DELAY_MS / 1000:.0f}s.",
-                PySystem.Console.MessageType.Warning,
-            )
-            return BehaviorTree.NodeState.RUNNING
-
-        sender_email = str(Player.GetAccountEmail() or "").strip()
-        if not sender_email:
-            state["next_attempt_ms"] = now_ms + ATTEMPT_INTERVAL_MS
-            return BehaviorTree.NodeState.RUNNING
-
-        receiver_email, label = targets[target_index]
-        state["target_index"] = target_index + 1
-        state["next_attempt_ms"] = now_ms + ATTEMPT_INTERVAL_MS
-
-        try:
-            GLOBAL_CACHE.ShMem.SendMessage(
-                sender_email,
-                receiver_email,
-                SharedCommandType.UseSummoningStone,
-                (0.0, 0.0, 0.0, 0.0),
-            )
-            PySystem.Console.Log(
-                MODULE_NAME,
-                f"[Summoning] Asking {label} to try a summoning stone (request {target_index + 1}/{len(targets)}; use depends on local inventory/sickness).",
-                PySystem.Console.MessageType.Info,
-            )
-        except Exception as exc:
-            PySystem.Console.Log(
-                MODULE_NAME,
-                f"[Summoning] Replacement request failed for {label}: {exc}",
-                PySystem.Console.MessageType.Warning,
-            )
-
-        return BehaviorTree.NodeState.RUNNING
-
-    return BehaviorTree(
-        BehaviorTree.ActionNode(
-            name="Summoning Stone Recovery Service",
-            action_fn=_tick,
-            aftercast_ms=500,
-        )
-    )
-
-
 def BrazierSequence(name: str, points: list[tuple[float, float]]) -> BehaviorTree:
     """
     Activate a sequence of SoO braziers.
@@ -4043,9 +3832,13 @@ def _configure_botting_tree(tree: BottingTree) -> None:
         enable_nearest_shrine_recovery=True,
         heroai_state_logging=False,
     )
-    tree.AddServiceTree(
-        "SummoningStoneRecoveryService",
-        SummoningStoneRecoveryService,
+    tree.EnsureSummoningStonePartyService(
+        enabled=lambda: _use_summoning_stone,
+        map_ids=(SOO_LEVEL_1, SOO_LEVEL_2, SOO_LEVEL_3),
+        initial_grace_ms=2_000,
+        attempt_interval_ms=5_000,
+        retry_cycle_delay_ms=15_000,
+        log=True,
     )
 
 
@@ -4752,7 +4545,6 @@ def Level1_Start() -> BehaviorTree:
             _reset_restart_safe_run_state_node(),
             _mark_run_start_node(),
             _inventory_statistics_node(after_chest=False),
-            UseAvailableSummoningStone(),
             BT.AddModelToLootWhitelist(25410),
             BT.MoveAndDialog(Vec2f(-11686.0, 10427.0), dialog_id=DWARVEN_BLESSING_DIALOG, multi_account=True, log=True),
         ],
@@ -4801,10 +4593,8 @@ def Level2_Start() -> BehaviorTree:
         children=[
             ResetTorchCombatPolicy(),
             ResolveTorchCombatPolicy(),
-            UseAvailableSummoningStone(),
             BT.AddModelToLootWhitelist(25410),
             BT.MoveAndDialog(L2_BLESSING_NPC, dialog_id=DWARVEN_BLESSING_DIALOG, multi_account=True, log=True),
-            BT.Move(Vec2f(-15243.0, -17230.0)),
             BT.ClearEnemiesInArea(Vec2f(-15243.0, -17230.0), radius=Range.Compass.value, log=True),
             EnsureTorchFromChest('level2_torch_chest', L2_TORCH_CHEST),
         ],
@@ -4925,7 +4715,6 @@ def Level3_Start() -> BehaviorTree:
     return BT.Sequence(
         name='Start Shards of Orr Level 3',
         children=[
-            UseAvailableSummoningStone(),
             BT.MoveAndDialog(L3_ENTRY_BLESSING, dialog_id=DWARVEN_BLESSING_DIALOG, multi_account=True, log=True),
         ],
     )
