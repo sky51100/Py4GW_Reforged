@@ -62,7 +62,7 @@ class FarmDefinition:
 
     farm_map_id: int = 0
     exit_point: tuple[float, float] | None = None
-    clear_radius: str = "Spellcast"
+    clear_radius: str = "Spirit"
 
     transit_map_id: int = 0
     transit_path: tuple[tuple[float, float], ...] = ()
@@ -144,7 +144,7 @@ FARMS: tuple[FarmDefinition, ...] = (
             (12926.0, -3902.0),
             (7672,700),
         ),
-        clear_radius='Spellcast',
+        clear_radius='Spirit',
         nicholas_item_name='Alpine Seed',
         items_for_5_gifts=10,
         collector_item_name='',
@@ -176,7 +176,7 @@ FARMS: tuple[FarmDefinition, ...] = (
             (1871.0, 10411.0),
             (-694.0, 15983.0),
         ),
-        clear_radius='Spellcast',
+        clear_radius='Spirit',
         nicholas_item_name='Amphibian Tongue',
         items_for_5_gifts=10,
         collector_item_name='',
@@ -1464,7 +1464,7 @@ FARMS: tuple[FarmDefinition, ...] = (
             (19730.0, 5009.0),
             (21823.0, 3916.0),
         ),
-        clear_radius='Spellcast',
+        clear_radius='Spirit',
         nicholas_item_name='Guardian Moss',
         items_for_5_gifts=5,
         collector_item_name='',
@@ -5658,7 +5658,7 @@ FARMS: tuple[FarmDefinition, ...] = (
         flow='direct',
         outpost_map_id=12,
         farm_map_id=44,
-        exit_point=(-16790.39, -2610.71),
+        exit_point=(-16379,-2699),
         farm_path=(
             (24160.1, 12360.0),
             (24645.93, 11529.33),
@@ -5679,7 +5679,6 @@ FARMS: tuple[FarmDefinition, ...] = (
             (1346.63, 4473.22),
             (1438.63, 3708.22),
             (2078.0, 1689.0),
-            (3290.0, 2754.0),
             (2691.24, -131.56),
             (1086.77, -4360.92),
             (2027.51, -7545.96),
