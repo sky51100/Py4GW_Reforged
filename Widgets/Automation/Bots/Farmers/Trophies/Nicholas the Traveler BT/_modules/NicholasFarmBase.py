@@ -339,6 +339,8 @@ def _enter_challenge_and_wait_for_explorable(
 def _range_for_farm(farm: FarmDefinition) -> float:
     if farm.clear_radius == "Spirit":
         return Range.Spirit.value
+    if farm.clear_radius == "Spellcast":
+        return Range.Spellcast.value
     return Range.Earshot.value
 
 
@@ -807,9 +809,9 @@ def farm_path(farm: FarmDefinition) -> BehaviorTree:
         farm.farm_path,
         name=f"Farm {farm.name}",
         clear_area_radius=_range_for_farm(farm),
-        pause_on_combat=True,
+        pause_on_combat=None,
         flag_heroes_to_waypoint=False,
-        move_tolerance=175.0,
+        move_tolerance=500.0,
         log=False,
     )
 
@@ -2239,9 +2241,9 @@ def build_execution_steps(
                 farm.farm_map_id,
                 farm.farm_path,
                 clear_area_radius=clear_radius,
-                pause_on_combat=True,
+                pause_on_combat=None,
                 flag_heroes_to_waypoint=False,
-                move_tolerance=175.0,
+                move_tolerance=500.0,
             )
         )
 
@@ -2314,9 +2316,9 @@ def build_execution_steps(
                 farm.farm_map_id,
                 farm.farm_path,
                 clear_area_radius=clear_radius,
-                pause_on_combat=True,
+                pause_on_combat=None,
                 flag_heroes_to_waypoint=False,
-                move_tolerance=175.0,
+                move_tolerance=500.0,
             )
         )
 
@@ -2411,9 +2413,9 @@ def build_execution_steps(
                 farm.farm_map_id,
                 farm.farm_path,
                 clear_area_radius=clear_radius,
-                pause_on_combat=True,
+                pause_on_combat=None,
                 flag_heroes_to_waypoint=False,
-                move_tolerance=175.0,
+                move_tolerance=500.0,
                 skip_if_in_maps=(farm.reset_map_id,),
             )
         )
@@ -2457,9 +2459,9 @@ def build_execution_steps(
                 farm.farm_map_id,
                 farm.farm_path,
                 clear_area_radius=clear_radius,
-                pause_on_combat=True,
+                pause_on_combat=None,
                 flag_heroes_to_waypoint=False,
-                move_tolerance=175.0,
+                move_tolerance=500.0,
             )
         )
 
@@ -2510,9 +2512,9 @@ def build_execution_steps(
                 farm.farm_map_id,
                 farm.farm_path,
                 clear_area_radius=clear_radius,
-                pause_on_combat=True,
+                pause_on_combat=None,
                 flag_heroes_to_waypoint=False,
-                move_tolerance=175.0,
+                move_tolerance=500.0,
             )
         )
 
@@ -2575,9 +2577,9 @@ def build_execution_steps(
                 farm.farm_map_id,
                 farm.farm_path,
                 clear_area_radius=clear_radius,
-                pause_on_combat=True,
+                pause_on_combat=None,
                 flag_heroes_to_waypoint=False,
-                move_tolerance=175.0,
+                move_tolerance=500.0,
             )
         )
 
@@ -2662,9 +2664,9 @@ def build_execution_steps(
                 farm.farm_map_id,
                 farm.farm_path,
                 clear_area_radius=clear_radius,
-                pause_on_combat=True,
+                pause_on_combat=None,
                 flag_heroes_to_waypoint=False,
-                move_tolerance=175.0,
+                move_tolerance=500.0,
             )
         )
 
