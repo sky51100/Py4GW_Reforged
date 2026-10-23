@@ -49,6 +49,7 @@ TOT_BATCH_SIZE = 250
 JAGA_KILL_TARGET = 50
 BALLING_STEP_TIMEOUT_MS = 120_000
 HEART_ATTEMPT_TIMEOUT_MS = 8000
+HEART_RETRY_COOLDOWN_MS = 12000  # avoid repeated requests while skill is unavailable
 KILL_SPOT = (12485.18, -17260.41)
 NORN_NPC = (13367, -20771)
 JAGA_PORTAL_FLAG = (15495.16, -20762.87)
@@ -194,6 +195,7 @@ runtime: dict[str, Any] = {
     "balling": False,
     "heart_requested": False,
     "heart_casting": False,
+    "heart_next_attempt_at": 0,
     "isolation_verified": False,
     "isolation_group": 0,
     "isolation_ready_once": False,
@@ -317,6 +319,7 @@ def _reset_farm_state() -> None:
         balling=False,
         heart_requested=False,
         heart_casting=False,
+        heart_next_attempt_at=0,
         isolation_verified=False,
         isolation_group=0,
         isolation_ready_once=False,
@@ -340,7 +343,7 @@ def _reset_farm_state() -> None:
     )
     build = runtime["build"]
     if build is not None:
-        _build_set(build, "SetHeartOfShadowSuppressed", False)
+        # No Heart suppression setter in the installed build.
         _build_set(build, "SetKillingRoutine", False)
         _build_set(build, "SetRoutineFinished", False)
         _build_set(build, "SetStuckSignal", 0)
@@ -576,8 +579,11 @@ def _isolation_ready_for_tick() -> bool:
 
 def _travel_to_start() -> BehaviorTree:
     def build(_node: BehaviorTree.Node) -> BehaviorTree:
-        if runtime["prepared"] and Map.GetMapID() in (BJORA, JAGA):
-            return BT.Succeeder("Continue current farm loop")
+        if Map.GetMapID() in (BJORA, JAGA):
+            # Never travel back to Longeyes merely because Planner/runtime was reset.
+            # Field characters resume from the current explorable instance.
+            return BT.Succeeder("Continue in current Bjora/Jaga instance")
+        _log(f"Town preparation: travelling to Longeyes (current map={Map.GetMapID()}, prepared={runtime['prepared']}).")
         return RoutinesBT.Map.TravelToOutpost(outpost_id=LONGEYES, log=True, timeout=60_000)
 
     return BT.Subtree("Travel to Longeyes Ledge on start", build)
@@ -594,6 +600,9 @@ def _tick_death_recovery(tree: BottingTree) -> bool:
     global _death_recovery_tree
     dead = Agent.IsDead(Player.GetAgentID())
     defeated = GLOBAL_CACHE.Party.IsPartyDefeated()
+    # Do not classify a completed solo clear as a wipe if the player is alive.
+    if not dead:
+        defeated = False
     if not runtime["recovering"]:
         if not dead and not defeated:
             return False
@@ -663,7 +672,7 @@ def _assign_build() -> bool:
         _log(f"Preparing {primary}/{target_secondary} from {primary}/{secondary} via skill template.")
     if not isinstance(runtime["build"], build_type):
         runtime["build"] = build_type()
-        _build_set(runtime["build"], "SetHeartOfShadowSuppressed", True)
+        # Use original build methods only; no suppression API exists in Apo CoreLib.
     return True
 
 
@@ -717,7 +726,7 @@ def _mark_prepared() -> None:
 def _refresh_build_after_skillbar() -> None:
     current: SF_Ass_vaettir | SF_Mes_vaettir = runtime["build"]
     runtime["build"] = type(current)()
-    _build_set(runtime["build"], "SetHeartOfShadowSuppressed", not runtime["balling"])
+    # The loaded build uses its own original skill rotation.
 
 
 def _revival_defenses_ready(build: SF_Ass_vaettir | SF_Mes_vaettir) -> bool:
@@ -738,7 +747,7 @@ def _restore_skills_after_revival() -> Generator[Any, Any, bool]:
     _build_set(build, "SetKillingRoutine", False)
     _build_set(build, "SetRoutineFinished", False)
     _build_set(build, "SetStuckSignal", 0)
-    _build_set(build, "SetHeartOfShadowSuppressed", True)
+    # No Heart suppression setter in the installed build.
     runtime["prepared"] = True
     deadline = Utils.GetBaseTimestamp() + 90_000
     _log("Revival: rebuilding skill rotation and restoring defenses before the normal clear route.")
@@ -825,6 +834,19 @@ def _flag_companions_at_portal() -> None:
         _log(f"Heroes and henchmen flagged at {JAGA_PORTAL_FLAG} after the Norn blessing.")
 
 
+def _resume_field_preparation() -> bool:
+    """Restore the prepared flag after a planner reset without town travel.
+
+    The build is selected by Initialize Bot. Preparation from an outpost still
+    performs the ordinary skillbar loading and HM setup.
+    """
+    if Map.GetMapID() in (BJORA, JAGA) and runtime["build"] is not None:
+        if not runtime["prepared"]:
+            _log("Already in explorable zone: resuming existing build; no Longeyes travel.")
+        runtime["prepared"] = True
+    return True
+
+
 def _prepare_skillbar() -> BehaviorTree:
     """YAVB preparation: equip the appropriate original Vaettir build.
 
@@ -832,7 +854,7 @@ def _prepare_skillbar() -> BehaviorTree:
     recovering in Bjora/Jaga: that would interrupt the active farm.
     """
     def choose(_node: BehaviorTree.Node) -> BehaviorTree:
-        if runtime["prepared"] and Map.GetMapID() in (BJORA, JAGA):
+        if Map.GetMapID() in (BJORA, JAGA):
             return BT.Succeeder("Already prepared in explorable area")
         if Map.GetMapID() != LONGEYES:
             return BT.Failer("Skillbar preparation requires Longeyes")
@@ -844,7 +866,7 @@ def _prepare_skillbar() -> BehaviorTree:
 
 
 def _refresh_prepared_build() -> bool:
-    if runtime["prepared"] and Map.GetMapID() in (BJORA, JAGA):
+    if Map.GetMapID() in (BJORA, JAGA):
         return True
     if Map.GetMapID() != LONGEYES:
         return False
@@ -853,7 +875,7 @@ def _refresh_prepared_build() -> bool:
 
 
 def _prepare_henchmen() -> Generator[Any, Any, bool]:
-    if runtime["prepared"] and Map.GetMapID() in (BJORA, JAGA):
+    if Map.GetMapID() in (BJORA, JAGA):
         return True
     if Map.GetMapID() != LONGEYES:
         return False
@@ -861,7 +883,7 @@ def _prepare_henchmen() -> Generator[Any, Any, bool]:
 
 
 def _validate_preparation() -> bool:
-    if runtime["prepared"] and Map.GetMapID() in (BJORA, JAGA):
+    if Map.GetMapID() in (BJORA, JAGA):
         return True
     if Map.GetMapID() != LONGEYES:
         _log("Preparation must be performed in Longeyes.", PySystem.Console.MessageType.Error)
@@ -873,7 +895,7 @@ def _validate_preparation() -> bool:
 
 
 def _mark_prepared_after_setup() -> bool:
-    if runtime["prepared"] and Map.GetMapID() in (BJORA, JAGA):
+    if Map.GetMapID() in (BJORA, JAGA):
         return True
     if Map.GetMapID() != LONGEYES:
         return False
@@ -883,7 +905,7 @@ def _mark_prepared_after_setup() -> bool:
 
 def _enable_hard_mode() -> BehaviorTree:
     def choose(_node: BehaviorTree.Node) -> BehaviorTree:
-        if runtime["prepared"] and Map.GetMapID() in (BJORA, JAGA):
+        if Map.GetMapID() in (BJORA, JAGA):
             return BT.Succeeder("Hard mode already configured")
         if Map.GetMapID() != LONGEYES:
             return BT.Failer("Hard mode must be configured in Longeyes")
@@ -893,7 +915,7 @@ def _enable_hard_mode() -> BehaviorTree:
 
 def _leave_longeyes() -> BehaviorTree:
     def choose(_node: BehaviorTree.Node) -> BehaviorTree:
-        if runtime["prepared"] and Map.GetMapID() in (BJORA, JAGA):
+        if Map.GetMapID() in (BJORA, JAGA):
             return BT.Succeeder("Already outside Longeyes")
         if Map.GetMapID() != LONGEYES or not runtime["prepared"]:
             return BT.Failer("Prepare build before leaving Longeyes")
@@ -946,7 +968,10 @@ def _start_farm() -> None:
 
 def _set_clear_zone_heart_suppression(suppressed: bool) -> None:
     build: SF_Ass_vaettir | SF_Mes_vaettir = runtime["build"]
-    _build_set(build, "SetHeartOfShadowSuppressed", suppressed)
+    # Apo's supplied Vaettir builds do not implement SetHeartOfShadowSuppressed.
+    # Heart casts remain governed by the actual build routine and the explicit
+    # serialized request in _build_rotation_service.
+    # No nonexistent method is called here.
     if suppressed:
         _build_set(build, "SetStuckSignal", 0)
 
@@ -986,14 +1011,7 @@ def _wait_for_ball(label: str, timeout_ms: int) -> BehaviorTree:
                         _log(f"{label}: aggro ball timeout.", PySystem.Console.MessageType.Warning)
                     break
                 yield from Routines.Yield.wait(150)
-            if runtime["balling"]:
-                runtime["heart_requested"] = True
-                deadline = Utils.GetBaseTimestamp() + 4000
-                while runtime["balling"] and (runtime["heart_requested"] or runtime["heart_casting"]):
-                    if Utils.GetBaseTimestamp() >= deadline:
-                        runtime["heart_requested"] = False
-                        break
-                    yield from Routines.Yield.wait(100)
+            # HoS is reserved for actual body blocks (the watchdog requests it).
             return True
         finally:
             runtime["waiting"] = False
@@ -1050,6 +1068,9 @@ def _press_against_kill_wall() -> BehaviorTree:
 
 def _kill_ball() -> BehaviorTree:
     def kill() -> Generator[Any, Any, bool]:
+        if runtime["build"] is None:
+            _log("Kill prevented: Vaettir build was not initialized.", PySystem.Console.MessageType.Error)
+            return False
         _set_balling(False)
         started = Utils.GetBaseTimestamp()
         clear_at: int | None = None
@@ -1255,7 +1276,7 @@ def _leave_jaga() -> BehaviorTree:
     def leave() -> Generator[Any, Any, bool]:
         _set_balling(False)
         runtime["farming"] = False
-        move = BT.MoveAndExitMap((-26744,16326), target_map_id=BJORA)
+        move = BT.MoveAndExitMap((17295, -20788), target_map_id=BJORA)
         runtime["exiting_jaga"] = True
         try:
             while True:
@@ -1282,8 +1303,9 @@ def _open_tot_bags_in_bjora() -> Generator[Any, Any, bool]:
     if Map.GetMapID() != BJORA or not runtime["returning_from_jaga"]:
         return True
     count = GLOBAL_CACHE.Inventory.GetModelCount(TOT_BAG_MODEL_ID)
-    target = count // TOT_BATCH_SIZE * TOT_BATCH_SIZE
+    target = count
     if not target:
+        _log("Bjora reset: no Trick-or-Treat Bags in inventory.")
         return True
     runtime["opening_tot_bags"] = True
     runtime["tot_progress"] = f"0/{target}"
@@ -1331,6 +1353,25 @@ def _open_tot_bags_in_bjora() -> Generator[Any, Any, bool]:
         _log(f"Bjora reset: {opened}/{target} Trick-or-Treat Bags opened this pass.")
 
 
+def _request_heart(reason: str) -> bool:
+    """Request a single serialized HoS attempt, respecting a shared cooldown."""
+    now = Utils.GetBaseTimestamp()
+    if (
+        runtime["build"] is None
+        or runtime["killing"]
+        or not (runtime["balling"] or runtime["exiting_jaga"])
+        or runtime["heart_requested"]
+        or runtime["heart_casting"]
+        or now < runtime["heart_next_attempt_at"]
+        or Map.GetMapID() != JAGA
+        or Agent.IsDead(Player.GetAgentID())
+    ):
+        return False
+    runtime["heart_requested"] = True
+    _log(reason)
+    return True
+
+
 def _build_rotation_service() -> BehaviorTree:
     def rotate() -> Generator[Any, Any, None]:
         while True:
@@ -1342,7 +1383,8 @@ def _build_rotation_service() -> BehaviorTree:
             restoring = bool(runtime["restore_revival_skills"])
             recovery_phase = "balling" if runtime["balling"] else "exiting_jaga"
             recovery = bool(
-                runtime.get(recovery_phase, False) and runtime["heart_requested"] and not runtime["killing"]
+                runtime.get(recovery_phase, False) and runtime["heart_requested"]
+                and not runtime["killing"]
             )
             recovery_started = Utils.GetBaseTimestamp()
             if restoring:
@@ -1356,6 +1398,10 @@ def _build_rotation_service() -> BehaviorTree:
                 _set_clear_zone_heart_suppression(False)
                 runtime["heart_requested"] = False
                 runtime["heart_casting"] = True
+                runtime["heart_next_attempt_at"] = Utils.GetBaseTimestamp() + HEART_RETRY_COOLDOWN_MS
+                # The build's automatic HoS path also checks stuck_signal;
+                # use only the explicit serialized CastHeartOfShadow path here.
+                _build_set(build, "SetStuckSignal", 0)
                 stats["heart_requests"] += 1
                 _log(f"Heart of Shadow attempt: {recovery_phase}, position {Player.GetXY()}.")
                 vaettir_build = cast(SF_Ass_vaettir | SF_Mes_vaettir, build)
@@ -1461,9 +1507,8 @@ def _exit_stuck_service() -> BehaviorTree:
             and not runtime["heart_casting"]
             and Routines.Checks.Agents.InDanger(Range.Adjacent)
         ):
-            runtime["heart_requested"] = True
-            state["request_at"] = now + 5000
-            _log("Exit body block after loot: no progress for five seconds; requesting Heart of Shadow.")
+            if _request_heart("Exit body block after loot: requesting Heart of Shadow."):
+                state["request_at"] = now + HEART_RETRY_COOLDOWN_MS
         return BehaviorTree.NodeState.RUNNING
 
     return BehaviorTree(BehaviorTree.ActionNode(name="Post-loot exit body block watchdog", action_fn=tick))
@@ -1497,12 +1542,12 @@ def _stuck_service() -> BehaviorTree:
             previous_xy: tuple[float, float] | None = state["last_xy"]
             if previous_xy is not None and math.dist(xy, previous_xy) < 35:
                 runtime["stuck_count"] += 1
-                _build_set(runtime["build"], "SetStuckSignal", runtime["stuck_count"])
+                # Do not signal the build's own HoS logic. Explicit casting is
+                # owned by the single rotation service to avoid double casts.
                 Player.SendChatCommand("stuck")
                 stats["unstuck"] += 1
                 if Routines.Checks.Agents.InDanger(Range.Adjacent) and not runtime["heart_casting"]:
-                    runtime["heart_requested"] = True
-                    _log("Balling body block: requesting Heart of Shadow through the build rotation.")
+                    _request_heart("Balling body block: requesting Heart of Shadow through the build rotation.")
             else:
                 runtime["stuck_count"] = 0
                 _build_set(runtime["build"], "SetStuckSignal", 0)
@@ -1534,6 +1579,7 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
             ),
         ),
         ("Verify Account Isolation", lambda: _generator_step("Verify local isolation", _verify_isolation)),
+        ("Resume Current Instance", lambda: _action("Resume Bjora/Jaga if already present", _resume_field_preparation)),
         ("Travel to Longeyes Ledge", _travel_to_start),
         ("Prepare 01 - Validate", lambda: _action("Validate build preparation", _validate_preparation)),
         ("Prepare 02 - Equip YAVB Skillbar", _prepare_skillbar),
@@ -1572,7 +1618,7 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
         ("Clear 19 - Identify and Salvage", lambda: _generator_step("Process field loot", _inventory_pass)),
         ("Clear 20 - Record Statistics", lambda: _action("Record Jaga run", _finish_run)),
         ("Exit Jaga Moraine", _leave_jaga),
-        ("Open Trick-or-Treat Bags in Bjora", lambda: _generator_step("Open complete ToT batches", _open_tot_bags_in_bjora)),
+        ("Open Trick-or-Treat Bags in Bjora", lambda: _generator_step("Open available ToT bags", _open_tot_bags_in_bjora)),
     ])
     return [(name, lambda name=name, factory=factory: _checked_step(name, factory)) for name, factory in steps]
 
