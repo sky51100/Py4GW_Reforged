@@ -17,6 +17,7 @@ class BottingTreeServicesMixin:
         attempt_interval_ms: float = 5000.0,
         retry_cycle_delay_ms: float = 15000.0,
         log: bool = True,
+        excluded_summon_npc_names: Sequence[str] = (),
     ) -> BehaviorTree:
         """Keep one summoning-stone ally active for a multibox party.
 
@@ -38,6 +39,7 @@ class BottingTreeServicesMixin:
             "next_probe_ms": 0.0,
         }
         allowed_maps = {int(map_id) for map_id in (map_ids or ()) if int(map_id) > 0}
+        excluded_names = frozenset(str(name).strip().casefold() for name in excluded_summon_npc_names if str(name).strip())
 
         def _log(message: str, message_type=PySystem.Console.MessageType.Info) -> None:
             if not log:
@@ -186,11 +188,15 @@ class BottingTreeServicesMixin:
                 return BehaviorTree.NodeState.RUNNING
 
             try:
-                summon_alive = bool(has_active_party_summon())
+                # Keep the watcher and receiver-side Messaging detection aligned.
+                # Without exclusions the standard detector behaves exactly as before.
+                summon_alive = bool(has_active_party_summon(excluded_npc_names=excluded_names))
             except Exception:
                 summon_alive = False
 
-            if not summon_alive:
+            # Bogroot probe also runs when the detector reports an active summon:
+            # that is the key signal when an escort NPC creates a false positive.
+            if not summon_alive or excluded_names:
                 probe_now_ms = time.monotonic() * 1000.0
                 if probe_now_ms >= float(state.get("next_probe_ms", 0.0) or 0.0):
                     state["next_probe_ms"] = probe_now_ms + 60000.0

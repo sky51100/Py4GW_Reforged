@@ -328,7 +328,7 @@ L3_BRIGANT_ROOM = [Vec2f(-4528, 6301), Vec2f(-8203, 2775), Vec2f(-11428, 3600), 
 L3_PATH_TO_TORCH = [Vec2f(-4723.0, 6703.0), Vec2f(-1280.0, 7880.0), Vec2f(3089.73, 8511.0), Vec2f(4963.0, 9974.0), Vec2f(9918.64, 19108.0), Vec2f(14709.0, 19526.0), Vec2f(16111.0, 17556.0)]
 L3_TORCH_CHEST = Vec2f(16111.0, 17556.0)
 L3_BRAZIERS = [(15692.0, 17111.0), (12969.0, 19842.0), (8236.0, 16950.0), (5549.0, 9920.0), (-536.0, 6109.0), (-3814.0, 5599.0), (-4959.0, 7558.0), (-7532.0, 4536.0), (-10984.0, 486.0), (-12621.0, 2948.0)]
-L3_FENDI_PATH = [Vec2f(-8696, 6323), Vec2f(-9988, 7652), Vec2f(-12712.36, 13502.19)]
+L3_FENDI_PATH = [Vec2f(-8696, 6323), Vec2f(-9988, 7652), Vec2f(-12712.36, 13502.19),Vec2f(-13868,14402)]
 FENDI_CHEST_POSITION = (-15800.98, 16901.23)
 FENDI_CHEST_GADGET_ID = 8934
 
@@ -5175,6 +5175,14 @@ def Level2_Start() -> BehaviorTree:
             ResolveTorchCombatPolicy(),
             BT.AddModelToLootWhitelist(25410),
             BT.MoveAndDialog(L2_BLESSING_NPC, dialog_id=DWARVEN_BLESSING_DIALOG, multi_account=True, log=SHARDS_MOVEMENT_LOGS),
+
+        ],
+    )
+
+def Level2_FirstTorchApproach() -> BehaviorTree:
+    return BT.Sequence(
+        name='Level 2 First Torch Approach',
+        children=[
             BT.ClearEnemiesInArea(Vec2f(-15243.0, -17230.0), radius=Range.Compass.value, log=True),
             EnsureTorchFromChest('level2_torch_chest', L2_TORCH_CHEST),
         ],
@@ -5562,7 +5570,7 @@ def Level3_FendiFight() -> BehaviorTree:
             # Defense in depth for restarts: route movement keeps the normal
             # planner combat gate until the dedicated Fendi arena node begins.
             _set_planner_pause_on_combat(True, name="Fendi - Keep Planner Paused During Approach"),
-            ShardsTrapMove(Vec2f(-13198.79, 13789.36), log=SHARDS_MOVEMENT_LOGS),
+            ShardsTrapMove(Vec2f(-13868,14402), log=SHARDS_MOVEMENT_LOGS),
             # Fendi is intentionally different from route movement.  Its combat
             # logic must keep ticking so boss priority and trap avoidance remain
             # active while HeroAI is fighting.
@@ -5824,6 +5832,7 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
         (f"Level 1 Route To Level 2 - Point {len(L1_PATH_AFTER_DOOR):02d}", Level1_EnterLevel2),
 
         ("Level 2 Start", Level2_Start),
+        ("Level 2 First Torch Approach", Level2_FirstTorchApproach),
         *_torch_vanquish_point_steps("Level 2 First Torch Drop Route", SOO_LEVEL_2, L2_FIRST_TORCH_DROP_POINT_PATH, pause_on_combat=True, skip_if_in_maps=(SOO_LEVEL_3,)),
         ("Level 2 First Torch Fight", Level2_FirstTorchFight),
         *_torch_vanquish_point_steps("Level 2 First Brazier Approach", SOO_LEVEL_2, [Vec2f(-9404.44, -17963.49), Vec2f(-11303.00, -14596.00)], pause_on_combat=True, skip_if_in_maps=(SOO_LEVEL_3,)),

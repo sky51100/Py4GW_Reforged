@@ -89,10 +89,11 @@ INVENTORY_SNAPSHOT_SETTLE_MS = 2_000
 INVENTORY_TRAVEL_TIMEOUT_MS = 60_000
 INVENTORY_MERCHANT_TIMEOUT_MS = 240_000
 
+MORALE_CON_MODEL_IDS = (int(ModelID.Four_Leaf_Clover.value), int(ModelID.Honeycomb.value))
 PCON_UPKEEPS = tuple(
     int(model_id)
     for model_id in ALL_CONSUMABLE_UPKEEPS
-    if int(model_id) not in CONSET_UPKEEPS
+    if int(model_id) not in CONSET_UPKEEPS and int(model_id) not in MORALE_CON_MODEL_IDS
 )
 CONSET_RESTOCK_ITEMS = tuple((int(model_id), 10) for model_id in CONSET_UPKEEPS)
 PCON_RESTOCK_ITEMS = tuple((int(model_id), 10) for model_id in PCON_UPKEEPS)
@@ -207,6 +208,8 @@ _restock_conset = True
 _activate_conset = True
 _restock_pcons = True
 _activate_pcons = True
+_restock_morale_cons = True
+_activate_morale_cons = True
 _use_summoning_stone = True
 _restock_quantities: dict[int, int] = dict(DEFAULT_RESTOCK_DEFAULTS)
 _auto_loot = True
@@ -266,7 +269,7 @@ def _load_settings() -> None:
     global _restock_quantities
     global _settings_loaded
     global _use_hard_mode, _restock_conset, _activate_conset
-    global _restock_pcons, _activate_pcons, _use_summoning_stone
+    global _restock_pcons, _activate_pcons, _restock_morale_cons, _activate_morale_cons, _use_summoning_stone
     global _auto_loot, _inventory_maintenance_enabled
     global _inventory_min_free_slots, _inventory_min_id_kits, _inventory_min_salvage_kits
 
@@ -279,6 +282,8 @@ def _load_settings() -> None:
     _activate_conset = _settings.get_bool(_SETTINGS_SECTION, "ActivateConset", True)
     _restock_pcons = _settings.get_bool(_SETTINGS_SECTION, "RestockPcons", True)
     _activate_pcons = _settings.get_bool(_SETTINGS_SECTION, "ActivatePcons", True)
+    _restock_morale_cons = _settings.get_bool(_SETTINGS_SECTION, "RestockMoraleCons", _restock_pcons)
+    _activate_morale_cons = _settings.get_bool(_SETTINGS_SECTION, "ActivateMoraleCons", _activate_pcons)
     _use_summoning_stone = _settings.get_bool(_SETTINGS_SECTION, "UseSummoningStone", True)
     _auto_loot = _settings.get_bool(_SETTINGS_SECTION, "AutoLoot", True)
     _inventory_maintenance_enabled = _settings.get_bool(_SETTINGS_SECTION, "InventoryMaintenanceEnabled", True)
@@ -296,6 +301,8 @@ def _save_settings() -> None:
     _settings.set(_SETTINGS_SECTION, "ActivateConset", _activate_conset)
     _settings.set(_SETTINGS_SECTION, "RestockPcons", _restock_pcons)
     _settings.set(_SETTINGS_SECTION, "ActivatePcons", _activate_pcons)
+    _settings.set(_SETTINGS_SECTION, "RestockMoraleCons", _restock_morale_cons)
+    _settings.set(_SETTINGS_SECTION, "ActivateMoraleCons", _activate_morale_cons)
     _settings.set(_SETTINGS_SECTION, "UseSummoningStone", _use_summoning_stone)
     _settings.set(_SETTINGS_SECTION, "AutoLoot", _auto_loot)
     _settings.set(_SETTINGS_SECTION, "InventoryMaintenanceEnabled", _inventory_maintenance_enabled)
@@ -576,7 +583,7 @@ def _tick_direct_pcon_upkeep() -> None:
     global _pcon_direct_index, _pcon_direct_last_dispatch_ms
     global _pcon_direct_runtime_logged, _pcon_direct_last_recipient_signature
 
-    if not _bot_is_started() or not _runtime_consumables_enabled or not _activate_pcons:
+    if not _bot_is_started() or not _runtime_consumables_enabled or not (_activate_pcons or _activate_morale_cons):
         if _pcon_direct_runtime_logged or _pcon_direct_last_dispatch_ms:
             _reset_direct_pcon_runtime()
         return
@@ -589,7 +596,9 @@ def _tick_direct_pcon_upkeep() -> None:
     except Exception:
         return
 
-    if not PCON_UPKEEPS:
+    enabled_models = ((PCON_UPKEEPS if _activate_pcons else ()) +
+                      (MORALE_CON_MODEL_IDS if _activate_morale_cons else ()))
+    if not enabled_models:
         return
 
     now_ms = int(time.monotonic() * 1000.0)
@@ -607,12 +616,12 @@ def _tick_direct_pcon_upkeep() -> None:
         _pcon_direct_last_recipient_signature = recipient_signature
         PySystem.Console.Log(
             MODULE_NAME,
-            f"[PCons] Direct multibox upkeep active: models={len(PCON_UPKEEPS)}, accounts={len(recipients)}.",
+            f"[PCons] Direct multibox upkeep active: models={len(enabled_models)}, accounts={len(recipients)}.",
             PySystem.Console.MessageType.Info,
         )
 
-    model_id = int(PCON_UPKEEPS[_pcon_direct_index % len(PCON_UPKEEPS)])
-    _pcon_direct_index = (_pcon_direct_index + 1) % len(PCON_UPKEEPS)
+    model_id = int(enabled_models[_pcon_direct_index % len(enabled_models)])
+    _pcon_direct_index = (_pcon_direct_index + 1) % len(enabled_models)
 
     sender_email = str(Player.GetAccountEmail() or "").strip()
     if not sender_email:
@@ -687,6 +696,7 @@ def _configure_runtime_upkeeps(enabled: bool | None = None) -> None:
     )
     botting_tree.EnsureSummoningStonePartyService(
         enabled=lambda: _use_summoning_stone and _consumables_allowed(),
+        excluded_summon_npc_names=("Tekks",),
         map_ids=(BOGROOT_LEVEL_1, BOGROOT_LEVEL_2),
         initial_grace_ms=2_000,
         attempt_interval_ms=5_000,
@@ -755,12 +765,11 @@ def _draw_restock_config() -> None:
     )
     PyImGui.text_wrapped("Hover an icon for the item name, ModelID and current restock state.")
 
-    # These bots historically treat Clover/Honeycomb as PCons, so the Morale
-    # display group intentionally follows the PCon restock switch.
+    # Morale consumables have their own independent restock switch.
     group_enabled = {
         "Conset": bool(_restock_conset),
         "Personal PCons": bool(_restock_pcons),
-        "Morale": bool(_restock_pcons),
+        "Morale": bool(_restock_morale_cons),
         "Summoning": bool(_use_summoning_stone),
     }
 
@@ -782,8 +791,8 @@ def _draw_restock_config() -> None:
 
     PyImGui.separator()
     PyImGui.text_wrapped(
-        "The group switches in the Config tab control whether Conset, PCons and "
-        "Summoning Stones are included in the restock step. Disabling a group "
+        "The group switches in the Run Config tab control whether Conset, PCons, "
+        "Morale consumables and Summoning Stones are included in the restock step. Disabling a group "
         "keeps its saved per-item targets."
     )
 
@@ -798,6 +807,8 @@ def _runtime_restock_node() -> BehaviorTree:
             enabled_models.update(int(model_id) for model_id in CONSET_UPKEEPS)
         if _restock_pcons:
             enabled_models.update(int(model_id) for model_id in PCON_UPKEEPS)
+        if _restock_morale_cons:
+            enabled_models.update(int(model_id) for model_id in MORALE_CON_MODEL_IDS)
         if _use_summoning_stone:
             enabled_models.update(int(model_id) for model_id in SUMMON_MODEL_IDS)
 
@@ -825,9 +836,9 @@ def _runtime_restock_node() -> BehaviorTree:
 
 
 def _draw_run_config() -> None:
-    import PyImGui
     global _use_hard_mode, _restock_conset, _activate_conset
-    global _restock_pcons, _activate_pcons, _use_summoning_stone, _auto_loot
+    global _restock_pcons, _activate_pcons, _restock_morale_cons, _activate_morale_cons
+    global _use_summoning_stone, _auto_loot
     global _inventory_maintenance_enabled
     global _inventory_min_free_slots, _inventory_min_id_kits, _inventory_min_salvage_kits
 
@@ -837,30 +848,60 @@ def _draw_run_config() -> None:
 
     PyImGui.text("Frog Scepter Run Config")
     PyImGui.separator()
+    value = PyImGui.checkbox("Hard Mode (HM)", _use_hard_mode)
+    if value != _use_hard_mode:
+        _use_hard_mode = value
+        changed = True
 
-    toggles = (
-        ("Hard Mode (HM)", "_use_hard_mode", False),
-        ("Restock conset from storage", "_restock_conset", False),
-        ("Activate / maintain conset", "_activate_conset", True),
-        ("Restock pcons from storage", "_restock_pcons", False),
-        ("Activate / maintain pcons", "_activate_pcons", True),
-        ("Use summoning stones", "_use_summoning_stone", False),
-    )
-    for label, variable_name, affects_upkeep in toggles:
-        old_value = bool(globals()[variable_name])
-        new_value = PyImGui.checkbox(label, old_value)
-        if new_value != old_value:
-            globals()[variable_name] = new_value
-            changed = True
-            upkeep_changed = upkeep_changed or affects_upkeep
+    PyImGui.separator()
+    PyImGui.text("Conset")
+    value = PyImGui.checkbox("Restock conset from storage", _restock_conset)
+    if value != _restock_conset:
+        _restock_conset = value
+        changed = True
+    value = PyImGui.checkbox("Activate / maintain conset", _activate_conset)
+    if value != _activate_conset:
+        _activate_conset = value
+        changed = upkeep_changed = True
+
+    PyImGui.separator()
+    PyImGui.text("Personal consumables")
+    value = PyImGui.checkbox("Restock pcons from storage", _restock_pcons)
+    if value != _restock_pcons:
+        _restock_pcons = value
+        changed = True
+    value = PyImGui.checkbox("Activate / maintain pcons", _activate_pcons)
+    if value != _activate_pcons:
+        _activate_pcons = value
+        _reset_direct_pcon_runtime()
+        changed = True
+
+    PyImGui.separator()
+    PyImGui.text("Morale consumables (party-wide)")
+    value = PyImGui.checkbox("Restock morale cons from storage", _restock_morale_cons)
+    if value != _restock_morale_cons:
+        _restock_morale_cons = value
+        changed = True
+    value = PyImGui.checkbox("Activate / maintain morale cons", _activate_morale_cons)
+    if value != _activate_morale_cons:
+        _activate_morale_cons = value
+        _reset_direct_pcon_runtime()
+        changed = True
+    PyImGui.text_wrapped("Four-Leaf Clover below 100 morale; Honeycomb below 110. Independent of personal PCons.")
+
+    PyImGui.separator()
+    PyImGui.text("Summoning stones")
+    value = PyImGui.checkbox("Use summoning stones", _use_summoning_stone)
+    if value != _use_summoning_stone:
+        _use_summoning_stone = value
+        changed = True
 
     PyImGui.separator()
     PyImGui.text("Loot")
     value = PyImGui.checkbox("Auto loot", _auto_loot)
     if value != _auto_loot:
         _auto_loot = value
-        changed = True
-        upkeep_changed = True
+        changed = upkeep_changed = True
 
     PyImGui.separator()
     PyImGui.text("Inventory maintenance")
@@ -1948,6 +1989,28 @@ initialized = False
 botting_tree: BottingTree | None = None
 
 
+def _configure_botting_tree(tree: BottingTree) -> None:
+    """Install Core upkeep and summoning together, as in Shards of Orr."""
+    tree.Config.ConfigureUpkeep(
+        looting_enabled=_auto_loot,
+        resurrection_scroll=True,
+        auto_inventory_handler_enabled=True,
+        consumable_upkeeps=_enabled_consumable_upkeeps(),
+        enable_party_wipe_recovery=True,
+        enable_nearest_shrine_recovery=True,
+        heroai_state_logging=False,
+    )
+    tree.EnsureSummoningStonePartyService(
+        enabled=lambda: _use_summoning_stone and _consumables_allowed(),
+        excluded_summon_npc_names=("Tekks",),
+        map_ids=(BOGROOT_LEVEL_1, BOGROOT_LEVEL_2),
+        initial_grace_ms=2_000,
+        attempt_interval_ms=5_000,
+        retry_cycle_delay_ms=15_000,
+        log=True,
+    )
+
+
 def ensure_botting_tree() -> BottingTree:
     global botting_tree
 
@@ -1961,23 +2024,7 @@ def ensure_botting_tree() -> BottingTree:
             repeat=True,
             multi_account=True,
             isolation_enabled=False,
-            configure_fn=lambda tree: tree.Config.ConfigureUpkeep(
-                looting_enabled=_auto_loot,
-                resurrection_scroll=True,
-                auto_inventory_handler_enabled=True,
-                consumable_upkeeps=_enabled_consumable_upkeeps(),
-                enable_party_wipe_recovery=True,
-                enable_nearest_shrine_recovery=True,
-                heroai_state_logging=False,
-            ),
-        )
-        botting_tree.EnsureSummoningStonePartyService(
-            enabled=lambda: _use_summoning_stone and _consumables_allowed(),
-            map_ids=(BOGROOT_LEVEL_1, BOGROOT_LEVEL_2),
-            initial_grace_ms=2_000,
-            attempt_interval_ms=5_000,
-            retry_cycle_delay_ms=15_000,
-            log=True,
+            configure_fn=_configure_botting_tree,
         )
     return botting_tree
 
@@ -2839,6 +2886,49 @@ def tooltip() -> None:
 
     PyImGui.end_tooltip()
 
+# Temporary diagnostics for cases where the Core watcher starts but no stone fires.
+_SUMMON_DIAGNOSTIC_INTERVAL_MS = 30_000
+_summon_diagnostic_last_ms = 0
+_summon_diagnostic_signature = None
+
+
+def _tick_summon_diagnostics() -> None:
+    """Independent diagnostic: do not gate on the BottingTree started flag."""
+    global _summon_diagnostic_last_ms, _summon_diagnostic_signature
+    try:
+        map_id = int(Map.GetMapID() or 0)
+        if map_id not in (BOGROOT_LEVEL_1, BOGROOT_LEVEL_2):
+            _summon_diagnostic_last_ms = 0
+            _summon_diagnostic_signature = None
+            return
+        now_ms = int(time.monotonic() * 1000)
+        started = _bot_is_started()
+        ready = bool(Map.IsMapReady())
+        loading = bool(Map.IsMapLoading())
+        runtime = bool(_runtime_consumables_enabled)
+        checked = bool(_use_summoning_stone)
+        allowed = bool(_consumables_allowed())
+        counts = tuple(int(GLOBAL_CACHE.Inventory.GetModelCount(model_id) or 0) for model_id in SUMMON_MODEL_IDS)
+        signature = (map_id, started, ready, loading, runtime, checked, allowed, counts)
+        if (signature == _summon_diagnostic_signature
+                and now_ms - _summon_diagnostic_last_ms < _SUMMON_DIAGNOSTIC_INTERVAL_MS):
+            return
+        _summon_diagnostic_signature = signature
+        _summon_diagnostic_last_ms = now_ms
+        PySystem.Console.Log(
+            MODULE_NAME,
+            f"[Summon diagnosis] map={map_id}, started={started}, ready={ready}, "
+            f"loading={loading}, runtime={runtime}, checkbox={checked}, allowed={allowed}, "
+            + "local stones=" + ", ".join(f"{model_id}:{count}" for model_id, count in zip(SUMMON_MODEL_IDS, counts)),
+            PySystem.Console.MessageType.Info,
+        )
+    except Exception as exc:
+        PySystem.Console.Log(
+            MODULE_NAME, f"[Summon diagnosis] Error: {type(exc).__name__}: {exc}",
+            PySystem.Console.MessageType.Warning,
+        )
+
+
 def main() -> None:
     global initialized
 
@@ -2850,6 +2940,7 @@ def main() -> None:
     tree = ensure_botting_tree()
     _sync_consumable_upkeeps()
     tree.tick()
+    _tick_summon_diagnostics()
     _tick_direct_pcon_upkeep()
     attach_botting_tree_support(tree)
     tree.UI.draw_window(

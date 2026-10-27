@@ -1929,16 +1929,31 @@ def UsePcon(index: int, message: SharedMessageStruct):
 def UseSummoningStone(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
 
-    # Guard against summon spam:
-    # - Summoning Sickness already active
-    # - summon ally already alive nearby/party-side
-    if has_summoning_sickness(Player.GetAgentID()) or has_active_party_summon(GLOBAL_CACHE.Party.GetOthers()):
+    # Bogroot's escort NPC Tekks satisfies the generic summon detector but is
+    # not created by a summoning stone. Apply the same exception as the watcher
+    # on the RECEIVING account; otherwise every requested use is silently skipped.
+    # Other dungeons retain the original, unfiltered detection.
+    bogroot_map = int(Map.GetMapID() or 0) in (615, 616)
+    excluded_names = ("Tekks",) if bogroot_map else ()
+    sickness = has_summoning_sickness(Player.GetAgentID())
+    summon_alive = has_active_party_summon(
+        GLOBAL_CACHE.Party.GetOthers(), excluded_npc_names=excluded_names,
+    )
+    if sickness or summon_alive:
+        if bogroot_map and sickness and not summon_alive:
+            ConsoleLog(MODULE_NAME, "[Summon] Stone unavailable: Summoning Sickness.", Console.MessageType.Warning, True)
         GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
         return
 
+    # The Legionnaire Summoning Crystal consumes one skill point per use.
+    # When no point is available, try ordinary stones rather than ending the
+    # request without a summon (the crystal is reusable and remains in inventory).
     legionnaire_id = GLOBAL_CACHE.Inventory.GetFirstModelID(ModelID.Legionnaire_Summoning_Crystal.value)
-    if legionnaire_id:
+    current_skill_points = int(Player.GetSkillPointData()[0] or 0)
+    if legionnaire_id and current_skill_points > 0:
         GLOBAL_CACHE.Inventory.UseItem(legionnaire_id)
+        if bogroot_map:
+            ConsoleLog(MODULE_NAME, "[Summon] Using Legionnaire stone.", Console.MessageType.Info, True)
         yield from Routines.Yield.wait(500)
         GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
         return
@@ -1948,6 +1963,8 @@ def UseSummoningStone(index: int, message: SharedMessageStruct):
         igneous_id = GLOBAL_CACHE.Inventory.GetFirstModelID(ModelID.Igneous_Summoning_Stone.value)
         if igneous_id:
             GLOBAL_CACHE.Inventory.UseItem(igneous_id)
+            if bogroot_map:
+                ConsoleLog(MODULE_NAME, "[Summon] Using Igneous stone.", Console.MessageType.Info, True)
             yield from Routines.Yield.wait(500)
             GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
             return
@@ -1978,10 +1995,14 @@ def UseSummoningStone(index: int, message: SharedMessageStruct):
         item_id = GLOBAL_CACHE.Inventory.GetFirstModelID(summon_model)
         if item_id:
             GLOBAL_CACHE.Inventory.UseItem(item_id)
+            if bogroot_map:
+                ConsoleLog(MODULE_NAME, f"[Summon] Using stone model={int(summon_model)}.", Console.MessageType.Info, True)
             yield from Routines.Yield.wait(500)
             GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
             return
 
+    if bogroot_map:
+        ConsoleLog(MODULE_NAME, "[Summon] No usable summoning stone in this account's inventory.", Console.MessageType.Warning, True)
     GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
 # endregion
 

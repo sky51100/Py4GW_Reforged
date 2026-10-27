@@ -82,6 +82,7 @@ class BottingTreeUpkeepMixin:
         attempt_interval_ms: float = 5000.0,
         retry_cycle_delay_ms: float = 15000.0,
         log: bool = True,
+        excluded_summon_npc_names: Sequence[str] = (),
     ) -> None:
         subtree_or_builder = lambda: self.SummoningStonePartyServiceTree(
             enabled=enabled,
@@ -90,6 +91,7 @@ class BottingTreeUpkeepMixin:
             attempt_interval_ms=attempt_interval_ms,
             retry_cycle_delay_ms=retry_cycle_delay_ms,
             log=log,
+            excluded_summon_npc_names=excluded_summon_npc_names,
         )
         for index, (service_name, _existing) in enumerate(self._service_steps):
             if service_name != 'SummoningStonePartyService':

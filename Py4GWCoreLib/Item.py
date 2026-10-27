@@ -856,15 +856,23 @@ def _summon_scan_candidates():
     return candidate_ids, counts, errors
 
 
-def has_active_party_summon(others: Iterable[int] | None = None) -> bool:
-    """Return True when any living summoning-item ally exists in the instance.
+def has_active_party_summon(
+    others: Iterable[int] | None = None,
+    *,
+    excluded_npc_names: Iterable[str] = (),
+) -> bool:
+    """Return True when a living summoning-item ally exists in the instance.
 
     ``others`` is kept only for backward compatibility with existing callers.
-    Detection intentionally scans the full agent array because different
-    summoning items are exposed in different client arrays.
+    ``excluded_npc_names`` excludes escort NPCs from the result when explicitly
+    requested; its empty default preserves Shards and every other caller.
     """
     from .AgentArray import AgentArray
+    from .Agent import Agent
 
+    excluded_names = frozenset(
+        str(name).strip().casefold() for name in excluded_npc_names if str(name).strip()
+    )
     try:
         agent_ids = AgentArray.GetAgentArray() or []
     except Exception:
@@ -873,10 +881,22 @@ def has_active_party_summon(others: Iterable[int] | None = None) -> bool:
     for raw_agent_id in agent_ids:
         try:
             agent_id = int(raw_agent_id or 0)
-        except Exception:
+        except (TypeError, ValueError):
             continue
-        if agent_id > 0 and is_active_summoning_stone_ally(agent_id):
-            return True
+        if agent_id <= 0 or not is_active_summoning_stone_ally(agent_id):
+            continue
+        if excluded_names:
+            try:
+                npc_name = str(Agent.GetNameByID(agent_id) or "").strip().casefold()
+            except Exception:
+                npc_name = ""
+            if npc_name in excluded_names or any(
+                npc_name.startswith(excluded_name + " ")
+                or npc_name.startswith(excluded_name + " [")
+                for excluded_name in excluded_names
+            ):
+                continue
+        return True
 
     return False
 
@@ -917,8 +937,9 @@ def summon_detection_diagnostics(max_agents: int = 10) -> list[str]:
         interesting = (bool(npc) and bool(alive) and (likely or bool(party_visible) or bool(owner_id))) or known
         if interesting:
             recognized = is_active_summoning_stone_ally(aid)
+            npc_name = _safe(Agent.GetNameByID, aid, "") if npc else ""
             candidates.append((int(bool(known))*3 + int(likely)*2 + int(bool(party_visible)),
-                               f"id={aid} model={model_id} alive={alive} allegiance={allegiance_num} npc={npc} "
+                               f"id={aid} model={model_id} name={str(npc_name)[:60]!r} alive={alive} allegiance={allegiance_num} npc={npc} "
                                f"login={login} spawned={spawned} party={party_visible} type={type_map} "
                                f"flags={npc_flags} owner={owner_id} recognized={recognized}"))
     candidates.sort(key=lambda x: x[0], reverse=True)
