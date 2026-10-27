@@ -121,6 +121,10 @@ class BottingTreeTicksMixin:
             self.headless_heroai.reset()
             return BehaviorTree.NodeState.RUNNING
 
+        # Remember the follower options before a blessing dialog and restore them
+        # only after it closes. Retry unavailable accounts on subsequent ticks.
+        self.ReconcileMultiboxHeroAIAfterDialog(UIManager.IsNPCDialogVisible())
+
         # Never let HeroAI resume combat while an NPC dialog is still open.
         # Planner/dialog steps must remain free to continue, so this guard lives
         # in the HeroAI tick instead of blocking MoveAndDialog/SendDialog.

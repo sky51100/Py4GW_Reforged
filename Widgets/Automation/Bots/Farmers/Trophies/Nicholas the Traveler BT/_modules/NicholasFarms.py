@@ -5201,7 +5201,7 @@ FARMS: tuple[FarmDefinition, ...] = (
     FarmDefinition(
         key='stolen_supplies',
         name='Stolen Supplies',
-        model_id=851,
+        model_id=840,
         default_target=15,
         flow='direct',
         outpost_map_id=250,
