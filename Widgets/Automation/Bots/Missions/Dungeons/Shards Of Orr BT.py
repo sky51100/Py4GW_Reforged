@@ -4482,7 +4482,7 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
     RETRY_DELAY_MS = 1_000
     PICKUP_CONFIRM_GRACE_MS = 1_500
     PICKUP_SEARCH_RADIUS = 7500.0
-    DROP_RETRACE_TOLERANCE = 500.0
+    DROP_RETRACE_TOLERANCE = 2000.0
 
     def _create_pickup_tree() -> BehaviorTree:
         return BT.PickupGroundItemByModelID(
@@ -5646,6 +5646,7 @@ def Level2_PrepareRoom2() -> BehaviorTree:
                 'Level 2 Prepare Room 2 Combat',
                 clear_area_radius=Range.SafeCompass.value,
             ),
+            BT.WaitForClearEnemiesInArea(-9011.27, -11536.79, radius=Range.SafeCompass.value, log=True),
             PickupTorch(),
             BT.Wait(2000),
         ],
