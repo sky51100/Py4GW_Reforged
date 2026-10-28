@@ -1,3 +1,28 @@
+# SHARDS OF ORR BT | SINGLE-FILE ARCHITECTURE
+# =============================================================================
+# SEARCH / FOLD MAP (use editor search on "# region")
+#
+#   01-04  Metadata, GW IDs, runtime state, dungeon coordinates
+#   05-06  Configuration, consumables, restock settings/UI
+#   07-08  Multibox inventory/MerchantRules, drop statistics
+#   09-15  Runtime mechanics (restart markers, torch, traps, braziers)
+#   16-18  Core setup, preparation, planner step builders
+#   19-26  Dungeon levels 1/2/3 (one factory per Planner checkpoint)
+#   27     Reward, Lost Souls state, restart
+#   28     Planner composition by floor and widget entry point
+#
+# ARCHITECTURE BOUNDARIES
+#   * CoreLib owns shared recovery and HeroAI. Never duplicate core services.
+#   * This script owns Shards-specific traps, torches, braziers and Fendi.
+#   * Each individual Planner step is a checkpoint for wipe/shrine recovery.
+#   * Restart-safe run markers must survive a Core-managed planner reset.
+#   * Dungeon key (25410): remote whitelist + explicit post-Brigant loot sweep.
+#   * Routes, map IDs, BT names, delays and combat gates are deliberate.
+#
+# Editing guidelines: do not collapse waypoints, reorder BT children, or reset
+# mechanic markers outside the existing fresh-run boundary.
+# =============================================================================
+
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
@@ -10,28 +35,38 @@ from Py4GWCoreLib.BottingTree import BottingTree
 from Py4GWCoreLib.ImGui_src.types import Alignment
 from Py4GWCoreLib.py4gwcorelib_src.Color import Color
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
-from Py4GWCoreLib import Agent, GLOBAL_CACHE, AgentArray, Map, Party, Player, Routines, SharedCommandType, Inventory, ImGui
+from Py4GWCoreLib import (
+    Agent, GLOBAL_CACHE, AgentArray, Map, Party, Player, Routines,
+    SharedCommandType, Inventory, ImGui,
+)
 from Py4GWCoreLib.enums import CONSUMABLE_MODELID_TO_EFFECT_NAME
 from Py4GWCoreLib.enums_src.GameData_enums import Range
 from Py4GWCoreLib.enums_src.Model_enums import ModelID
 from Py4GWCoreLib.native_src.internals.types import Vec2f
 from Py4GWCoreLib.py4gwcorelib_src.BehaviorTree import BehaviorTree
 from Py4GWCoreLib.enums_src.Player_enums import PlayerStatus
-from Py4GWCoreLib.routines_src.behaviourtrees_src.constants.lists import CONSET_UPKEEPS, CONSUMABLE_UPKEEPS as ALL_CONSUMABLE_UPKEEPS
+from Py4GWCoreLib.routines_src.behaviourtrees_src.constants.lists import (
+    CONSET_UPKEEPS,
+    CONSUMABLE_UPKEEPS as ALL_CONSUMABLE_UPKEEPS,
+)
 from Py4GWCoreLib.routines_src.behaviourtrees_src.shared import BTShared
 from Py4GWCoreLib.Pathing import AutoPathing
 from Sources.Sky.DungeonParty import DungeonPartyConfig
 from Sources.Sky.Support import attach_botting_tree_support
 from Sources.Sky.ConsumableRestockUI import draw_restock_group_grid
 from Sources.ApoSource.ApoBottingLib import wrappers as BT
-from Widgets.System.Messaging import get_inventory_count, reset_inventory_count, get_inventory_state, reset_inventory_state
+from Widgets.System.Messaging import (
+    get_inventory_count, reset_inventory_count,
+    get_inventory_state, reset_inventory_state,
+)
 import PyImGui
 
 
 PathPoint = Vec2f | tuple[float, float] | tuple[int, int]
+PlannerStep = tuple[str, Callable[[], BehaviorTree]]
 
 
-# region Script metadata
+# region 01 | Module metadata
 
 MODULE_NAME = "Shards of Orr BT"
 MODULE_CATEGORY = "Automation"
@@ -60,7 +95,7 @@ INI_FILENAME = "Shards_of_Orr_BT.ini"
 # endregion
 
 
-# region Game identifiers
+# region 02 | Guild Wars IDs, model IDs, and system constants
 
 # Maps
 VLOXS_FALL = 624
@@ -97,6 +132,7 @@ DWARVEN_BLESSING_DIALOG = 0x84
 SHANDRA_TAKE_DIALOG = 0x832401
 SHANDRA_REWARD_DIALOG = 0x832407
 ARBOR_BLESSING_DIALOG = 0x84
+DUNGEON_KEY_MODEL_ID = 25410
 
 # Consumables
 SUMMON_MODEL_IDS = (37810,30209,31155)
@@ -155,7 +191,7 @@ MODULE_ICON = "Assets\\Textures\\Module_Icons\\BDS.png"
 # endregion
 
 
-# region Settings state
+# region 03 | Persistent and run-local state
 
 _SETTINGS_SECTION = "Settings"
 _STATS_SECTION = "Statistics"
@@ -270,23 +306,51 @@ _current_l3_time = 0.0
 # endregion
 
 
-# region Routes and coordinates
+# region 04 | Dungeon navigation points and paths
 
 # Coordinates
 VLOXS_EXIT = Vec2f(15505.38, 12460.59)
 ARBOR_BLESSING_NPC = Vec2f(16327.00, 11607.00)
 SHANDRA_APPROACH = Vec2f(12056.00, -17882.00)
 
-ARBOR_TO_SHANDRA_PATH = [Vec2f(13455.43, 10678.0), Vec2f(9850.0, 5025.0), Vec2f(11207.11, 1872.32), Vec2f(10452.02, 178.5), Vec2f(10782.86, -3321.0), Vec2f(8360.94, -6550.0), Vec2f(10382.85, -12342.0), Vec2f(10080.3, -13995.0),
-    Vec2f(10667.0, -16116.0), Vec2f(10747.49, -17546.0), Vec2f(11156.0, -17802.0)]
+ARBOR_TO_SHANDRA_PATH = [
+    Vec2f(13455.43, 10678.0),
+    Vec2f(9850.0, 5025.0),
+    Vec2f(11207.11, 1872.32),
+    Vec2f(10452.02, 178.5),
+    Vec2f(10782.86, -3321.0),
+    Vec2f(8360.94, -6550.0),
+    Vec2f(10382.85, -12342.0),
+    Vec2f(10080.3, -13995.0),
+    Vec2f(10667.0, -16116.0),
+    Vec2f(10747.49, -17546.0),
+    Vec2f(11156.0, -17802.0),
+]
 
 LEVEL1_EXIT_TO_ARBOR = Vec2f(-15650.0, 8900.0)
 
-SOO_ENTRANCE_PATH = [Vec2f(11177.0, -17683.0), Vec2f(10218.0, -18864.0), Vec2f(9519.0, -19968.0), Vec2f(9240.07, -20260.95)]
+SOO_ENTRANCE_PATH = [
+    Vec2f(11177.0, -17683.0),
+    Vec2f(10218.0, -18864.0),
+    Vec2f(9519.0, -19968.0),
+    Vec2f(9240.07, -20260.95),
+]
 
-L1_PATH = [Vec2f(-10370.96, 9024.42) ,Vec2f(-5698.70, 9494.41), Vec2f(3720.16, 15370.78), Vec2f(6740.06, 11039.32), Vec2f(15757, 16952), Vec2f(16026.25, 16957.26), Vec2f(14255.37, 6189.6)]
+L1_PATH = [
+    Vec2f(-10370.96, 9024.42),
+    Vec2f(-5698.70, 9494.41),
+    Vec2f(3720.16, 15370.78),
+    Vec2f(6740.06, 11039.32),
+    Vec2f(15757, 16952),
+    Vec2f(16026.25, 16957.26),
+    Vec2f(14255.37, 6189.6),
+]
 
-L1_PATH_AFTER_DOOR = [Vec2f(17442.4, 2577.83), Vec2f(20181.6, 1203.7), Vec2f(20400.5, 1300.0)]
+L1_PATH_AFTER_DOOR = [
+    Vec2f(17442.4, 2577.83),
+    Vec2f(20181.6, 1203.7),
+    Vec2f(20400.5, 1300.0),
+]
 
 # Level 2 routes / torch mechanics
 TORCH_MODEL_IDS = (22341, 22342)
@@ -307,28 +371,88 @@ L2_BLESSING_NPC = Vec2f(-14076.0, -19457.0)
 
 L2_TORCH_CHEST = Vec2f(-14709.0, -16548.0)
 L2_FIRST_TORCH_DROP_POINT_PATH = [Vec2f(-11002.0, -17001.0)]
-L2_RETURN_TO_FIRST_TORCH_PATH = [Vec2f(-9259.0, -17322.0), Vec2f(-9550, -17258), Vec2f(-10243, -17780)]
-L2_BRAZIER_PART1 = [(-11303.0, -14596.0), (-11019.0, -11550.0), (-9028.0, -9021.0), (-6805.0, -11511.0), (-8984.0, -13842.0)]
+L2_RETURN_TO_FIRST_TORCH_PATH = [
+    Vec2f(-9259.0, -17322.0),
+    Vec2f(-9550, -17258),
+    Vec2f(-10243, -17780),
+]
+L2_BRAZIER_PART1 = [
+    (-11303.0, -14596.0),
+    (-11019.0, -11550.0),
+    (-9028.0, -9021.0),
+    (-6805.0, -11511.0),
+    (-8984.0, -13842.0),
+]
 L2_TO_ROOM2_DROP = (Vec2f(-10514.69, -9542.61), Vec2f(-11061.1, -7578.5))
 L2_RETURN_TO_ROOM2_TORCH_PATH = [Vec2f(-10958.2, -4529.5), Vec2f(-11690.64, -3802.55)]
 L2_ROOM2_PATH = [Vec2f(-8066.1, -4222.4), Vec2f(-7058.8, -4191.0)]
 
-L2_BRAZIER_PART2 = [(-3717.0, -4254.0), (-8251.0, -3240.0), (-8278.0, -1670.0)]
-L2_PATH_TO_LOCK = [Vec2f(-6798.8, -2436.4), Vec2f(-7063, -2017), Vec2f(-16335.1, -9004.5), (-18700.0, -9171.0)]
+L2_BRAZIER_PART2 = [
+    (-3717.0, -4254.0),
+    (-8251.0, -3240.0),
+    (-8278.0, -1670.0),
+]
+L2_PATH_TO_LOCK = [
+    Vec2f(-7063, -2017),
+    Vec2f(-16335.1, -9004.5),
+    (-18700.0, -9171.0),
+]
 L2_DUNGEON_LOCK = Vec2f(-18725.0, -9171.0)
-L2_EXIT_PATH = [Vec2f(-18610.0, -8636.0), Vec2f(-19254, -8256)]
+L2_EXIT_PATH = [
+    Vec2f(-18610.0, -8636.0),
+    Vec2f(-19254, -8256),
+]
 
 # Level 3 routes
 L3_ENTRY_BLESSING = Vec2f(17544.0, 18810.0)
-L3_MAIN_PATH = [Vec2f(16325.98, 15981.14), Vec2f(14511, 19206), Vec2f(8539, 17072), Vec2f(3547, 8795), Vec2f(4813.8, 10340.7), Vec2f(2523, 8101), Vec2f(1923, 6151), Vec2f(198, 8176), Vec2f(-4228, 6901)]
+L3_MAIN_PATH = [
+    Vec2f(16325.98, 15981.14),
+    Vec2f(14511, 19206),
+    Vec2f(8539, 17072),
+    Vec2f(3547, 8795),
+    Vec2f(4813.8, 10340.7),
+    Vec2f(2523, 8101),
+    Vec2f(1923, 6151),
+    Vec2f(198, 8176),
+    Vec2f(-4228, 6901),
+]
     
     
-L3_BRIGANT_ROOM = [Vec2f(-4528, 6301), Vec2f(-8203, 2775), Vec2f(-11428, 3600), Vec2f(-7903, 6601)]
+L3_BRIGANT_ROOM = [
+    Vec2f(-4528, 6301),
+    Vec2f(-8203, 2775),
+    Vec2f(-11428, 3600),
+    Vec2f(-7903, 6601),
+]
 
-L3_PATH_TO_TORCH = [Vec2f(-4723.0, 6703.0), Vec2f(-1280.0, 7880.0), Vec2f(3089.73, 8511.0), Vec2f(4963.0, 9974.0), Vec2f(9918.64, 19108.0), Vec2f(14709.0, 19526.0), Vec2f(16111.0, 17556.0)]
+L3_PATH_TO_TORCH = [
+    Vec2f(-4723.0, 6703.0),
+    Vec2f(-1280.0, 7880.0),
+    Vec2f(3089.73, 8511.0),
+    Vec2f(4963.0, 9974.0),
+    Vec2f(9918.64, 19108.0),
+    Vec2f(14709.0, 19526.0),
+    Vec2f(16111.0, 17556.0),
+]
 L3_TORCH_CHEST = Vec2f(16111.0, 17556.0)
-L3_BRAZIERS = [(15692.0, 17111.0), (12969.0, 19842.0), (8236.0, 16950.0), (5549.0, 9920.0), (-536.0, 6109.0), (-3814.0, 5599.0), (-4959.0, 7558.0), (-7532.0, 4536.0), (-10984.0, 486.0), (-12621.0, 2948.0)]
-L3_FENDI_PATH = [Vec2f(-8696, 6323), Vec2f(-9988, 7652), Vec2f(-12712.36, 13502.19),Vec2f(-13868,14402)]
+L3_BRAZIERS = [
+    (15692.0, 17111.0),
+    (12969.0, 19842.0),
+    (8236.0, 16950.0),
+    (5549.0, 9920.0),
+    (-536.0, 6109.0),
+    (-3814.0, 5599.0),
+    (-4959.0, 7558.0),
+    (-7532.0, 4536.0),
+    (-10984.0, 486.0),
+    (-12621.0, 2948.0),
+]
+L3_FENDI_PATH = [
+    Vec2f(-8696, 6323),
+    Vec2f(-9988, 7652),
+    Vec2f(-12712.36, 13502.19),
+    Vec2f(-13868,14402),
+]
 FENDI_CHEST_POSITION = (-15800.98, 16901.23)
 FENDI_CHEST_GADGET_ID = 8934
 
@@ -344,7 +468,7 @@ botting_tree: BottingTree | None = None
 
 # endregion
 
-# region Run config
+# region 05 | Settings, consumable services, and runtime policy
 
 def _load_settings() -> None:
     global _settings_loaded
@@ -894,6 +1018,11 @@ def _runtime_consumable_upkeep_node(enabled: bool) -> BehaviorTree:
     ))
 
 
+# endregion
+
+# region 06 | Configuration interface and restock controls
+
+
 def _draw_run_config() -> None:
     import PyImGui
 
@@ -1018,7 +1147,16 @@ def _draw_run_config() -> None:
             _inventory_min_salvage_kits = value
             changed = True
 
-        PyImGui.text_wrapped("MerchantRules executes the currently loaded Shards of Orr profile from SharedProfiles.json. The Superior ID / Salvage thresholds above are also sent directly with the execute request and are applied temporarily without changing the profile. If any active account falls below a configured threshold, all active accounts are processed together. Inventory space, Superior ID Kits and Superior Salvage Kits are queried locally on every active client, so each account uses its own real bag capacity. Equipment Pack is excluded.")
+        PyImGui.text_wrapped(
+        "MerchantRules executes the currently loaded Shards of Orr profile from "
+        "SharedProfiles.json. The Superior ID / Salvage thresholds above are "
+        "also sent directly with the execute request and are applied temporarily "
+        "without changing the profile. If any active account falls below a "
+        "configured threshold, all active accounts are processed together. "
+        "Inventory space, Superior ID Kits and Superior Salvage Kits are queried "
+        "locally on every active client, so each account uses its own real bag "
+        "capacity. Equipment Pack is excluded."
+    )
 
     if changed:
         _save_settings()
@@ -1081,7 +1219,10 @@ def _draw_restock_config() -> None:
 
 
 def _runtime_difficulty_node() -> BehaviorTree:
-    return BT.Subtree(name='Apply Selected Difficulty', subtree_fn=lambda _node: BT.SetHardMode(_use_hard_mode, log=True))
+    return BT.Subtree(
+        name='Apply Selected Difficulty',
+        subtree_fn=lambda _node: BT.SetHardMode(_use_hard_mode, log=True),
+    )
 
 
 def _runtime_restock_node() -> BehaviorTree:
@@ -1123,7 +1264,7 @@ def _runtime_restock_node() -> BehaviorTree:
 # endregion
 
 
-# region Statistics
+# region 07 | Multibox inventory and MerchantRules maintenance
 
 
 def _account_key(email: str) -> str:
@@ -1211,7 +1352,12 @@ def _shared_account_map_id(account: object) -> int:
 def _shared_account_map_instance(account: object) -> tuple[int, int, int, int]:
     agent_data = getattr(account, "AgentData", None)
     map_data = getattr(agent_data, "Map", None)
-    return (int(getattr(map_data, 'MapID', 0) or 0), int(getattr(map_data, 'Region', 0) or 0), int(getattr(map_data, 'District', 0) or 0), int(getattr(map_data, 'Language', 0) or 0))
+    return (
+        int(getattr(map_data, 'MapID', 0) or 0),
+        int(getattr(map_data, 'Region', 0) or 0),
+        int(getattr(map_data, 'District', 0) or 0),
+        int(getattr(map_data, 'Language', 0) or 0),
+    )
 
 
 def _iter_shared_inventory_slots(account: object):
@@ -1633,17 +1779,40 @@ def _all_accounts_on_map_node(map_id: int, name: str) -> BehaviorTree:
     return BehaviorTree(BehaviorTree.ConditionNode(name=name, condition_fn=lambda _node: _all_accounts_on_map(map_id)))
 
 
-def _wait_for_all_accounts_on_inventory_instance(map_id: int, *, name: str, timeout_ms: int=INVENTORY_TRAVEL_TIMEOUT_MS) -> BehaviorTree:
+def _wait_for_all_accounts_on_inventory_instance(
+    map_id: int,
+    *,
+    name: str,
+    timeout_ms: int = INVENTORY_TRAVEL_TIMEOUT_MS,
+) -> BehaviorTree:
     def _check(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
-        if _all_accounts_on_map_instance(map_id, INVENTORY_TRAVEL_REGION, INVENTORY_TRAVEL_DISTRICT, INVENTORY_TRAVEL_LANGUAGE):
+        if _all_accounts_on_map_instance(
+            map_id, INVENTORY_TRAVEL_REGION,
+            INVENTORY_TRAVEL_DISTRICT, INVENTORY_TRAVEL_LANGUAGE,
+        ):
             return BehaviorTree.NodeState.SUCCESS
         return BehaviorTree.NodeState.RUNNING
 
-    return BehaviorTree(BehaviorTree.WaitUntilNode(name=name, condition_fn=_check, throttle_interval_ms=500, timeout_ms=timeout_ms))
+    return BehaviorTree(
+        BehaviorTree.WaitUntilNode(
+            name=name,
+            condition_fn=_check,
+            throttle_interval_ms=500,
+            timeout_ms=timeout_ms,
+        )
+    )
 
 
 def _send_widget_state(widget_name: str, *, enabled: bool, refs_key: str) -> BehaviorTree:
-    return BTShared.SendAndWait(command=SharedCommandType.EnableWidget if enabled else SharedCommandType.DisableWidget, extra_data=(widget_name, '', '', ''), include_self=True, refs_blackboard_key=refs_key, timeout_ms=20000, poll_interval_ms=100, log=True)
+    return BTShared.SendAndWait(
+        command=SharedCommandType.EnableWidget if enabled else SharedCommandType.DisableWidget,
+        extra_data=(widget_name, '', '', ''),
+        include_self=True,
+        refs_blackboard_key=refs_key,
+        timeout_ms=20000,
+        poll_interval_ms=100,
+        log=True,
+    )
 
 
 def _set_local_auto_inventory_handler(enabled: bool) -> BehaviorTree:
@@ -1662,15 +1831,37 @@ def _set_local_auto_inventory_handler(enabled: bool) -> BehaviorTree:
 
         return BehaviorTree.NodeState.SUCCESS
 
-    return BehaviorTree(BehaviorTree.ActionNode(name='Enable Local Auto Inventory Handler' if enabled else 'Disable Local Auto Inventory Handler', action_fn=_set, aftercast_ms=0))
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name='Enable Local Auto Inventory Handler' if enabled else 'Disable Local Auto Inventory Handler',
+            action_fn=_set,
+            aftercast_ms=0,
+        )
+    )
 
 
 def _travel_all_accounts_to_vlox(attempt_key: str) -> BehaviorTree:
     return BT.Sequence(
         name="Travel Every Account To Vlox's Falls",
         children=[
-            BTShared.SendAndWait(command=SharedCommandType.TravelToMap, params=(float(VLOXS_FALL), float(INVENTORY_TRAVEL_REGION), float(INVENTORY_TRAVEL_DISTRICT), float(INVENTORY_TRAVEL_LANGUAGE)), include_self=True, refs_blackboard_key=f'{attempt_key}_travel_vlox_refs', timeout_ms=INVENTORY_TRAVEL_TIMEOUT_MS, poll_interval_ms=250, log=True),
-            _wait_for_all_accounts_on_inventory_instance(VLOXS_FALL, name="Wait For Every Account In Vlox's Falls EU-English-1"),
+            BTShared.SendAndWait(
+                command=SharedCommandType.TravelToMap,
+                params=(
+                    float(VLOXS_FALL),
+                    float(INVENTORY_TRAVEL_REGION),
+                    float(INVENTORY_TRAVEL_DISTRICT),
+                    float(INVENTORY_TRAVEL_LANGUAGE),
+                ),
+                include_self=True,
+                refs_blackboard_key=f'{attempt_key}_travel_vlox_refs',
+                timeout_ms=INVENTORY_TRAVEL_TIMEOUT_MS,
+                poll_interval_ms=250,
+                log=True,
+            ),
+            _wait_for_all_accounts_on_inventory_instance(
+                VLOXS_FALL,
+                name="Wait For Every Account In Vlox's Falls EU-English-1",
+            ),
         ],
     )
 
@@ -1690,15 +1881,40 @@ def _return_all_accounts_to_vlox(attempt_key: str) -> BehaviorTree:
         name="Resign Party To Vlox's Falls",
         children=[
             currently_in_an_explorable,
-            BT.Resign(wait_for_map_load=True, target_map_id=VLOXS_FALL, multi_account=True, timeout_ms=INVENTORY_TRAVEL_TIMEOUT_MS, log=True),
+            BT.Resign(
+                wait_for_map_load=True,
+                target_map_id=VLOXS_FALL,
+                multi_account=True,
+                timeout_ms=INVENTORY_TRAVEL_TIMEOUT_MS,
+                log=True,
+            ),
         ],
     )
 
-    return BT.Selector(name="Ensure Every Account Is In Vlox's Falls", children=[_all_accounts_on_map_node(VLOXS_FALL, "Every Account Already In Vlox's Falls"), resign_from_explorable, _travel_all_accounts_to_vlox(attempt_key)])
+    return BT.Selector(
+        name="Ensure Every Account Is In Vlox's Falls",
+        children=[
+            _all_accounts_on_map_node(
+                VLOXS_FALL, "Every Account Already In Vlox's Falls"
+            ),
+            resign_from_explorable,
+            _travel_all_accounts_to_vlox(attempt_key),
+        ],
+    )
 
 
 def _restore_inventoryplus_after_merchant(attempt_key: str) -> BehaviorTree:
-    return BT.Sequence(name='Restore InventoryPlus After MerchantRules', children=[_send_widget_state(INVENTORY_PLUS_WIDGET_NAME, enabled=True, refs_key=f'{attempt_key}_enable_inventoryplus_refs'), _set_local_auto_inventory_handler(True)])
+    return BT.Sequence(
+        name='Restore InventoryPlus After MerchantRules',
+        children=[
+            _send_widget_state(
+                INVENTORY_PLUS_WIDGET_NAME,
+                enabled=True,
+                refs_key=f'{attempt_key}_enable_inventoryplus_refs',
+            ),
+            _set_local_auto_inventory_handler(True),
+        ],
+    )
 
 
 def _merchant_stock_request_spec() -> str:
@@ -1739,8 +1955,19 @@ def _run_merchant_rules(attempt_key: str) -> BehaviorTree:
         return BT.Selector(
             name="Execute MerchantRules And Restore InventoryPlus",
             children=[
-                BT.Sequence(name="MerchantRules Completed", children=[execute, _restore_inventoryplus_after_merchant(attempt_key)]),
-                BT.Sequence(name="Restore InventoryPlus After MerchantRules Failure", children=[_restore_inventoryplus_after_merchant(f"{attempt_key}_failure"), BehaviorTree(BehaviorTree.FailerNode(name="Propagate MerchantRules Failure"))]),
+                BT.Sequence(
+                    name="MerchantRules Completed",
+                    children=[execute, _restore_inventoryplus_after_merchant(attempt_key)],
+                ),
+                BT.Sequence(
+                    name="Restore InventoryPlus After MerchantRules Failure",
+                    children=[
+                        _restore_inventoryplus_after_merchant(f"{attempt_key}_failure"),
+                        BehaviorTree(
+                            BehaviorTree.FailerNode(name="Propagate MerchantRules Failure")
+                        ),
+                    ],
+                ),
             ],
         )
 
@@ -1936,6 +2163,11 @@ def StartupInventoryCheck() -> BehaviorTree:
             BT.Succeeder("Skip Startup Inventory Check Outside Vlox's Falls"),
         ],
     )
+
+
+# endregion
+
+# region 08 | Run statistics, drops, and timing
 
 
 def _refresh_character_names() -> bool:
@@ -2433,7 +2665,12 @@ def _draw_statistics() -> None:
     def _drop_rate(runs: int, drops: int) -> str:
         return f"{drops / runs * 100.0:.1f}%" if runs > 0 and drops > 0 else "-"
 
-    table_flags = PyImGui.TableFlags.Borders | PyImGui.TableFlags.RowBg | PyImGui.TableFlags.SizingFixedFit | PyImGui.TableFlags.NoHostExtendX
+    table_flags = (
+        PyImGui.TableFlags.Borders
+        | PyImGui.TableFlags.RowBg
+        | PyImGui.TableFlags.SizingFixedFit
+        | PyImGui.TableFlags.NoHostExtendX
+    )
     header_color = 26 | (38 << 8) | (51 << 16) | (255 << 24)
     column_width = 72.0
     row_height = 22.0
@@ -2461,7 +2698,13 @@ def _draw_statistics() -> None:
         for label in ("Runs", "BDS", "BDS Rate", "GB", "GB Rate"):
             PyImGui.table_setup_column(label, PyImGui.TableColumnFlags.WidthFixed, column_width)
         _header_row(("Runs", "BDS", "BDS Rate", "GB", "GB Rate"))
-        values = (_session_runs, session_bds, _drop_rate(_session_runs, session_bds), session_gb, _drop_rate(_session_runs, session_gb))
+        values = (
+            _session_runs,
+            session_bds,
+            _drop_rate(_session_runs, session_bds),
+            session_gb,
+            _drop_rate(_session_runs, session_gb),
+        )
         PyImGui.table_next_row(0, row_height)
         for index, value in enumerate(values):
             PyImGui.table_set_column_index(index)
@@ -2474,7 +2717,13 @@ def _draw_statistics() -> None:
         for label in ("Runs", "BDS", "BDS Rate", "GB", "GB Rate"):
             PyImGui.table_setup_column(label, PyImGui.TableColumnFlags.WidthFixed, column_width)
         _header_row(("Runs", "BDS", "BDS Rate", "GB", "GB Rate"))
-        values = (_total_runs, str(total_bds), _drop_rate(_total_runs, total_bds), str(total_gb), _drop_rate(_total_runs, total_gb))
+        values = (
+            _total_runs,
+            str(total_bds),
+            _drop_rate(_total_runs, total_bds),
+            str(total_gb),
+            _drop_rate(_total_runs, total_gb),
+        )
         PyImGui.table_next_row(0, row_height)
         for index, value in enumerate(values):
             PyImGui.table_set_column_index(index)
@@ -2494,10 +2743,24 @@ def _draw_statistics() -> None:
         l2_active = _t_l2_start > 0.0 and _t_l3_start <= 0.0
         l3_active = _t_l3_start > 0.0
 
-        timing_rows = (('Overall', now - _t_run_start if run_active else _current_run_time, run_active, _total_run_time, _fastest_run, _slowest_run),
-            ('Floor 1', now - _t_run_start if l1_active else _current_l1_time, l1_active, _l1_total_time, _l1_fastest, _l1_slowest),
-            ('Floor 2', now - _t_l2_start if l2_active else _current_l2_time, l2_active, _l2_total_time, _l2_fastest, _l2_slowest),
-            ('Floor 3', now - _t_l3_start if l3_active else _current_l3_time, l3_active, _l3_total_time, _l3_fastest, _l3_slowest), )
+        timing_rows = (
+            (
+                'Overall', now - _t_run_start if run_active else _current_run_time,
+                run_active, _total_run_time, _fastest_run, _slowest_run,
+            ),
+            (
+                'Floor 1', now - _t_run_start if l1_active else _current_l1_time,
+                l1_active, _l1_total_time, _l1_fastest, _l1_slowest,
+            ),
+            (
+                'Floor 2', now - _t_l2_start if l2_active else _current_l2_time,
+                l2_active, _l2_total_time, _l2_fastest, _l2_slowest,
+            ),
+            (
+                'Floor 3', now - _t_l3_start if l3_active else _current_l3_time,
+                l3_active, _l3_total_time, _l3_fastest, _l3_slowest,
+            ),
+        )
 
         for label, current, is_live, total, fastest, slowest in timing_rows:
             PyImGui.table_next_row(0, row_height)
@@ -2588,7 +2851,7 @@ def _draw_statistics() -> None:
 # endregion
 
 
-# region Helpers
+# region 09 | Shrine recovery and restart-safe mechanics
 
 _MARTIAL_PRIMARY_PROFESSIONS = {'Warrior', 'Ranger', 'Assassin', 'Dervish', 'Paragon'}
 
@@ -2775,6 +3038,11 @@ def EnsureTorchFromChest(
         )
 
     return BT.Subtree(name=f"Ensure Torch Source ({key})", subtree_fn=_build)
+
+
+# endregion
+
+# region 10 | Torch combat policy and controlled bundle release
 
 
 def _resolve_torch_combat_policy() -> bool:
@@ -2964,9 +3232,21 @@ def DropTorchForCombat(log: bool = False) -> BehaviorTree:
             name='Drop Torch For Combat - With Debug Snapshots',
             children=[
                 release_tree,
-                BehaviorTree(BehaviorTree.ActionNode(name='Torch Drop Snapshot - Released', action_fn=_released_snapshot, aftercast_ms=0)),
+                BehaviorTree(
+                    BehaviorTree.ActionNode(
+                        name='Torch Drop Snapshot - Released',
+                        action_fn=_released_snapshot,
+                        aftercast_ms=0,
+                    )
+                ),
                 BT.Wait(350),
-                BehaviorTree(BehaviorTree.ActionNode(name='Torch Drop Snapshot - Settled', action_fn=_settled_snapshot, aftercast_ms=0)),
+                BehaviorTree(
+                    BehaviorTree.ActionNode(
+                        name='Torch Drop Snapshot - Settled',
+                        action_fn=_settled_snapshot,
+                        aftercast_ms=0,
+                    )
+                ),
             ],
         )
 
@@ -3019,6 +3299,11 @@ def _enemy_in_torch_combat_range(radius: float = TORCH_COMBAT_TRIGGER_RADIUS) ->
         return False
     except Exception:
         return False
+
+
+# endregion
+
+# region 11 | Shards-only trap detection and path geometry
 
 
 def _shards_trap_destination_xy(destination) -> tuple[float, float] | None:
@@ -3316,6 +3601,11 @@ def _shards_trap_segment_walkable(start: tuple[float, float], end: tuple[float, 
         )
     except Exception:
         return False
+
+
+# endregion
+
+# region 12 | Trap-aware movement and combat BT decorators
 
 
 class _ShardsTrapAvoidNode(BehaviorTree.Node):
@@ -3797,6 +4087,11 @@ class _ShardsCombatTrapAvoidNode(BehaviorTree.Node):
 def ShardsCombatTrapAvoid(child: BehaviorTree | BehaviorTree.Node, *, name: str = "Shards Combat Trap Avoid") -> BehaviorTree:
     return BehaviorTree(_ShardsCombatTrapAvoidNode(child, name=name))
 
+# endregion
+
+# region 13 | Torch-aware Vanquish and combat hand-off
+
+
 def _torch_aware_combat_node(
     name: str,
     combat_factory: Callable[[], BehaviorTree],
@@ -3899,6 +4194,11 @@ def TorchAwareMoveAndKill(
         )
 
     return _torch_aware_combat_node(name, _create)
+
+
+# endregion
+
+# region 14 | Torch diagnostics and recovery from the ground
 
 
 def _torch_agent_brief(agent_id: int) -> str:
@@ -4415,6 +4715,11 @@ def PickupTorch(*, allow_shrine_skip: bool = True) -> BehaviorTree:
         )
     )
 
+# endregion
+
+# region 15 | Brazier sequences and flame recovery
+
+
 def BrazierSequence(name: str, points: list[tuple[float, float]]) -> BehaviorTree:
     """
     Activate a sequence of SoO braziers.
@@ -4431,7 +4736,19 @@ def BrazierSequence(name: str, points: list[tuple[float, float]]) -> BehaviorTre
     first_x, first_y = points[0]
 
     children.append(
-        BT.MoveAndInteractWithGadget(pos=Vec2f(float(first_x), float(first_y)), gadget_id=None, search_distance=300.0, interaction_distance=220.0, interaction_count=2, interaction_interval_ms=250, timeout_ms=15000, pause_on_combat=False, multi_account=False, include_self=True, log=False)
+        BT.MoveAndInteractWithGadget(
+            pos=Vec2f(float(first_x), float(first_y)),
+            gadget_id=None,
+            search_distance=300.0,
+            interaction_distance=220.0,
+            interaction_count=2,
+            interaction_interval_ms=250,
+            timeout_ms=15000,
+            pause_on_combat=False,
+            multi_account=False,
+            include_self=True,
+            log=False,
+        )
     )
 
     for index in range(
@@ -4499,9 +4816,33 @@ def MoveBetweenBraziersWithFlameRecovery(
 
     move_to_previous = ShardsTrapMove(previous_pos, tolerance=float(interaction_distance), pause_on_combat=False, ignore_destination_obstacles=True, log=False)
 
-    relight_previous = BT.MoveAndInteractWithGadget(pos=previous_pos, gadget_id=None, search_distance=300.0, interaction_distance=float(interaction_distance), interaction_count=max(1, int(interaction_count)), interaction_interval_ms=max(0, int(interaction_interval_ms)), timeout_ms=15000, pause_on_combat=False, multi_account=False, include_self=True, log=log)
+    relight_previous = BT.MoveAndInteractWithGadget(
+        pos=previous_pos,
+        gadget_id=None,
+        search_distance=300.0,
+        interaction_distance=float(interaction_distance),
+        interaction_count=max(1, int(interaction_count)),
+        interaction_interval_ms=max(0, int(interaction_interval_ms)),
+        timeout_ms=15000,
+        pause_on_combat=False,
+        multi_account=False,
+        include_self=True,
+        log=log,
+    )
 
-    interact_next = BT.MoveAndInteractWithGadget(pos=next_pos, gadget_id=None, search_distance=300.0, interaction_distance=float(interaction_distance), interaction_count=max(1, int(interaction_count)), interaction_interval_ms=max(0, int(interaction_interval_ms)), timeout_ms=15000, pause_on_combat=False, multi_account=False, include_self=True, log=log)
+    interact_next = BT.MoveAndInteractWithGadget(
+        pos=next_pos,
+        gadget_id=None,
+        search_distance=300.0,
+        interaction_distance=float(interaction_distance),
+        interaction_count=max(1, int(interaction_count)),
+        interaction_interval_ms=max(0, int(interaction_interval_ms)),
+        timeout_ms=15000,
+        pause_on_combat=False,
+        multi_account=False,
+        include_self=True,
+        log=log,
+    )
 
     state = {'phase': 'move_to_next', 'started_at': 0.0, 'phase_started_at': 0.0, 'recovery_count': 0}
 
@@ -4767,7 +5108,7 @@ def MoveBetweenBraziersWithFlameRecovery(
 
 
 
-# region Bot initialization
+# region 16 | BottingTree initialization and Core services
 
 
 def _configure_botting_tree(tree: BottingTree) -> None:
@@ -4833,7 +5174,7 @@ def InitializeBot() -> BehaviorTree:
 # endregion
 
 
-# region Preparation and dungeon entry
+# region 17 | Party preparation, Shandra, and dungeon entry
 
 
 def PreparePartyAndSupplies() -> BehaviorTree:
@@ -4997,12 +5338,14 @@ def EnterShardsOfOrr(enable_consumables_on_entry: bool=False) -> BehaviorTree:
 # endregion
 
 
-# region Planner point steps
+# region 18 | Planner point builders and map/recovery guards
 
 
-# Partial party-death pause/regroup/resurrection is provided by the shared
-# BottingTree PartyMemberRecoveryService.  Keep Shards focused on dungeon-only
-# mechanics such as torches and environmental traps.
+# Core / script ownership boundary:
+#   PartyMemberRecoveryService handles partial wipes and party regrouping.
+#   Shards handles ONLY its level-specific mechanics (traps, torch, braziers).
+# Never fold several waypoint factories into one planner step: resume-after-wipe
+# depends on the existing step granularity.
 
 def _map_guarded_point(name: str, map_id: int, child: BehaviorTree, skip_if_in_maps: Sequence[int]=()) -> BehaviorTree:
     """Run one point on its map, or accept it when the next level is loaded."""
@@ -5035,7 +5378,19 @@ def _movement_point_steps(
         steps.append(
             (
                 name,
-                lambda point=point, name=name: _map_guarded_point(name=name, map_id=map_id, child=ShardsTrapMove(point, pause_on_combat=pause_on_combat, tolerance=tolerance, flag_heroes_to_waypoint=flag_heroes_to_waypoint, ignore_destination_obstacles=ignore_destination_obstacles, log=False), skip_if_in_maps=skip_if_in_maps),
+                lambda point=point, name=name: _map_guarded_point(
+                    name=name,
+                    map_id=map_id,
+                    child=ShardsTrapMove(
+                        point,
+                        pause_on_combat=pause_on_combat,
+                        tolerance=tolerance,
+                        flag_heroes_to_waypoint=flag_heroes_to_waypoint,
+                        ignore_destination_obstacles=ignore_destination_obstacles,
+                        log=False,
+                    ),
+                    skip_if_in_maps=skip_if_in_maps,
+                ),
             )
         )
 
@@ -5060,7 +5415,24 @@ def _vanquish_point_steps(
         steps.append(
             (
                 name,
-                lambda point=point, name=name: _map_guarded_point(name=name, map_id=map_id, child=ShardsTrapGuard(point, BT.VanquishNode([point], name=name, clear_area_radius=clear_area_radius, pause_on_combat=pause_on_combat, flag_heroes_to_waypoint=flag_heroes_to_waypoint, move_tolerance=move_tolerance, log=False), name=f"Shards Trap Guard - {name}"), skip_if_in_maps=skip_if_in_maps),
+                lambda point=point, name=name: _map_guarded_point(
+                    name=name,
+                    map_id=map_id,
+                    child=ShardsTrapGuard(
+                        point,
+                        BT.VanquishNode(
+                            [point],
+                            name=name,
+                            clear_area_radius=clear_area_radius,
+                            pause_on_combat=pause_on_combat,
+                            flag_heroes_to_waypoint=flag_heroes_to_waypoint,
+                            move_tolerance=move_tolerance,
+                            log=False,
+                        ),
+                        name=f"Shards Trap Guard - {name}",
+                    ),
+                    skip_if_in_maps=skip_if_in_maps,
+                ),
             )
         )
 
@@ -5114,7 +5486,38 @@ def _torch_vanquish_point_steps(
 
 
 # endregion
-# region Level 1
+
+
+# region 19 | Level 1: blessing, door, and exit
+
+
+def WhitelistDungeonKeyAllAccounts() -> BehaviorTree:
+    """Allow the Shards dungeon key on the leader and every active follower.
+
+    BT.AddModelToLootWhitelist only changes this client's live filter. The
+    existing SharedCommandType handler applies the same model ID to followers
+    without modifying anyone's saved Loot Filter configuration.
+
+    Re-run this step at each floor and before the Brigant loot sweep so resumed
+    runs and map transitions refresh the live whitelist as well.
+    """
+    return BT.Sequence(
+        name="Whitelist Shards Dungeon Key - All Accounts",
+        children=[
+            BT.AddModelToLootWhitelist(DUNGEON_KEY_MODEL_ID),
+            BTShared.SendAndWait(
+                command=SharedCommandType.AddModelToLootWhitelist,
+                params=(float(DUNGEON_KEY_MODEL_ID), 0.0, 0.0, 0.0),
+                extra_data=("Shards Dungeon Key", "", "", ""),
+                include_self=False,
+                refs_blackboard_key="shards_dungeon_key_whitelist_refs",
+                timeout_ms=10_000,
+                poll_interval_ms=100,
+                log=False,
+                aftercast_ms=100,
+            ),
+        ],
+    )
 
 
 def Level1_Start() -> BehaviorTree:
@@ -5125,8 +5528,13 @@ def Level1_Start() -> BehaviorTree:
             _reset_restart_safe_run_state_node(),
             _mark_run_start_node(),
             _inventory_statistics_node(after_chest=False),
-            BT.AddModelToLootWhitelist(25410),
-            BT.MoveAndDialog(Vec2f(-11686.0, 10427.0), dialog_id=DWARVEN_BLESSING_DIALOG, multi_account=True, log=SHARDS_MOVEMENT_LOGS),
+            WhitelistDungeonKeyAllAccounts(),
+            BT.MoveAndDialog(
+                Vec2f(-11686.0, 10427.0),
+                dialog_id=DWARVEN_BLESSING_DIALOG,
+                multi_account=True,
+                log=SHARDS_MOVEMENT_LOGS,
+            ),
         ],
     )
 
@@ -5164,7 +5572,7 @@ def Level1_EnterLevel2() -> BehaviorTree:
 # endregion
 
 
-# region Level 2 - part 1
+# region 20 | Level 2: torch, opening fight, and first braziers
 
 
 def Level2_Start() -> BehaviorTree:
@@ -5173,8 +5581,13 @@ def Level2_Start() -> BehaviorTree:
         children=[
             ResetTorchCombatPolicy(),
             ResolveTorchCombatPolicy(),
-            BT.AddModelToLootWhitelist(25410),
-            BT.MoveAndDialog(L2_BLESSING_NPC, dialog_id=DWARVEN_BLESSING_DIALOG, multi_account=True, log=SHARDS_MOVEMENT_LOGS),
+            WhitelistDungeonKeyAllAccounts(),
+            BT.MoveAndDialog(
+                L2_BLESSING_NPC,
+                dialog_id=DWARVEN_BLESSING_DIALOG,
+                multi_account=True,
+                log=SHARDS_MOVEMENT_LOGS,
+            ),
 
         ],
     )
@@ -5218,7 +5631,9 @@ def Level2_BrazierRoute1() -> BehaviorTree:
 
 
 # endregion
-# region Level 2 - part 2
+
+
+# region 21 | Level 2: second torch and final-room preparation
 
 
 def Level2_PrepareRoom2() -> BehaviorTree:
@@ -5262,8 +5677,20 @@ def Level2_BrazierRoute2() -> BehaviorTree:
 
 # endregion
 
+# region 22 | Level 2: final clear, dungeon lock, and exit
 
-# region Level 2 - part 3
+
+def Level2_ClearRoom2() -> BehaviorTree:
+    return BT.Sequence(
+        name='Level 2 Clear Room 2',
+        children=[
+            BT.ClearEnemiesInArea(Vec2f(-6798.8, -2436.4), radius=Range.Spirit.value, log=True),
+            # Dedicated sweep after the room clear; auto-loot may have missed drops.
+            BT.LootItems(distance=Range.Spirit.value),
+        ],
+    )
+
+# Final lock and next-level transition. All actions remain separate Planner steps.
 
 
 def Level2_OpenDungeonLock() -> BehaviorTree:
@@ -5286,7 +5713,21 @@ def Level2_EnterLevel3() -> BehaviorTree:
     return BT.Sequence(
         name=name,
         children=[
-            _map_guarded_point(name=name, map_id=SOO_LEVEL_2, child=BT.Sequence(name=f'{name} And Load Level 3', children=[ShardsTrapMove(L2_EXIT_PATH[-1], pause_on_combat=False, tolerance=200.0, log=False), BT.WaitForMapLoad(map_id=SOO_LEVEL_3, timeout_ms=60000)]), skip_if_in_maps=(SOO_LEVEL_3,)),
+            _map_guarded_point(
+                name=name,
+                map_id=SOO_LEVEL_2,
+                child=BT.Sequence(
+                    name=f'{name} And Load Level 3',
+                    children=[
+                        ShardsTrapMove(
+                            L2_EXIT_PATH[-1], pause_on_combat=False,
+                            tolerance=200.0, log=False,
+                        ),
+                        BT.WaitForMapLoad(map_id=SOO_LEVEL_3, timeout_ms=60000),
+                    ],
+                ),
+                skip_if_in_maps=(SOO_LEVEL_3,),
+            ),
             BT.WaitUntilOnExplorable(timeout_ms=30_000),
             _mark_l3_start_node(),
             BT.Wait(2_000),
@@ -5296,14 +5737,19 @@ def Level2_EnterLevel3() -> BehaviorTree:
 
 # endregion
 
-# region Level 3 - entry and torch
+# region 23 | Level 3: blessing, torch, and braziers
 
 
 def Level3_Start() -> BehaviorTree:
     return BT.Sequence(
         name='Start Shards of Orr Level 3',
         children=[
-            BT.MoveAndDialog(L3_ENTRY_BLESSING, dialog_id=DWARVEN_BLESSING_DIALOG, multi_account=True, log=SHARDS_MOVEMENT_LOGS),
+            BT.MoveAndDialog(
+                L3_ENTRY_BLESSING,
+                dialog_id=DWARVEN_BLESSING_DIALOG,
+                multi_account=True,
+                log=SHARDS_MOVEMENT_LOGS,
+            ),
         ],
     )
 
@@ -5336,14 +5782,25 @@ def Level3_TorchAndBraziers() -> BehaviorTree:
 # endregion
 
 
-# region Level 3 - Brigant
+# region 24 | Level 3: Brigant, dungeon key, and door
 def Level3_Brigant() -> BehaviorTree:
     return BT.Sequence(
         name="Run Shards of Orr Level 3",
         children=[
-            ShardsTrapGuard(Vec2f(-11147, 2644), BT.MoveAndKill(Vec2f(-11147, 2644), clear_area_radius=Range.Spirit.value, log=False), name="Shards Trap Guard - Level 3 Brigant Fight"),
-            BT.AddModelToLootWhitelist(25410),
+            ShardsTrapGuard(
+                Vec2f(-11147, 2644),
+                BT.MoveAndKill(
+                    Vec2f(-11147, 2644),
+                    clear_area_radius=Range.Spirit.value,
+                    log=False,
+                ),
+                name="Shards Trap Guard - Level 3 Brigant Fight",
+            ),
+            WhitelistDungeonKeyAllAccounts(),
             ShardsTrapMove(Vec2f(-9888.47, 2892.00)),
+            # Important: auto-loot has a shorter detection radius. Sweep a wider
+            # area for the dungeon key (Model ID 25410) before marking Brigant
+            # complete. This uses the existing Loot Filter, not a forced pickup.
             BT.LootItems(distance=Range.SafeCompass.value),
             _mark_restart_safe_mechanic_node(_LEVEL3_BOSS_ROUTE_UNLOCKED_KEY),
         ],
@@ -5361,7 +5818,7 @@ def Level3_BrigantDoor() -> BehaviorTree:
 
 # endregion
 
-# region Level 3 - Fendi
+# region 25 | Level 3: Fendi targeting and boss combat
 
 
 def _set_planner_pause_on_combat(enabled: bool, *, name: str) -> BehaviorTree:
@@ -5555,12 +6012,24 @@ def ClearFendiArenaWithBossPriority() -> BehaviorTree:
             except Exception:
                 boss_glow = False
 
-            PySystem.Console.Log(MODULE_NAME, f'Fendi priority target -> {target_name} (id={target_id}, priority={priority_label}, boss_glow={boss_glow}, enemies={len(enemies)}).', PySystem.Console.MessageType.Info)
+            PySystem.Console.Log(
+                MODULE_NAME,
+                f'Fendi priority target -> {target_name} '
+                f'(id={target_id}, priority={priority_label}, '
+                f'boss_glow={boss_glow}, enemies={len(enemies)}).',
+                PySystem.Console.MessageType.Info,
+            )
             state["last_target_id"] = target_id
 
         return BehaviorTree.NodeState.RUNNING
 
-    return BehaviorTree(BehaviorTree.ActionNode(name='Clear Fendi Arena With Boss Priority', action_fn=_fight, aftercast_ms=0))
+    return BehaviorTree(
+        BehaviorTree.ActionNode(
+            name='Clear Fendi Arena With Boss Priority',
+            action_fn=_fight,
+            aftercast_ms=0,
+        )
+    )
 
 
 def Level3_FendiFight() -> BehaviorTree:
@@ -5584,7 +6053,16 @@ def Level3_FendiFight() -> BehaviorTree:
                 name="Fendi Final Clear - Trap Avoid",
             ),
             ShardsCombatTrapAvoid(
-                BT.WaitForClearEnemiesInArea(*FENDI_FIGHT_CENTER, radius=FENDI_FIGHT_RADIUS, allowed_alive_enemies=0, interact_interval_ms=750, stable_clear_ms=FENDI_STABLE_CLEAR_MS, keep_player_near_center=False, center_tolerance=750.0, log=True),
+                BT.WaitForClearEnemiesInArea(
+                    *FENDI_FIGHT_CENTER,
+                    radius=FENDI_FIGHT_RADIUS,
+                    allowed_alive_enemies=0,
+                    interact_interval_ms=750,
+                    stable_clear_ms=FENDI_STABLE_CLEAR_MS,
+                    keep_player_near_center=False,
+                    center_tolerance=750.0,
+                    log=True,
+                ),
                 name="Fendi Stable Clear - Trap Avoid",
             ),
             _set_planner_pause_on_combat(True, name="Fendi - Restore Planner Combat Pause"),
@@ -5592,7 +6070,7 @@ def Level3_FendiFight() -> BehaviorTree:
     )
 # endregion
 
-# region Level 3 - chest
+# region 26 | Level 3: final chest
 
 def Level3_Chest() -> BehaviorTree:
     """Stage the party at the chest, stop the timer, suspend consumables,
@@ -5609,7 +6087,19 @@ def Level3_Chest() -> BehaviorTree:
             # From this point until the next Level 1 start, consets, direct PCons
             # and summoning-stone usage/recovery are all suspended. Auto-loot stays on.
             _runtime_consumable_upkeep_node(False),
-            BT.MoveAndInteractWithGadget(gadget_id=FENDI_CHEST_GADGET_ID, pos=Vec2f(*FENDI_CHEST_POSITION), search_distance=700.0, interaction_distance=Range.Nearby.value, interaction_count=2, interaction_interval_ms=1000, account_settle_ms=3000, timeout_ms=90000, multi_account=True, include_self=True, log=SHARDS_MOVEMENT_LOGS),
+            BT.MoveAndInteractWithGadget(
+                gadget_id=FENDI_CHEST_GADGET_ID,
+                pos=Vec2f(*FENDI_CHEST_POSITION),
+                search_distance=700.0,
+                interaction_distance=Range.Nearby.value,
+                interaction_count=2,
+                interaction_interval_ms=1000,
+                account_settle_ms=3000,
+                timeout_ms=90000,
+                multi_account=True,
+                include_self=True,
+                log=SHARDS_MOVEMENT_LOGS,
+            ),
             _inventory_statistics_node(after_chest=True),
         ],
     )
@@ -5617,7 +6107,7 @@ def Level3_Chest() -> BehaviorTree:
 # endregion
 
 
-# region Reward and restart flow
+# region 27 | Reward, Shandra quest, and next run
 
 def WaitForShandraInside(timeout_ms: int=30000) -> BehaviorTree:
     """Wait until Shandra is resolvable by name inside the dungeon."""
@@ -5809,10 +6299,17 @@ def CollectRewardAndReturnToArbor(end_countdown_timeout_ms: int=190000) -> Behav
 # endregion
 
 
-# region Execution
+# region 28 | Planner sequence, tooltip, and runtime entry point
 
-def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
-    run_steps: list[tuple[str, Callable[[], BehaviorTree]]] = [
+# Composition is intentionally separated from runtime BT builders. Each
+# factory returns one checkpoint, or a list of individual waypoint checkpoints.
+# Never group the returned steps into one BT.Sequence: wipe recovery relies on
+# these exact names and on the original order.
+
+def _travel_planner_steps() -> list[PlannerStep]:
+    """Travel from Vlox to Shandra and enter Shards of Orr."""
+    return [
+        # Travel and quest setup
         ("Travel To Shandra - Start", TravelToShandraStart),
         *_movement_point_steps(
             "Travel To Shandra",
@@ -5824,13 +6321,25 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
         (f"Travel To Shandra - Point {len(ARBOR_TO_SHANDRA_PATH) + 1:02d}", TravelToShandraFinalPoint),
         ("Handle Shandra Quest", HandleShandraQuest),
         ("Enter Shards Of Orr", EnterShardsOfOrr),
+    ]
 
+
+def _level1_planner_steps() -> list[PlannerStep]:
+    """Floor 1 route, blessing, main door and exit."""
+    return [
+        # Level 1: blessing, two routes, door, exit
         ("Level 1 Start", Level1_Start),
         *_vanquish_point_steps("Level 1 First Route", SOO_LEVEL_1, L1_PATH, skip_if_in_maps=(SOO_LEVEL_2, SOO_LEVEL_3)),
         ("Level 1 Open Door", Level1_OpenDoor),
         *_vanquish_point_steps("Level 1 Route To Level 2", SOO_LEVEL_1, L1_PATH_AFTER_DOOR[:-1], skip_if_in_maps=(SOO_LEVEL_2, SOO_LEVEL_3)),
         (f"Level 1 Route To Level 2 - Point {len(L1_PATH_AFTER_DOOR):02d}", Level1_EnterLevel2),
+    ]
 
+
+def _level2_planner_steps() -> list[PlannerStep]:
+    """Floor 2 torch/vanquish paths, brazier rooms and lock."""
+    return [
+        # Level 2: torch mechanics, two brazier routes, final lock
         ("Level 2 Start", Level2_Start),
         ("Level 2 First Torch Approach", Level2_FirstTorchApproach),
         *_torch_vanquish_point_steps("Level 2 First Torch Drop Route", SOO_LEVEL_2, L2_FIRST_TORCH_DROP_POINT_PATH, pause_on_combat=True, skip_if_in_maps=(SOO_LEVEL_3,)),
@@ -5843,11 +6352,19 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
         *_torch_vanquish_point_steps("Level 2 Room 2", SOO_LEVEL_2, L2_ROOM2_PATH, move_tolerance=150.0, skip_if_in_maps=(SOO_LEVEL_3,)),
         *_torch_vanquish_point_steps("Level 2 Room 2 Final Fight", SOO_LEVEL_2, [Vec2f(-4245.2, -2101.0)], skip_if_in_maps=(SOO_LEVEL_3,)),
         ("Level 2 Brazier Route 2", Level2_BrazierRoute2),
+        ("Level 2 Clear Room 2", Level2_ClearRoom2),
         *_vanquish_point_steps("Level 2 Route To Dungeon Lock", SOO_LEVEL_2, L2_PATH_TO_LOCK, pause_on_combat=True, skip_if_in_maps=(SOO_LEVEL_3,)),
         ("Level 2 Open Dungeon Lock", Level2_OpenDungeonLock),
         *_movement_point_steps("Level 2 Exit Route", SOO_LEVEL_2, L2_EXIT_PATH[:-1], pause_on_combat=False, skip_if_in_maps=(SOO_LEVEL_3,)),
         (f"Level 2 Exit Route - Point {len(L2_EXIT_PATH):02d}", Level2_EnterLevel3),
+    ]
 
+
+def _level3_planner_steps() -> list[PlannerStep]:
+    """Floor 3, restart-safe Brigant, Fendi and the final chest."""
+    return [
+        # Level 3: early steps can be skipped after a shrine recovery when
+        # the boss-route-unlocked marker has already been recorded.
         *[
             _skip_if_level3_boss_route_unlocked(step_name, factory)
             for step_name, factory in [
@@ -5859,26 +6376,29 @@ def get_execution_steps() -> list[tuple[str, Callable[[], BehaviorTree]]]:
                 ("Level 3 Brigant", Level3_Brigant),
             ]
         ],
+        # Fendi route and final chest stay outside the early-route skip.
         ("Level 3 Brigant Door", Level3_BrigantDoor),
         *_vanquish_point_steps("Level 3 Route To Fendi", SOO_LEVEL_3, L3_FENDI_PATH),
         ("Level 3 Fendi Boss Fight", Level3_FendiFight),
         ("Level 3 Chest", Level3_Chest),
     ]
 
+
+def get_execution_steps() -> list[PlannerStep]:
+    """Assemble existing BT checkpoints without changing their order or names."""
     return [
         ("Initialize Bot", InitializeBot),
         ("Prepare Party And Supplies", PreparePartyAndSupplies),
-
-        *run_steps,
-
+        *_travel_planner_steps(),
+        *_level1_planner_steps(),
+        *_level2_planner_steps(),
+        *_level3_planner_steps(),
+        # End-of-run rewards, maintenance, and next-run state.
         ("Collect Reward And Return To Arbor", CollectRewardAndReturnToArbor),
         ("Resolve Shandra Quest", ResolveShandraQuestAfterRun),
         ("Inventory Check And Maintenance", InventoryCheckAndMaintenance),
         ("Prepare Next Dungeon Run", PrepareNextDungeonRun),
     ]
-
-# endregion
-
 
 def tooltip():
     PyImGui.set_next_window_size((600, 0))
@@ -5951,7 +6471,17 @@ def main() -> None:
     tree.tick()
     _tick_direct_pcon_upkeep()
     attach_botting_tree_support(tree)
-    tree.UI.draw_window(icon_path=TEXTURE, iconwidth=96, main_child_dimensions=(550, 380), extra_tabs=[('Statistics', _draw_statistics), ('Party', _dungeon_party.draw_tab), ('Config', _draw_run_config), ('Restock', _draw_restock_config)])
+    tree.UI.draw_window(
+        icon_path=TEXTURE,
+        iconwidth=96,
+        main_child_dimensions=(550, 380),
+        extra_tabs=[
+            ('Statistics', _draw_statistics),
+            ('Party', _dungeon_party.draw_tab),
+            ('Config', _draw_run_config),
+            ('Restock', _draw_restock_config),
+        ],
+    )
 
 
 # endregion
